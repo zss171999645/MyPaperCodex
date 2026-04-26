@@ -42,6 +42,15 @@ public final class WatchedFolderScanner {
         return WatchedFolderScanResult(folder: updatedFolder, importedPapers: imported, existingPapers: existing)
     }
 
+    public func scanAllWatchedFolders(now: Date = Date()) throws -> [WatchedFolderScanResult] {
+        let folders = try repository.fetchWatchedFolders()
+        var results: [WatchedFolderScanResult] = []
+        for folder in folders {
+            results.append(try scan(folder: folder, now: now))
+        }
+        return results
+    }
+
     private func pdfFiles(in folderURL: URL) throws -> [URL] {
         let keys: Set<URLResourceKey> = [.isRegularFileKey]
         guard let enumerator = fileManager.enumerator(

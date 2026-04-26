@@ -536,7 +536,9 @@ func runWatchedFolderChecks() throws {
     try check(storedFolders == [folder], "watched folder should persist")
 
     let scanner = WatchedFolderScanner(repository: repository, supportRoot: supportRoot)
-    let firstScan = try scanner.scan(folder: folder, now: now.addingTimeInterval(5))
+    let firstScanResults = try scanner.scanAllWatchedFolders(now: now.addingTimeInterval(5))
+    try check(firstScanResults.count == 1, "scan-all should scan one watched folder")
+    let firstScan = firstScanResults[0]
     try check(firstScan.importedPapers.count == 2, "first watched folder scan should import two PDFs")
     try check(firstScan.existingPapers.isEmpty, "first watched folder scan should not report existing papers")
     let firstPapers = try repository.fetchPapers()
@@ -544,11 +546,21 @@ func runWatchedFolderChecks() throws {
     let storedFolder = try repository.fetchWatchedFolders().first
     try check(storedFolder?.lastScannedAt == now.addingTimeInterval(5), "watched folder scan should update last scanned time")
 
-    let secondScan = try scanner.scan(folder: folder, now: now.addingTimeInterval(10))
+    try writeFixturePDF(to: inbox.appendingPathComponent("paper-c.pdf"), lines: [
+        "A third PDF appears after the folder is already being watched.",
+        "The next scan should import only this new paper."
+    ])
+    let changeScan = try scanner.scanAllWatchedFolders(now: now.addingTimeInterval(10))[0]
+    try check(changeScan.importedPapers.count == 1, "changed watched folder scan should import the new PDF")
+    try check(changeScan.existingPapers.count == 2, "changed watched folder scan should report prior papers as existing")
+    let changedPapers = try repository.fetchPapers()
+    try check(changedPapers.count == 3, "changed watched folder scan should persist the new paper")
+
+    let secondScan = try scanner.scanAllWatchedFolders(now: now.addingTimeInterval(15))[0]
     try check(secondScan.importedPapers.isEmpty, "second watched folder scan should not re-import duplicates")
-    try check(secondScan.existingPapers.count == 2, "second watched folder scan should report two existing papers")
+    try check(secondScan.existingPapers.count == 3, "second watched folder scan should report all existing papers")
     let secondPapers = try repository.fetchPapers()
-    try check(secondPapers.count == 2, "duplicate watched folder scan should keep paper count stable")
+    try check(secondPapers.count == 3, "duplicate watched folder scan should keep paper count stable")
 
     try repository.deleteWatchedFolder(id: folder.id)
     let removedFolders = try repository.fetchWatchedFolders()

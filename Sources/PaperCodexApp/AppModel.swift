@@ -56,6 +56,7 @@ final class AppModel: ObservableObject {
     private var repository: PaperRepository?
     private let supportRoot: URL
     private let workspaceManager = SessionWorkspaceManager()
+    private var watchedFolderAutoScanTask: Task<Void, Never>?
 
     init() {
         let root = PaperCodexPaths.supportRoot()
@@ -67,11 +68,17 @@ final class AppModel: ObservableObject {
             repository = store
             try reloadLibrary()
             Task {
+                scanWatchedFolders()
                 await refreshCodexDiagnostic()
             }
+            startWatchedFolderAutoScan()
         } catch {
             errorMessage = String(describing: error)
         }
+    }
+
+    deinit {
+        watchedFolderAutoScanTask?.cancel()
     }
 
     func reloadLibrary() throws {
@@ -156,9 +163,7 @@ final class AppModel: ObservableObject {
                 isScanningWatchedFolders = false
             }
 
-            for folder in watchedFolders {
-                try scanWatchedFolder(folder)
-            }
+            _ = try scanAllWatchedFolders()
             try reloadLibrary()
         } catch {
             errorMessage = String(describing: error)
@@ -640,6 +645,34 @@ final class AppModel: ObservableObject {
         }
         _ = try WatchedFolderScanner(repository: repository, supportRoot: supportRoot)
             .scan(folder: folder)
+    }
+
+    private func scanAllWatchedFolders() throws -> [WatchedFolderScanResult] {
+        guard let repository else {
+            throw AppModelError.repositoryUnavailable
+        }
+        return try WatchedFolderScanner(repository: repository, supportRoot: supportRoot)
+            .scanAllWatchedFolders()
+    }
+
+    private func startWatchedFolderAutoScan() {
+        watchedFolderAutoScanTask?.cancel()
+        watchedFolderAutoScanTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(120))
+                guard !Task.isCancelled else {
+                    return
+                }
+                self?.scanWatchedFoldersIfNeeded()
+            }
+        }
+    }
+
+    private func scanWatchedFoldersIfNeeded() {
+        guard !watchedFolders.isEmpty else {
+            return
+        }
+        scanWatchedFolders()
     }
 
     private func runCodex(prompt: String, session: PaperSession) async throws -> (stdout: String, lastMessage: String, threadID: String?) {
