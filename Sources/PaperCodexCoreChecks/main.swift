@@ -97,6 +97,17 @@ func runRepositoryChecks() throws {
         importedAt: now,
         updatedAt: now
     )
+    let paperB = Paper(
+        id: "paper-b",
+        filePath: "/tmp/paper-b.pdf",
+        fileHash: "hash-b",
+        title: "Paper B",
+        authors: ["Carol"],
+        year: 2025,
+        sourceURL: nil,
+        importedAt: now,
+        updatedAt: now
+    )
     let category = Category(id: "cat-methods", parentID: nil, name: "Methods", sortOrder: 1)
     let childCategory = Category(id: "cat-vae", parentID: "cat-methods", name: "VAE", sortOrder: 2)
     let tag = PaperTag(id: "tag-control", name: "control")
@@ -148,6 +159,7 @@ func runRepositoryChecks() throws {
     )
 
     try repository.upsertPaper(paper)
+    try repository.upsertPaper(paperB)
     try repository.upsertCategory(category)
     try repository.upsertCategory(childCategory)
     try repository.upsertTag(tag)
@@ -161,6 +173,7 @@ func runRepositoryChecks() throws {
     try repository.appendMessage(message)
 
     let fetchedPapers = try repository.fetchPapers()
+    let fetchedPapersByID = try repository.fetchPapers(ids: ["paper-b", "missing-paper", "paper-a"])
     let fetchedCategories = try repository.fetchCategories()
     let fetchedAllTags = try repository.fetchTags()
     let fetchedTags = try repository.fetchTags(forPaperID: "paper-a")
@@ -173,7 +186,8 @@ func runRepositoryChecks() throws {
     let fetchedSessions = try repository.fetchSessions(paperID: "paper-a")
     let fetchedMessages = try repository.fetchMessages(sessionID: "session-a")
 
-    try check(fetchedPapers == [paper], "paper should round-trip through SQLite")
+    try check(fetchedPapers == [paper, paperB], "papers should round-trip through SQLite")
+    try check(fetchedPapersByID == [paperB, paper], "papers should be fetchable by ID in requested order")
     try check(fetchedCategories == [category, childCategory], "categories should preserve hierarchy and sort order")
     try check(fetchedAllTags == [tag, unassignedTag], "all tags should round-trip sorted by name")
     try check(fetchedTags == [tag], "paper tags should round-trip")

@@ -22,6 +22,17 @@ struct PDFJumpTarget: Equatable {
     var label: String
 }
 
+private struct SessionPaperContext {
+    var papers: [Paper]
+    var pagesByPaperID: [String: [PageIndex]]
+    var spansByPaperID: [String: [Span]]
+    var anchorsByPaperID: [String: [PaperCodexCore.Anchor]]
+
+    var spans: [Span] {
+        papers.flatMap { spansByPaperID[$0.id] ?? [] }
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var route: AppRoute = .library
@@ -252,15 +263,13 @@ final class AppModel: ObservableObject {
             updatedAt: now
         )
         try repository.upsertSession(session)
-        let pages = try repository.fetchPages(paperID: paper.id)
-        let spans = try repository.fetchSpans(paperID: paper.id)
-        let anchors = try repository.fetchAnchors(paperID: paper.id)
+        let context = try loadSessionPaperContext(session: session, fallbackPaper: paper, repository: repository)
         try workspaceManager.writeWorkspace(
             session: session,
-            papers: [paper],
-            pagesByPaperID: [paper.id: pages],
-            spansByPaperID: [paper.id: spans],
-            anchorsByPaperID: [paper.id: anchors]
+            papers: context.papers,
+            pagesByPaperID: context.pagesByPaperID,
+            spansByPaperID: context.spansByPaperID,
+            anchorsByPaperID: context.anchorsByPaperID
         )
         sessions = try repository.fetchSessions(paperID: paper.id)
         selectedSession = session
@@ -355,7 +364,8 @@ final class AppModel: ObservableObject {
                 throw AppModelError.noSelectedSession
             }
 
-            let spans = try repository.fetchSpans(paperID: paper.id)
+            var context = try loadSessionPaperContext(session: session, fallbackPaper: paper, repository: repository)
+            let focusedSpans = context.spansByPaperID[paper.id] ?? []
             var content = trimmed
             var selectedAnchors: [PaperCodexCore.Anchor] = []
             if let selection = currentSelection {
@@ -365,7 +375,7 @@ final class AppModel: ObservableObject {
                     page: selection.page,
                     selectedText: selection.text,
                     bboxList: [selection.bbox],
-                    spans: spans,
+                    spans: focusedSpans,
                     anchorID: anchorID,
                     sessionID: session.id,
                     createdAt: Date()
@@ -386,6 +396,7 @@ final class AppModel: ObservableObject {
                 """
                 try repository.upsertAnchor(anchor)
                 selectedAnchors = [anchor]
+                context.anchorsByPaperID[paper.id] = try repository.fetchAnchors(paperID: paper.id)
                 currentSelection = nil
             }
 
@@ -403,23 +414,21 @@ final class AppModel: ObservableObject {
             sessions = try repository.fetchSessions(paperID: paper.id)
             messages = try repository.fetchMessages(sessionID: session.id)
 
-            let pages = try repository.fetchPages(paperID: paper.id)
-            let anchors = try repository.fetchAnchors(paperID: paper.id)
             try workspaceManager.writeWorkspace(
                 session: session,
-                papers: [paper],
-                pagesByPaperID: [paper.id: pages],
-                spansByPaperID: [paper.id: spans],
-                anchorsByPaperID: [paper.id: anchors]
+                papers: context.papers,
+                pagesByPaperID: context.pagesByPaperID,
+                spansByPaperID: context.spansByPaperID,
+                anchorsByPaperID: context.anchorsByPaperID
             )
 
             let prompt = PromptBuilder().buildPrompt(
                 request: PromptRequest(
                     userMessage: content,
                     workspacePath: session.workspacePath,
-                    papers: [paper],
+                    papers: context.papers,
                     selectedAnchors: selectedAnchors,
-                    relevantSpans: relevantSpans(from: spans, selectedAnchors: selectedAnchors)
+                    relevantSpans: relevantSpans(from: context.spans, selectedAnchors: selectedAnchors)
                 )
             )
             let codexReply = try await runCodex(prompt: prompt, session: session)
@@ -456,6 +465,30 @@ final class AppModel: ObservableObject {
         pdfJumpTarget = nil
     }
 
+    private func loadSessionPaperContext(
+        session: PaperSession,
+        fallbackPaper: Paper,
+        repository: PaperRepository
+    ) throws -> SessionPaperContext {
+        let paperIDs = uniqueIDs(session.paperIDs + [fallbackPaper.id])
+        let fetchedPapers = try repository.fetchPapers(ids: paperIDs)
+        let papers = fetchedPapers.isEmpty ? [fallbackPaper] : fetchedPapers
+        var pagesByPaperID: [String: [PageIndex]] = [:]
+        var spansByPaperID: [String: [Span]] = [:]
+        var anchorsByPaperID: [String: [PaperCodexCore.Anchor]] = [:]
+        for paper in papers {
+            pagesByPaperID[paper.id] = try repository.fetchPages(paperID: paper.id)
+            spansByPaperID[paper.id] = try repository.fetchSpans(paperID: paper.id)
+            anchorsByPaperID[paper.id] = try repository.fetchAnchors(paperID: paper.id)
+        }
+        return SessionPaperContext(
+            papers: papers,
+            pagesByPaperID: pagesByPaperID,
+            spansByPaperID: spansByPaperID,
+            anchorsByPaperID: anchorsByPaperID
+        )
+    }
+
     private func relevantSpans(from spans: [Span], selectedAnchors: [PaperCodexCore.Anchor]) -> [Span] {
         let matchedSpanIDs = selectedAnchors.flatMap(\.matchedSpanIDs)
         let matchedSet = Set(matchedSpanIDs)
@@ -464,6 +497,16 @@ final class AppModel: ObservableObject {
         }
         let fallbackSpans = spans.filter { !matchedSet.contains($0.id) }
         return Array((matchedSpans + fallbackSpans).prefix(8))
+    }
+
+    private func uniqueIDs(_ ids: [String]) -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        for id in ids where !seen.contains(id) {
+            seen.insert(id)
+            result.append(id)
+        }
+        return result
     }
 
     private func makeManualID(prefix: String, name: String) -> String {

@@ -153,18 +153,23 @@ public final class PaperRepository {
         SELECT id, file_path, file_hash, title, authors_json, year, source_url, imported_at, updated_at
         FROM papers ORDER BY title, id;
         """) { row in
-            Paper(
-                id: try row.text(0),
-                filePath: try row.text(1),
-                fileHash: try row.text(2),
-                title: try row.text(3),
-                authors: try decode([String].self, from: try row.text(4)),
-                year: row.optionalInt(5),
-                sourceURL: row.optionalText(6),
-                importedAt: try date(from: try row.text(7)),
-                updatedAt: try date(from: try row.text(8))
-            )
+            try paper(from: row)
         }
+    }
+
+    public func fetchPapers(ids: [String]) throws -> [Paper] {
+        guard !ids.isEmpty else {
+            return []
+        }
+        let placeholders = ids.map { _ in "?" }.joined(separator: ", ")
+        let fetched = try database.query("""
+        SELECT id, file_path, file_hash, title, authors_json, year, source_url, imported_at, updated_at
+        FROM papers WHERE id IN (\(placeholders));
+        """, bindings: ids.map(SQLiteValue.text)) { row in
+            try paper(from: row)
+        }
+        let byID = Dictionary(uniqueKeysWithValues: fetched.map { ($0.id, $0) })
+        return ids.compactMap { byID[$0] }
     }
 
     public func upsertCategory(_ category: Category) throws {
@@ -452,6 +457,20 @@ public final class PaperRepository {
             workspacePath: try row.text(3),
             createdAt: try date(from: try row.text(4)),
             updatedAt: try date(from: try row.text(5))
+        )
+    }
+
+    private func paper(from row: SQLiteRow) throws -> Paper {
+        Paper(
+            id: try row.text(0),
+            filePath: try row.text(1),
+            fileHash: try row.text(2),
+            title: try row.text(3),
+            authors: try decode([String].self, from: try row.text(4)),
+            year: row.optionalInt(5),
+            sourceURL: row.optionalText(6),
+            importedAt: try date(from: try row.text(7)),
+            updatedAt: try date(from: try row.text(8))
         )
     }
 
