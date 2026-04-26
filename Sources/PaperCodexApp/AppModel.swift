@@ -57,9 +57,7 @@ final class AppModel: ObservableObject {
     private let workspaceManager = SessionWorkspaceManager()
 
     init() {
-        let root = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("PaperCodex", isDirectory: true)
+        let root = PaperCodexPaths.supportRoot()
         supportRoot = root
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

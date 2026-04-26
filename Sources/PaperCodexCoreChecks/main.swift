@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import CryptoKit
 import PaperCodexCore
 
 struct CheckFailure: Error, CustomStringConvertible {
@@ -461,6 +462,179 @@ func runCodexCLIChecks() throws {
     try check(diagnostic.detail.contains("0.114.0"), "ready diagnostic should include the CLI version")
 }
 
+func runPathChecks() throws {
+    let overrideRoot = PaperCodexPaths.supportRoot(environment: [
+        "PAPER_CODEX_SUPPORT_ROOT": "/tmp/paper-codex-isolated-root"
+    ])
+    try check(overrideRoot.path == "/tmp/paper-codex-isolated-root", "support root should honor explicit environment override")
+
+    let defaultRoot = PaperCodexPaths.supportRoot(environment: [:])
+    try check(defaultRoot.lastPathComponent == "PaperCodex", "default support root should end in PaperCodex")
+    try check(defaultRoot.path.contains("Application Support"), "default support root should live under Application Support")
+}
+
+func runFixtureLibraryChecks() throws {
+    let tempRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("paper-codex-fixture-\(UUID().uuidString)", isDirectory: true)
+    try seedFixtureLibrary(at: tempRoot)
+
+    let repository = try PaperRepository(databasePath: tempRoot.appendingPathComponent("store.sqlite").path)
+    let papers = try repository.fetchPapers()
+    let categories = try repository.fetchCategories()
+    let tags = try repository.fetchTags()
+    let sessions = try repository.fetchSessions(paperID: "fixture-paper-a")
+    let spans = try repository.fetchSpans(paperID: "fixture-paper-a")
+
+    try check(papers.count == 2, "fixture library should contain two real PDF papers")
+    try check(categories.count >= 2, "fixture library should contain nested categories")
+    try check(tags.count >= 2, "fixture library should contain tags")
+    try check(sessions.first?.paperIDs == ["fixture-paper-a", "fixture-paper-b"], "fixture session should include both papers in order")
+    try check(!spans.isEmpty, "fixture library should persist extracted text spans")
+}
+
+func seedFixtureLibrary(at root: URL) throws {
+    let fileManager = FileManager.default
+    let storeURL = root.appendingPathComponent("store.sqlite")
+    if fileManager.fileExists(atPath: storeURL.path) {
+        throw CheckFailure(description: "refusing to overwrite existing fixture store at \(storeURL.path)")
+    }
+
+    try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+    let repository = try PaperRepository(databasePath: storeURL.path)
+    try repository.migrate()
+
+    let now = Date(timeIntervalSince1970: 1_777_220_000)
+    let paperA = try seedFixturePaper(
+        id: "fixture-paper-a",
+        title: "Representation Autoencoders for Controllable Diffusion",
+        authors: ["Alice Chen", "Bo Liu"],
+        year: 2026,
+        lines: [
+            "Representation autoencoders preserve semantic coordinates.",
+            "The decoder controls latent trajectories during diffusion.",
+            "This selected mechanism is useful for source-grounded answers."
+        ],
+        root: root,
+        repository: repository,
+        importedAt: now
+    )
+    let paperB = try seedFixturePaper(
+        id: "fixture-paper-b",
+        title: "Latent Control Benchmarks for Generative Models",
+        authors: ["Carla Park"],
+        year: 2025,
+        lines: [
+            "Latent control benchmarks compare paired edit trajectories.",
+            "Evaluation should inspect source-aligned changes.",
+            "Cross-paper sessions keep comparison context explicit."
+        ],
+        root: root,
+        repository: repository,
+        importedAt: now
+    )
+
+    let parentCategory = Category(id: "cat-methods", parentID: nil, name: "Methods", sortOrder: 1)
+    let childCategory = Category(id: "cat-methods-latent", parentID: parentCategory.id, name: "Latent Control", sortOrder: 2)
+    let tagReading = PaperTag(id: "tag-reading", name: "reading")
+    let tagSourceGrounded = PaperTag(id: "tag-source-grounded", name: "source-grounded")
+    try repository.upsertCategory(parentCategory)
+    try repository.upsertCategory(childCategory)
+    try repository.upsertTag(tagReading)
+    try repository.upsertTag(tagSourceGrounded)
+    for paper in [paperA, paperB] {
+        try repository.assignPaper(paper.id, toCategory: childCategory.id)
+        try repository.assignPaper(paper.id, toTag: tagReading.id)
+        try repository.assignPaper(paper.id, toTag: tagSourceGrounded.id)
+    }
+
+    let session = PaperSession(
+        id: "fixture-session-compare",
+        title: "Compare mechanisms",
+        paperIDs: [paperA.id, paperB.id],
+        codexSessionID: nil,
+        workspacePath: root.appendingPathComponent("sessions/fixture-session-compare", isDirectory: true).path,
+        createdAt: now,
+        updatedAt: now
+    )
+    try repository.upsertSession(session)
+    let paperASpans = try repository.fetchSpans(paperID: paperA.id)
+    let paperBSpans = try repository.fetchSpans(paperID: paperB.id)
+    guard let paperASpan = paperASpans.first, let paperBSpan = paperBSpans.first else {
+        throw CheckFailure(description: "fixture PDFs did not produce spans")
+    }
+    try repository.appendMessage(ChatMessage(
+        id: "fixture-message-user",
+        sessionID: session.id,
+        role: .user,
+        content: "Compare the mechanism claims in these two papers.",
+        createdAt: now
+    ))
+    try repository.appendMessage(ChatMessage(
+        id: "fixture-message-codex",
+        sessionID: session.id,
+        role: .codex,
+        content: "Paper A frames control through representation coordinates [[cite:\(paperASpan.id)]], while Paper B frames it as paired trajectory evaluation [[cite:\(paperBSpan.id)]].",
+        createdAt: now.addingTimeInterval(1)
+    ))
+
+    let pagesByPaperID = [
+        paperA.id: try repository.fetchPages(paperID: paperA.id),
+        paperB.id: try repository.fetchPages(paperID: paperB.id)
+    ]
+    let spansByPaperID = [
+        paperA.id: paperASpans,
+        paperB.id: paperBSpans
+    ]
+    try SessionWorkspaceManager().writeWorkspace(
+        session: session,
+        papers: [paperA, paperB],
+        pagesByPaperID: pagesByPaperID,
+        spansByPaperID: spansByPaperID,
+        anchorsByPaperID: [paperA.id: [], paperB.id: []]
+    )
+}
+
+func seedFixturePaper(
+    id: String,
+    title: String,
+    authors: [String],
+    year: Int,
+    lines: [String],
+    root: URL,
+    repository: PaperRepository,
+    importedAt: Date
+) throws -> Paper {
+    let paperDir = root.appendingPathComponent("papers/\(id)", isDirectory: true)
+    try FileManager.default.createDirectory(at: paperDir, withIntermediateDirectories: true)
+    let pdfURL = paperDir.appendingPathComponent("original.pdf")
+    try writeFixturePDF(to: pdfURL, lines: lines)
+    let pdfData = try Data(contentsOf: pdfURL)
+    let fileHash = SHA256.hash(data: pdfData).map { String(format: "%02x", $0) }.joined()
+
+    let paper = Paper(
+        id: id,
+        filePath: pdfURL.path,
+        fileHash: fileHash,
+        title: title,
+        authors: authors,
+        year: year,
+        sourceURL: nil,
+        importedAt: importedAt,
+        updatedAt: importedAt
+    )
+    try repository.upsertPaper(paper)
+
+    let index = try PDFIndexExtractor().extract(paperID: id, pdfURL: pdfURL)
+    for page in index.pages {
+        try repository.upsertPage(page)
+    }
+    for span in index.spans {
+        try repository.upsertSpan(span)
+    }
+
+    return paper
+}
+
 func writeFixturePDF(to url: URL, lines: [String]) throws {
     let data = NSMutableData()
     var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
@@ -485,7 +659,24 @@ func writeFixturePDF(to url: URL, lines: [String]) throws {
     try data.write(to: url, options: [.atomic])
 }
 
-let selectedChecks = Set(CommandLine.arguments.dropFirst())
+let arguments = Array(CommandLine.arguments.dropFirst())
+
+if arguments.first == "seed-fixture" {
+    do {
+        guard arguments.count == 2 else {
+            throw CheckFailure(description: "usage: PaperCodexCoreChecks seed-fixture <support-root>")
+        }
+        let root = URL(fileURLWithPath: arguments[1], isDirectory: true).standardizedFileURL
+        try seedFixtureLibrary(at: root)
+        print(root.path)
+        exit(0)
+    } catch {
+        fputs("check failed: \(error)\n", stderr)
+        exit(1)
+    }
+}
+
+let selectedChecks = Set(arguments)
 
 do {
     if selectedChecks.isEmpty || selectedChecks.contains("models") {
@@ -519,6 +710,14 @@ do {
     if selectedChecks.isEmpty || selectedChecks.contains("codex") {
         try runCodexCLIChecks()
         print("codex: pass")
+    }
+    if selectedChecks.isEmpty || selectedChecks.contains("paths") {
+        try runPathChecks()
+        print("paths: pass")
+    }
+    if selectedChecks.isEmpty || selectedChecks.contains("fixture") {
+        try runFixtureLibraryChecks()
+        print("fixture: pass")
     }
 } catch {
     fputs("check failed: \(error)\n", stderr)
