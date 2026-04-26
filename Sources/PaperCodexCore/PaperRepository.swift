@@ -201,15 +201,33 @@ public final class PaperRepository {
         """, bindings: [.text(tag.id), .text(tag.name)])
     }
 
+    public func fetchTags() throws -> [PaperTag] {
+        try database.query("SELECT id, name FROM tags ORDER BY name, id;") { row in
+            PaperTag(id: try row.text(0), name: try row.text(1))
+        }
+    }
+
     public func assignPaper(_ paperID: String, toCategory categoryID: String) throws {
         try database.run("""
         INSERT OR IGNORE INTO paper_categories (paper_id, category_id) VALUES (?, ?);
         """, bindings: [.text(paperID), .text(categoryID)])
     }
 
+    public func removePaper(_ paperID: String, fromCategory categoryID: String) throws {
+        try database.run("""
+        DELETE FROM paper_categories WHERE paper_id = ? AND category_id = ?;
+        """, bindings: [.text(paperID), .text(categoryID)])
+    }
+
     public func assignPaper(_ paperID: String, toTag tagID: String) throws {
         try database.run("""
         INSERT OR IGNORE INTO paper_tags (paper_id, tag_id) VALUES (?, ?);
+        """, bindings: [.text(paperID), .text(tagID)])
+    }
+
+    public func removePaper(_ paperID: String, fromTag tagID: String) throws {
+        try database.run("""
+        DELETE FROM paper_tags WHERE paper_id = ? AND tag_id = ?;
         """, bindings: [.text(paperID), .text(tagID)])
     }
 

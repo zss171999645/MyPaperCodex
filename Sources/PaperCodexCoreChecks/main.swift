@@ -100,6 +100,7 @@ func runRepositoryChecks() throws {
     let category = Category(id: "cat-methods", parentID: nil, name: "Methods", sortOrder: 1)
     let childCategory = Category(id: "cat-vae", parentID: "cat-methods", name: "VAE", sortOrder: 2)
     let tag = PaperTag(id: "tag-control", name: "control")
+    let unassignedTag = PaperTag(id: "tag-diffusion", name: "diffusion")
     let page = PageIndex(
         paperID: "paper-a",
         page: 2,
@@ -150,6 +151,7 @@ func runRepositoryChecks() throws {
     try repository.upsertCategory(category)
     try repository.upsertCategory(childCategory)
     try repository.upsertTag(tag)
+    try repository.upsertTag(unassignedTag)
     try repository.assignPaper("paper-a", toCategory: "cat-vae")
     try repository.assignPaper("paper-a", toTag: "tag-control")
     try repository.upsertPage(page)
@@ -160,6 +162,7 @@ func runRepositoryChecks() throws {
 
     let fetchedPapers = try repository.fetchPapers()
     let fetchedCategories = try repository.fetchCategories()
+    let fetchedAllTags = try repository.fetchTags()
     let fetchedTags = try repository.fetchTags(forPaperID: "paper-a")
     let fetchedCategoryIDs = try repository.fetchCategoryIDs(forPaperID: "paper-a")
     let fetchedPages = try repository.fetchPages(paperID: "paper-a")
@@ -170,6 +173,7 @@ func runRepositoryChecks() throws {
 
     try check(fetchedPapers == [paper], "paper should round-trip through SQLite")
     try check(fetchedCategories == [category, childCategory], "categories should preserve hierarchy and sort order")
+    try check(fetchedAllTags == [tag, unassignedTag], "all tags should round-trip sorted by name")
     try check(fetchedTags == [tag], "paper tags should round-trip")
     try check(fetchedCategoryIDs == ["cat-vae"], "paper category links should round-trip")
     try check(fetchedPages == [page], "page indexes should round-trip")
@@ -177,6 +181,13 @@ func runRepositoryChecks() throws {
     try check(fetchedAnchors == [anchor], "anchors should round-trip")
     try check(fetchedSessions == [session], "sessions should round-trip")
     try check(fetchedMessages == [message], "messages should round-trip")
+
+    try repository.removePaper("paper-a", fromCategory: "cat-vae")
+    try repository.removePaper("paper-a", fromTag: "tag-control")
+    let removedCategoryIDs = try repository.fetchCategoryIDs(forPaperID: "paper-a")
+    let removedTags = try repository.fetchTags(forPaperID: "paper-a")
+    try check(removedCategoryIDs.isEmpty, "paper category links should be removable")
+    try check(removedTags.isEmpty, "paper tag links should be removable")
 }
 
 func runCitationChecks() throws {

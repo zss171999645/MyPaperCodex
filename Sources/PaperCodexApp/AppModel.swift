@@ -19,6 +19,10 @@ final class AppModel: ObservableObject {
     @Published var route: AppRoute = .library
     @Published var papers: [Paper] = []
     @Published var categories: [PaperCodexCore.Category] = []
+    @Published var tags: [PaperTag] = []
+    @Published var paperCategoryIDsByID: [String: [String]] = [:]
+    @Published var paperTagsByID: [String: [PaperTag]] = [:]
+    @Published var selectedLibraryPaper: Paper?
     @Published var selectedPaper: Paper?
     @Published var selectedSession: PaperSession?
     @Published var sessions: [PaperSession] = []
@@ -51,8 +55,19 @@ final class AppModel: ObservableObject {
         guard let repository else {
             return
         }
+        let selectedLibraryPaperID = selectedLibraryPaper?.id
         papers = try repository.fetchPapers()
         categories = try repository.fetchCategories()
+        tags = try repository.fetchTags()
+        paperCategoryIDsByID = try Dictionary(uniqueKeysWithValues: papers.map { paper in
+            (paper.id, try repository.fetchCategoryIDs(forPaperID: paper.id))
+        })
+        paperTagsByID = try Dictionary(uniqueKeysWithValues: papers.map { paper in
+            (paper.id, try repository.fetchTags(forPaperID: paper.id))
+        })
+        if let selectedLibraryPaperID {
+            selectedLibraryPaper = papers.first { $0.id == selectedLibraryPaperID }
+        }
     }
 
     func importPDF(from sourceURL: URL) {
@@ -108,8 +123,87 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func selectLibraryPaper(_ paper: Paper) {
+        selectedLibraryPaper = paper
+    }
+
+    func createCategory(name: String, parentID: String?) {
+        do {
+            guard let repository else {
+                throw AppModelError.repositoryUnavailable
+            }
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw AppModelError.emptyName
+            }
+            let nextSortOrder = (categories.map(\.sortOrder).max() ?? 0) + 1
+            let category = PaperCodexCore.Category(
+                id: makeManualID(prefix: "cat", name: trimmed),
+                parentID: parentID,
+                name: trimmed,
+                sortOrder: nextSortOrder
+            )
+            try repository.upsertCategory(category)
+            try reloadLibrary()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func createTag(name: String) {
+        do {
+            guard let repository else {
+                throw AppModelError.repositoryUnavailable
+            }
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw AppModelError.emptyName
+            }
+            if tags.contains(where: { $0.name.compare(trimmed, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }) {
+                return
+            }
+            try repository.upsertTag(PaperTag(id: makeManualID(prefix: "tag", name: trimmed), name: trimmed))
+            try reloadLibrary()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func setCategory(_ categoryID: String, assigned: Bool, for paper: Paper) {
+        do {
+            guard let repository else {
+                throw AppModelError.repositoryUnavailable
+            }
+            if assigned {
+                try repository.assignPaper(paper.id, toCategory: categoryID)
+            } else {
+                try repository.removePaper(paper.id, fromCategory: categoryID)
+            }
+            try reloadLibrary()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func setTag(_ tagID: String, assigned: Bool, for paper: Paper) {
+        do {
+            guard let repository else {
+                throw AppModelError.repositoryUnavailable
+            }
+            if assigned {
+                try repository.assignPaper(paper.id, toTag: tagID)
+            } else {
+                try repository.removePaper(paper.id, fromTag: tagID)
+            }
+            try reloadLibrary()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
     func openPaper(_ paper: Paper) {
         do {
+            selectedLibraryPaper = paper
             selectedPaper = paper
             currentSelection = nil
             guard let repository else {
@@ -304,8 +398,18 @@ final class AppModel: ObservableObject {
         currentSelection = nil
     }
 
+    private func makeManualID(prefix: String, name: String) -> String {
+        let slug = makeSlug(from: name)
+        return "\(prefix)-\(slug.isEmpty ? "item" : slug)-\(UUID().uuidString.prefix(8).lowercased())"
+    }
+
     private func makePaperID(title: String, hash: String) -> String {
-        let slug = title
+        let slug = makeSlug(from: title)
+        return "\(slug.isEmpty ? "paper" : slug)-\(hash.prefix(10))"
+    }
+
+    private func makeSlug(from text: String) -> String {
+        text
             .lowercased()
             .map { character in
                 character.isLetter || character.isNumber ? character : "-"
@@ -317,7 +421,6 @@ final class AppModel: ObservableObject {
                 partial.append(character)
             }
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return "\(slug.isEmpty ? "paper" : slug)-\(hash.prefix(10))"
     }
 
     private func runCodex(prompt: String, session: PaperSession) async throws -> (stdout: String, lastMessage: String, threadID: String?) {
@@ -373,6 +476,7 @@ enum AppModelError: Error, CustomStringConvertible {
     case repositoryUnavailable
     case noSelectedPaper
     case noSelectedSession
+    case emptyName
 
     var description: String {
         switch self {
@@ -382,6 +486,8 @@ enum AppModelError: Error, CustomStringConvertible {
             "No paper is selected."
         case .noSelectedSession:
             "No Codex session is selected."
+        case .emptyName:
+            "Name cannot be empty."
         }
     }
 }
