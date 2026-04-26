@@ -29,15 +29,6 @@ struct LibraryView: View {
                 model.importPDF(from: url)
             }
         }
-        .toolbar {
-            ToolbarItemGroup {
-                Button {
-                    isImporting = true
-                } label: {
-                    Label("Import PDF", systemImage: "doc.badge.plus")
-                }
-            }
-        }
     }
 
     private var sidebar: some View {

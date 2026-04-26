@@ -25,6 +25,7 @@ final class AppModel: ObservableObject {
     @Published var messages: [ChatMessage] = []
     @Published var currentSelection: PDFSelectionInfo?
     @Published var errorMessage: String?
+    @Published var isSending = false
 
     private var repository: PaperRepository?
     private let supportRoot: URL
@@ -185,10 +186,17 @@ final class AppModel: ObservableObject {
         currentSelection = selection
     }
 
-    func sendMessage(_ text: String) {
+    func sendMessage(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return
+        }
+        guard !isSending else {
+            return
+        }
+        isSending = true
+        defer {
+            isSending = false
         }
 
         do {
@@ -203,9 +211,10 @@ final class AppModel: ObservableObject {
             }
 
             var content = trimmed
+            var selectedAnchors: [PaperCodexCore.Anchor] = []
             if let selection = currentSelection {
-                let anchorID = Anchor.makeID(paperID: paper.id, page: selection.page, suffix: UUID().uuidString.lowercased())
-                let anchor = Anchor(
+                let anchorID = PaperCodexCore.Anchor.makeID(paperID: paper.id, page: selection.page, suffix: UUID().uuidString.lowercased())
+                let anchor = PaperCodexCore.Anchor(
                     id: anchorID,
                     paperID: paper.id,
                     page: selection.page,
@@ -219,6 +228,7 @@ final class AppModel: ObservableObject {
                     confidence: 0.75
                 )
                 try repository.upsertAnchor(anchor)
+                selectedAnchors = [anchor]
                 content += "\n\n[selected source]\nanchor_id: \(anchor.id)\npage: \(anchor.page)\ntext: \"\(anchor.selectedText)\""
                 currentSelection = nil
             }
@@ -236,8 +246,47 @@ final class AppModel: ObservableObject {
             selectedSession = session
             sessions = try repository.fetchSessions(paperID: paper.id)
             messages = try repository.fetchMessages(sessionID: session.id)
+
+            let spans = try repository.fetchSpans(paperID: paper.id)
+            let anchors = try repository.fetchAnchors(paperID: paper.id)
+            try workspaceManager.writeWorkspace(
+                session: session,
+                papers: [paper],
+                pagesByPaperID: [paper.id: []],
+                spansByPaperID: [paper.id: spans],
+                anchorsByPaperID: [paper.id: anchors]
+            )
+
+            let prompt = PromptBuilder().buildPrompt(
+                request: PromptRequest(
+                    userMessage: content,
+                    workspacePath: session.workspacePath,
+                    papers: [paper],
+                    selectedAnchors: selectedAnchors,
+                    relevantSpans: Array(spans.prefix(8))
+                )
+            )
+            let codexReply = try await runCodex(prompt: prompt, session: session)
+            var updatedSession = session
+            if let threadID = codexReply.threadID {
+                updatedSession.codexSessionID = threadID
+            }
+            updatedSession.updatedAt = Date()
+            try repository.upsertSession(updatedSession)
+
+            let codexMessage = ChatMessage(
+                id: UUID().uuidString.lowercased(),
+                sessionID: session.id,
+                role: .codex,
+                content: codexReply.lastMessage.isEmpty ? codexReply.stdout : codexReply.lastMessage,
+                createdAt: Date()
+            )
+            try repository.appendMessage(codexMessage)
+            selectedSession = updatedSession
+            sessions = try repository.fetchSessions(paperID: paper.id)
+            messages = try repository.fetchMessages(sessionID: session.id)
         } catch {
-            errorMessage = String(describing: error)
+            await appendCodexFailureMessage(String(describing: error))
         }
     }
 
@@ -264,6 +313,54 @@ final class AppModel: ObservableObject {
             }
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         return "\(slug.isEmpty ? "paper" : slug)-\(hash.prefix(10))"
+    }
+
+    private func runCodex(prompt: String, session: PaperSession) async throws -> (stdout: String, lastMessage: String, threadID: String?) {
+        let executable = try CodexCLI.findCodexExecutable()
+        let cli = CodexCLI(executablePath: executable)
+        let outputURL = URL(fileURLWithPath: session.workspacePath)
+            .appendingPathComponent("turns", isDirectory: true)
+            .appendingPathComponent("\(UUID().uuidString.lowercased())-codex.txt")
+        let arguments: [String]
+        if let codexSessionID = session.codexSessionID {
+            arguments = cli.resumeArguments(
+                sessionID: codexSessionID,
+                prompt: prompt,
+                outputLastMessagePath: outputURL.path
+            )
+        } else {
+            arguments = cli.startArguments(
+                prompt: prompt,
+                workspacePath: session.workspacePath,
+                outputLastMessagePath: outputURL.path
+            )
+        }
+
+        let stdout = try await Task.detached(priority: .userInitiated) {
+            try cli.run(arguments: arguments)
+        }.value
+        let lastMessage = (try? String(contentsOf: outputURL, encoding: .utf8)) ?? ""
+        return (stdout: stdout, lastMessage: lastMessage, threadID: CodexCLI.parseThreadID(from: stdout))
+    }
+
+    private func appendCodexFailureMessage(_ failure: String) async {
+        guard let repository, let session = selectedSession else {
+            errorMessage = failure
+            return
+        }
+        do {
+            let message = ChatMessage(
+                id: UUID().uuidString.lowercased(),
+                sessionID: session.id,
+                role: .codex,
+                content: "Codex failed: \(failure)",
+                createdAt: Date()
+            )
+            try repository.appendMessage(message)
+            messages = try repository.fetchMessages(sessionID: session.id)
+        } catch {
+            errorMessage = "\(failure)\n\nAlso failed to store error message: \(error)"
+        }
     }
 }
 

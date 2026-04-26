@@ -331,9 +331,13 @@ func runCodexCLIChecks() throws {
     let cli = CodexCLI(executablePath: codexPath)
     let start = cli.startArguments(prompt: "hello", workspacePath: "/tmp/session-a")
     try check(start == ["exec", "--json", "-C", "/tmp/session-a", "hello"], "start args should use codex exec with JSON output and workspace")
+    let startWithOutput = cli.startArguments(prompt: "hello", workspacePath: "/tmp/session-a", outputLastMessagePath: "/tmp/last.txt")
+    try check(startWithOutput == ["exec", "--json", "-C", "/tmp/session-a", "--output-last-message", "/tmp/last.txt", "hello"], "start args should support output-last-message")
 
     let resume = cli.resumeArguments(sessionID: "session-a", prompt: "continue")
     try check(resume == ["exec", "resume", "--json", "session-a", "continue"], "resume args should use codex exec resume with JSON output")
+    let parsedThreadID = CodexCLI.parseThreadID(from: #"{"type":"thread.started","thread_id":"019dcaf6-01d5-7060-bc43-40401e3693c3"}"#)
+    try check(parsedThreadID == "019dcaf6-01d5-7060-bc43-40401e3693c3", "Codex thread ID should be parsed from JSONL output")
 }
 
 func writeFixturePDF(to url: URL, lines: [String]) throws {

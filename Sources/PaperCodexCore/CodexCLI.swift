@@ -36,12 +36,22 @@ public struct CodexCLI: Sendable {
         throw CodexCLIError.executableNotFound
     }
 
-    public func startArguments(prompt: String, workspacePath: String) -> [String] {
-        ["exec", "--json", "-C", workspacePath, prompt]
+    public func startArguments(prompt: String, workspacePath: String, outputLastMessagePath: String? = nil) -> [String] {
+        var arguments = ["exec", "--json", "-C", workspacePath]
+        if let outputLastMessagePath {
+            arguments += ["--output-last-message", outputLastMessagePath]
+        }
+        arguments.append(prompt)
+        return arguments
     }
 
-    public func resumeArguments(sessionID: String, prompt: String) -> [String] {
-        ["exec", "resume", "--json", sessionID, prompt]
+    public func resumeArguments(sessionID: String, prompt: String, outputLastMessagePath: String? = nil) -> [String] {
+        var arguments = ["exec", "resume", "--json"]
+        if let outputLastMessagePath {
+            arguments += ["--output-last-message", outputLastMessagePath]
+        }
+        arguments += [sessionID, prompt]
+        return arguments
     }
 
     public func run(arguments: [String]) throws -> String {
@@ -63,5 +73,34 @@ public struct CodexCLI: Sendable {
             throw CodexCLIError.processFailed(status: process.terminationStatus, stderr: stderr)
         }
         return stdout
+    }
+
+    public static func parseThreadID(from jsonl: String) -> String? {
+        for line in jsonl.split(separator: "\n") {
+            guard line.contains(#""type":"thread.started""#) || line.contains(#""type": "thread.started""#) else {
+                continue
+            }
+            if let threadID = extractJSONStringValue(named: "thread_id", from: String(line)) {
+                return threadID
+            }
+        }
+        return nil
+    }
+
+    private static func extractJSONStringValue(named key: String, from line: String) -> String? {
+        let compactPrefix = #""\#(key)":"#
+        let spacedPrefix = #""\#(key)": "#
+        guard let prefixRange = line.range(of: compactPrefix) ?? line.range(of: spacedPrefix) else {
+            return nil
+        }
+        var cursor = prefixRange.upperBound
+        guard cursor < line.endIndex, line[cursor] == "\"" else {
+            return nil
+        }
+        cursor = line.index(after: cursor)
+        guard let end = line[cursor...].firstIndex(of: "\"") else {
+            return nil
+        }
+        return String(line[cursor..<end])
     }
 }

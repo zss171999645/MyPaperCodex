@@ -74,15 +74,18 @@ struct ChatView: View {
                     .background(Color(nsColor: .textBackgroundColor))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 Button {
-                    model.sendMessage(draft)
+                    let message = draft
                     draft = ""
+                    Task {
+                        await model.sendMessage(message)
+                    }
                 } label: {
-                    Image(systemName: "arrow.up.circle.fill")
+                    Image(systemName: model.isSending ? "hourglass.circle.fill" : "arrow.up.circle.fill")
                         .font(.system(size: 26))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.blue)
-                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(model.isSending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(14)
