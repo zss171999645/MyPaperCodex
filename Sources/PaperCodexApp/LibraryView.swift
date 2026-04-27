@@ -1,11 +1,10 @@
 import PaperCodexCore
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct LibraryView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var isImporting = false
-    @State private var isChoosingWatchedFolder = false
     @State private var isShowingWatchedFolders = false
     @State private var isCreatingCategory = false
     @State private var isCreatingTag = false
@@ -50,16 +49,6 @@ struct LibraryView: View {
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .fileImporter(isPresented: $isImporting, allowedContentTypes: [.pdf], allowsMultipleSelection: false) { result in
-            if case let .success(urls) = result, let url = urls.first {
-                model.importPDF(from: url)
-            }
-        }
-        .fileImporter(isPresented: $isChoosingWatchedFolder, allowedContentTypes: [.folder], allowsMultipleSelection: false) { result in
-            if case let .success(urls) = result, let url = urls.first {
-                model.addWatchedFolder(from: url)
-            }
-        }
         .sheet(isPresented: $isCreatingCategory) {
             CategoryEditorSheet(
                 categoryItems: flattenedCategoryItems(),
@@ -88,7 +77,7 @@ struct LibraryView: View {
         }
         .sheet(isPresented: $isShowingWatchedFolders) {
             WatchedFoldersSheet {
-                isChoosingWatchedFolder = true
+                presentWatchedFolderPanel()
             } onClose: {
                 isShowingWatchedFolders = false
             }
@@ -172,7 +161,7 @@ struct LibraryView: View {
                 }
                 .buttonStyle(.bordered)
                 Button {
-                    isImporting = true
+                    presentPDFImportPanel()
                 } label: {
                     Label("Import PDF", systemImage: "plus")
                 }
@@ -376,6 +365,52 @@ struct LibraryView: View {
     private func categories(for paper: Paper) -> [PaperCodexCore.Category] {
         let ids = Set(model.paperCategoryIDsByID[paper.id, default: []])
         return model.categories.filter { ids.contains($0.id) }
+    }
+
+    private func presentPDFImportPanel() {
+        let panel = NSOpenPanel()
+        panel.title = "Import PDF"
+        panel.prompt = "Import"
+        panel.allowedContentTypes = [.pdf]
+        panel.allowsMultipleSelection = false
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.resolvesAliases = true
+        beginOpenPanel(panel) { url in
+            model.importPDF(from: url)
+        }
+    }
+
+    private func presentWatchedFolderPanel() {
+        let panel = NSOpenPanel()
+        panel.title = "Add Watched Folder"
+        panel.prompt = "Add Folder"
+        panel.allowedContentTypes = [.folder]
+        panel.allowsMultipleSelection = false
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.resolvesAliases = true
+        beginOpenPanel(panel) { url in
+            model.addWatchedFolder(from: url)
+        }
+    }
+
+    private func beginOpenPanel(_ panel: NSOpenPanel, onSelection: @escaping (URL) -> Void) {
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            panel.beginSheetModal(for: window) { response in
+                guard response == .OK, let url = panel.url else {
+                    return
+                }
+                onSelection(url)
+            }
+        } else {
+            panel.begin { response in
+                guard response == .OK, let url = panel.url else {
+                    return
+                }
+                onSelection(url)
+            }
+        }
     }
 
     private func flattenedCategoryItems(parentID: String? = nil, depth: Int = 0) -> [CategoryListItem] {
