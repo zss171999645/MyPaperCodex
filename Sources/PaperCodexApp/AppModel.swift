@@ -32,6 +32,8 @@ private struct SessionPaperContext {
     }
 }
 
+private let codexModelOverrideDefaultsKey = "PaperCodexCodexModelOverride"
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var route: AppRoute = .library
@@ -49,6 +51,7 @@ final class AppModel: ObservableObject {
     @Published var currentSelection: PDFSelectionInfo?
     @Published var pdfJumpTarget: PDFJumpTarget?
     @Published var codexDiagnostic: CodexDiagnostic?
+    @Published var codexModelOverride: String = UserDefaults.standard.string(forKey: codexModelOverrideDefaultsKey) ?? ""
     @Published var errorMessage: String?
     @Published var isSending = false
     @Published var isScanningWatchedFolders = false
@@ -416,10 +419,24 @@ final class AppModel: ObservableObject {
 
     func refreshCodexDiagnostic() async {
         codexDiagnostic = nil
+        let modelOverride = codexModelOverride
         let diagnostic = await Task.detached(priority: .utility) {
-            CodexCLI.diagnose()
+            CodexCLI.diagnose(modelOverride: modelOverride)
         }.value
         codexDiagnostic = diagnostic
+    }
+
+    func setCodexModelOverride(_ model: String) {
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        codexModelOverride = trimmed
+        if trimmed.isEmpty {
+            UserDefaults.standard.removeObject(forKey: codexModelOverrideDefaultsKey)
+        } else {
+            UserDefaults.standard.set(trimmed, forKey: codexModelOverrideDefaultsKey)
+        }
+        Task {
+            await refreshCodexDiagnostic()
+        }
     }
 
     func jumpToCitation(_ citationID: String) {
@@ -726,13 +743,15 @@ final class AppModel: ObservableObject {
             arguments = cli.resumeArguments(
                 sessionID: codexSessionID,
                 prompt: prompt,
-                outputLastMessagePath: outputURL.path
+                outputLastMessagePath: outputURL.path,
+                modelOverride: codexModelOverride
             )
         } else {
             arguments = cli.startArguments(
                 prompt: prompt,
                 workspacePath: session.workspacePath,
-                outputLastMessagePath: outputURL.path
+                outputLastMessagePath: outputURL.path,
+                modelOverride: codexModelOverride
             )
         }
 

@@ -40,11 +40,18 @@ public struct CodexDiagnostic: Equatable, Sendable {
     public var version: String?
     public var capabilities: CodexCapabilities?
 
-    public static func ready(executablePath: String, version: String?, capabilities: CodexCapabilities) -> CodexDiagnostic {
-        CodexDiagnostic(
+    public static func ready(
+        executablePath: String,
+        version: String?,
+        capabilities: CodexCapabilities,
+        modelOverride: String? = nil
+    ) -> CodexDiagnostic {
+        let trimmedModel = modelOverride?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let modelDetail = trimmedModel.map { " Using app model override \($0)." } ?? ""
+        return CodexDiagnostic(
             severity: .ready,
             title: "Codex ready",
-            detail: "CLI \(version ?? "unknown version") supports Paper Codex sessions.",
+            detail: "CLI \(version ?? "unknown version") supports Paper Codex sessions.\(modelDetail)",
             executablePath: executablePath,
             version: version,
             capabilities: capabilities
@@ -101,8 +108,17 @@ public struct CodexCLI: Sendable {
         throw CodexCLIError.executableNotFound
     }
 
-    public func startArguments(prompt: String, workspacePath: String, outputLastMessagePath: String? = nil) -> [String] {
-        var arguments = ["exec", "--json", "-C", workspacePath]
+    public func startArguments(
+        prompt: String,
+        workspacePath: String,
+        outputLastMessagePath: String? = nil,
+        modelOverride: String? = nil
+    ) -> [String] {
+        var arguments = ["exec", "--skip-git-repo-check", "--json"]
+        if let modelOverride = Self.normalizedModelOverride(modelOverride) {
+            arguments += ["--model", modelOverride]
+        }
+        arguments += ["-C", workspacePath]
         if let outputLastMessagePath {
             arguments += ["--output-last-message", outputLastMessagePath]
         }
@@ -110,8 +126,16 @@ public struct CodexCLI: Sendable {
         return arguments
     }
 
-    public func resumeArguments(sessionID: String, prompt: String, outputLastMessagePath: String? = nil) -> [String] {
-        var arguments = ["exec", "resume", "--json"]
+    public func resumeArguments(
+        sessionID: String,
+        prompt: String,
+        outputLastMessagePath: String? = nil,
+        modelOverride: String? = nil
+    ) -> [String] {
+        var arguments = ["exec", "resume", "--skip-git-repo-check", "--json"]
+        if let modelOverride = Self.normalizedModelOverride(modelOverride) {
+            arguments += ["--model", modelOverride]
+        }
         if let outputLastMessagePath {
             arguments += ["--output-last-message", outputLastMessagePath]
         }
@@ -129,7 +153,8 @@ public struct CodexCLI: Sendable {
 
     public static func diagnose(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        configText: String? = nil
+        configText: String? = nil,
+        modelOverride: String? = nil
     ) -> CodexDiagnostic {
         do {
             let executable = try findCodexExecutable(environment: environment)
@@ -140,7 +165,8 @@ public struct CodexCLI: Sendable {
                 executablePath: executable,
                 version: version,
                 capabilities: capabilities,
-                configText: configText ?? readDefaultConfig(environment: environment)
+                configText: configText ?? readDefaultConfig(environment: environment),
+                modelOverride: modelOverride
             )
         } catch {
             return .blocked(String(describing: error))
@@ -151,9 +177,12 @@ public struct CodexCLI: Sendable {
         executablePath: String,
         version: String?,
         capabilities: CodexCapabilities,
-        configText: String?
+        configText: String?,
+        modelOverride: String? = nil
     ) -> CodexDiagnostic {
-        if let issue = configuredModelIssue(configText: configText, cliVersion: version) {
+        let normalizedOverride = normalizedModelOverride(modelOverride)
+        if normalizedOverride == nil,
+           let issue = configuredModelIssue(configText: configText, cliVersion: version) {
             return .blocked(issue, title: "Codex model incompatible")
         }
 
@@ -168,7 +197,12 @@ public struct CodexCLI: Sendable {
             missing.append("exec resume")
         }
         if missing.isEmpty {
-            return .ready(executablePath: executablePath, version: version, capabilities: capabilities)
+            return .ready(
+                executablePath: executablePath,
+                version: version,
+                capabilities: capabilities,
+                modelOverride: normalizedOverride
+            )
         }
         return .warning(executablePath: executablePath, version: version, capabilities: capabilities, missing: missing)
     }
@@ -229,6 +263,14 @@ public struct CodexCLI: Sendable {
             }
         }
         return .orderedSame
+    }
+
+    private static func normalizedModelOverride(_ value: String?) -> String? {
+        guard let value else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     public func run(arguments: [String]) throws -> String {

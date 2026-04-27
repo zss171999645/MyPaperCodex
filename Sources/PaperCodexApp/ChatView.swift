@@ -80,7 +80,11 @@ struct ChatView: View {
                 .foregroundStyle(.secondary)
             }
 
-            CodexStatusLine(diagnostic: model.codexDiagnostic) {
+            CodexStatusLine(
+                diagnostic: model.codexDiagnostic,
+                modelOverride: model.codexModelOverride,
+                onModelOverride: { model.setCodexModelOverride($0) }
+            ) {
                 Task {
                     await model.refreshCodexDiagnostic()
                 }
@@ -114,6 +118,8 @@ struct ChatView: View {
 
 private struct CodexStatusLine: View {
     var diagnostic: CodexDiagnostic?
+    var modelOverride: String
+    var onModelOverride: (String) -> Void
     var onRefresh: () -> Void
 
     var body: some View {
@@ -125,6 +131,31 @@ private struct CodexStatusLine: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer()
+            if shouldOfferCompatibleModel {
+                Button("Use gpt-5.4") {
+                    onModelOverride("gpt-5.4")
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+            }
+            Menu {
+                Button("Default") {
+                    onModelOverride("")
+                }
+                Divider()
+                Button("gpt-5.4") {
+                    onModelOverride("gpt-5.4")
+                }
+                Button("gpt-5.3-codex") {
+                    onModelOverride("gpt-5.3-codex")
+                }
+            } label: {
+                Label(modelLabel, systemImage: "slider.horizontal.3")
+                    .labelStyle(.titleAndIcon)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.borderless)
+            .controlSize(.small)
             Button(action: onRefresh) {
                 Image(systemName: "arrow.clockwise")
             }
@@ -147,6 +178,16 @@ private struct CodexStatusLine: View {
 
     private var detail: String {
         diagnostic?.detail ?? "Checking local Codex CLI."
+    }
+
+    private var modelLabel: String {
+        let trimmed = modelOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Default" : trimmed
+    }
+
+    private var shouldOfferCompatibleModel: Bool {
+        diagnostic?.title == "Codex model incompatible"
+            && modelOverride.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var iconName: String {

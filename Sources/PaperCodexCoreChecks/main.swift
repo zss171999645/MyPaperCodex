@@ -467,12 +467,16 @@ func runCodexCLIChecks() throws {
 
     let cli = CodexCLI(executablePath: codexPath)
     let start = cli.startArguments(prompt: "hello", workspacePath: "/tmp/session-a")
-    try check(start == ["exec", "--json", "-C", "/tmp/session-a", "hello"], "start args should use codex exec with JSON output and workspace")
+    try check(start == ["exec", "--skip-git-repo-check", "--json", "-C", "/tmp/session-a", "hello"], "start args should allow non-git session workspaces")
     let startWithOutput = cli.startArguments(prompt: "hello", workspacePath: "/tmp/session-a", outputLastMessagePath: "/tmp/last.txt")
-    try check(startWithOutput == ["exec", "--json", "-C", "/tmp/session-a", "--output-last-message", "/tmp/last.txt", "hello"], "start args should support output-last-message")
+    try check(startWithOutput == ["exec", "--skip-git-repo-check", "--json", "-C", "/tmp/session-a", "--output-last-message", "/tmp/last.txt", "hello"], "start args should support output-last-message")
+    let startWithModel = cli.startArguments(prompt: "hello", workspacePath: "/tmp/session-a", outputLastMessagePath: "/tmp/last.txt", modelOverride: "gpt-5.4")
+    try check(startWithModel == ["exec", "--skip-git-repo-check", "--json", "--model", "gpt-5.4", "-C", "/tmp/session-a", "--output-last-message", "/tmp/last.txt", "hello"], "start args should support an app-local model override")
 
     let resume = cli.resumeArguments(sessionID: "session-a", prompt: "continue")
-    try check(resume == ["exec", "resume", "--json", "session-a", "continue"], "resume args should use codex exec resume with JSON output")
+    try check(resume == ["exec", "resume", "--skip-git-repo-check", "--json", "session-a", "continue"], "resume args should use codex exec resume with JSON output")
+    let resumeWithModel = cli.resumeArguments(sessionID: "session-a", prompt: "continue", modelOverride: "gpt-5.4")
+    try check(resumeWithModel == ["exec", "resume", "--skip-git-repo-check", "--json", "--model", "gpt-5.4", "session-a", "continue"], "resume args should support an app-local model override")
     let parsedThreadID = CodexCLI.parseThreadID(from: #"{"type":"thread.started","thread_id":"019dcaf6-01d5-7060-bc43-40401e3693c3"}"#)
     try check(parsedThreadID == "019dcaf6-01d5-7060-bc43-40401e3693c3", "Codex thread ID should be parsed from JSONL output")
 
@@ -508,6 +512,15 @@ func runCodexCLIChecks() throws {
     )
     try check(blockedDiagnostic.severity == .blocked, "diagnostic should be blocked when the configured model needs a newer CLI")
     try check(blockedDiagnostic.title == "Codex model incompatible", "model compatibility failures should have a specific diagnostic title")
+    let overrideDiagnostic = CodexCLI.diagnostic(
+        executablePath: "/opt/homebrew/bin/codex",
+        version: "0.114.0",
+        capabilities: capabilities,
+        configText: config,
+        modelOverride: "gpt-5.4"
+    )
+    try check(overrideDiagnostic.severity == .ready, "app-local model override should bypass the incompatible default model")
+    try check(overrideDiagnostic.detail.contains("gpt-5.4"), "override diagnostic should name the selected model")
     try check(CodexCLI.configuredModelIssue(configText: #"model = "gpt-5.4""#, cliVersion: "0.114.0") == nil, "other configured models should not be blocked by the gpt-5.5 compatibility rule")
 }
 
