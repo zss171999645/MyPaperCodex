@@ -47,31 +47,18 @@ public struct PDFIndexExtractor: Sendable {
             }
 
             pages.append(PageIndex(paperID: paperID, page: pageNumber, text: pageText, confidence: 1.0))
-            let lines = pageText
-                .components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
+            let textLines = indexedLines(in: pageText)
+            let blocks = mergeLinesIntoBlocks(textLines)
 
-            let nsText = pageText as NSString
-            var searchStart = 0
-            for (lineIndex, line) in lines.enumerated() {
-                let searchRange = NSRange(location: searchStart, length: max(0, nsText.length - searchStart))
-                let foundRange = nsText.range(of: line, options: [], range: searchRange)
-                let charRange = foundRange.location == NSNotFound
-                    ? TextRange(location: 0, length: line.count)
-                    : TextRange(location: foundRange.location, length: foundRange.length)
-                if foundRange.location != NSNotFound {
-                    searchStart = foundRange.location + foundRange.length
-                }
-
-                let bbox = bounds(for: page, range: NSRange(location: charRange.location, length: charRange.length))
+            for (blockIndex, block) in blocks.enumerated() {
+                let bbox = bounds(for: page, range: NSRange(location: block.charRange.location, length: block.charRange.length))
                 spans.append(Span(
-                    id: Span.makeID(paperID: paperID, page: pageNumber, blockIndex: lineIndex + 1),
+                    id: Span.makeID(paperID: paperID, page: pageNumber, blockIndex: blockIndex + 1),
                     paperID: paperID,
                     page: pageNumber,
                     bbox: bbox,
-                    text: line,
-                    charRange: charRange,
+                    text: block.text,
+                    charRange: block.charRange,
                     sectionHint: nil,
                     confidence: bbox.width > 0 && bbox.height > 0 ? 0.95 : 0.65
                 ))
@@ -82,6 +69,148 @@ public struct PDFIndexExtractor: Sendable {
             throw PDFIndexExtractorError.noTextLayer(pdfURL.path)
         }
         return PDFIndexResult(pages: pages, spans: spans)
+    }
+
+    private struct IndexedLine {
+        var text: String
+        var range: NSRange
+    }
+
+    private struct TextBlock {
+        var text: String
+        var charRange: TextRange
+    }
+
+    private func indexedLines(in pageText: String) -> [IndexedLine] {
+        let nsText = pageText as NSString
+        let rawLines = pageText.components(separatedBy: .newlines)
+        var searchStart = 0
+        var lines: [IndexedLine] = []
+
+        for rawLine in rawLines {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else {
+                continue
+            }
+            let searchRange = NSRange(location: searchStart, length: max(0, nsText.length - searchStart))
+            let foundRange = nsText.range(of: line, options: [], range: searchRange)
+            let range = foundRange.location == NSNotFound
+                ? NSRange(location: searchStart, length: line.count)
+                : foundRange
+            if foundRange.location != NSNotFound {
+                searchStart = foundRange.location + foundRange.length
+            }
+            lines.append(IndexedLine(text: line, range: range))
+        }
+
+        return lines
+    }
+
+    private func mergeLinesIntoBlocks(_ lines: [IndexedLine]) -> [TextBlock] {
+        var blocks: [TextBlock] = []
+        var current: [IndexedLine] = []
+
+        func flush() {
+            guard let first = current.first, let last = current.last else {
+                return
+            }
+            let location = first.range.location
+            let length = max(0, last.range.location + last.range.length - location)
+            blocks.append(TextBlock(
+                text: joinedText(for: current),
+                charRange: TextRange(location: location, length: length)
+            ))
+            current.removeAll()
+        }
+
+        for line in lines {
+            if let previous = current.last, shouldStartNewBlock(previous: previous.text, next: line.text) {
+                flush()
+            }
+            current.append(line)
+            if isStandaloneLine(line.text) {
+                flush()
+            }
+        }
+        flush()
+        return blocks
+    }
+
+    private func shouldStartNewBlock(previous: String, next: String) -> Bool {
+        if isStandaloneLine(previous) || isStandaloneLine(next) {
+            return true
+        }
+        if looksLikeSectionHeading(next) {
+            return true
+        }
+        if endsSentence(previous), startsWithUppercaseLetter(next) {
+            return true
+        }
+        return false
+    }
+
+    private func joinedText(for lines: [IndexedLine]) -> String {
+        var result = ""
+        for line in lines {
+            if result.isEmpty {
+                result = line.text
+            } else if result.hasSuffix("-") {
+                result.removeLast()
+                result += line.text
+            } else {
+                result += " " + line.text
+            }
+        }
+        return result
+    }
+
+    private func isStandaloneLine(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower.hasPrefix("article http")
+            || lower.hasPrefix("received:")
+            || lower.hasPrefix("accepted:")
+            || lower.hasPrefix("published online:")
+            || lower == "check for updates"
+            || lower == "references"
+            || lower == "acknowledgements"
+            || lower == "methods"
+            || lower == "data availability"
+            || lower == "code availability"
+    }
+
+    private func looksLikeSectionHeading(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count <= 80, !trimmed.contains(".") else {
+            return false
+        }
+        let lower = trimmed.lowercased()
+        let known = [
+            "abstract",
+            "introduction",
+            "results",
+            "discussion",
+            "methods",
+            "conclusion",
+            "data availability",
+            "code availability",
+            "references"
+        ]
+        return known.contains(lower)
+    }
+
+    private func endsSentence(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let last = trimmed.last else {
+            return false
+        }
+        return ".?!".contains(last)
+    }
+
+    private func startsWithUppercaseLetter(_ text: String) -> Bool {
+        guard let first = text.trimmingCharacters(in: .whitespacesAndNewlines).first else {
+            return false
+        }
+        return first.isUppercase
     }
 
     private func bounds(for page: PDFPage, range: NSRange) -> BoundingBox {

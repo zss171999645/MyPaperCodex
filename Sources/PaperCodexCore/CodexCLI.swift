@@ -138,8 +138,10 @@ public enum CodexJSONEventParser {
                 ?? stringValue(named: "stderr", in: effective)
                 ?? stringValue(named: "output", in: effective)
                 ?? stringValue(named: "text", in: effective)
-            let detail = command.map { "Command: \($0)" } ?? output ?? compactJSONString(effective) ?? type
-            return CodexRunEvent(kind: .terminal, title: "Terminal", detail: detail)
+            if let command {
+                return CodexRunEvent(kind: .terminal, title: command, detail: "Running command")
+            }
+            return CodexRunEvent(kind: .terminal, title: "Command output", detail: output ?? compactJSONString(effective) ?? type)
         }
         if lowerType.contains("tool") || lowerType.contains("function_call") {
             let name = stringValue(named: "name", in: effective)
@@ -272,7 +274,7 @@ private final class CodexStreamBuffer: @unchecked Sendable {
         lock.unlock()
         return lines
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            .map { CodexRunEvent(kind: .terminal, title: "stderr", detail: $0) }
+            .map { CodexRunEvent(kind: .terminal, title: "Codex log", detail: $0) }
     }
 
     func finish() -> (stdout: String, stderr: String, events: [CodexRunEvent]) {
@@ -293,7 +295,7 @@ private final class CodexStreamBuffer: @unchecked Sendable {
         }
         let trimmedStderrRemainder = stderrRemainderSnapshot.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedStderrRemainder.isEmpty {
-            events.append(CodexRunEvent(kind: .terminal, title: "stderr", detail: trimmedStderrRemainder))
+            events.append(CodexRunEvent(kind: .terminal, title: "Codex log", detail: trimmedStderrRemainder))
         }
         return (stdout, stderr, events)
     }

@@ -38,7 +38,7 @@ public final class SessionWorkspaceManager {
             try FileManager.default.createDirectory(at: paperRoot, withIntermediateDirectories: true)
             let originalPDFURL = paperRoot.appendingPathComponent("original.pdf")
             let pages = pagesByPaperID[paper.id] ?? []
-            let spans = sortedSpans(spansByPaperID[paper.id] ?? [])
+            let spans = SpanCompactor.compact(sortedSpans(spansByPaperID[paper.id] ?? []))
             try writeJSON(paper, to: paperRoot.appendingPathComponent("metadata.json"))
             try copyOriginalPDF(from: URL(fileURLWithPath: paper.filePath), to: originalPDFURL)
             try writeFullText(

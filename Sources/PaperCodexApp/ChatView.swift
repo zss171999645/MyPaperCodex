@@ -1,5 +1,6 @@
 import PaperCodexCore
 import SwiftUI
+import WebKit
 
 struct ChatView: View {
     @EnvironmentObject private var model: AppModel
@@ -139,8 +140,8 @@ private struct CodexStatusLine: View {
                 .lineLimit(1)
             Spacer()
             if shouldOfferCompatibleModel {
-                Button("Use gpt-5.4") {
-                    onModelOverride("gpt-5.4")
+                Button("Use gpt-5.4-mini") {
+                    onModelOverride("gpt-5.4-mini")
                 }
                 .buttonStyle(.borderless)
                 .controlSize(.small)
@@ -150,6 +151,9 @@ private struct CodexStatusLine: View {
                     onModelOverride("")
                 }
                 Divider()
+                Button("gpt-5.4-mini") {
+                    onModelOverride("gpt-5.4-mini")
+                }
                 Button("gpt-5.4") {
                     onModelOverride("gpt-5.4")
                 }
@@ -400,6 +404,10 @@ private struct MessageBubble: View {
         CodexFailureNotice.parse(message.content)
     }
 
+    private var renderedMarkdown: String {
+        failureNotice?.messageContent ?? parsed.displayMarkdown
+    }
+
     var body: some View {
         HStack {
             if isUser {
@@ -409,25 +417,8 @@ private struct MessageBubble: View {
                 Text(isUser ? "You" : "Codex")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text(failureNotice?.messageContent ?? parsed.displayText)
-                    .font(.system(size: 14))
-                    .textSelection(.enabled)
-                if !parsed.citations.isEmpty {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 6)], alignment: .leading, spacing: 6) {
-                        ForEach(parsed.citations) { citation in
-                            Button {
-                                onCitation(citation.id)
-                            } label: {
-                                Label("[\(citation.displayIndex)]", systemImage: "scope")
-                                    .labelStyle(.titleAndIcon)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .help(citation.id)
-                        }
-                    }
-                    .padding(.top, 2)
-                }
+                MarkdownMessageView(markdown: renderedMarkdown, onCitation: onCitation)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 if failureNotice != nil {
                     HStack(spacing: 8) {
                         Button {
@@ -458,5 +449,121 @@ private struct MessageBubble: View {
                 Spacer(minLength: 32)
             }
         }
+    }
+}
+
+private struct MarkdownMessageView: View {
+    var markdown: String
+    var onCitation: (String) -> Void
+    @State private var height: CGFloat = 24
+
+    var body: some View {
+        MarkdownWebView(
+            html: ChatMarkdownRenderer.renderDocument(markdown: markdown),
+            height: $height,
+            onCitation: onCitation
+        )
+        .frame(minHeight: 24)
+        .frame(height: max(24, height))
+    }
+}
+
+private struct MarkdownWebView: NSViewRepresentable {
+    var html: String
+    @Binding var height: CGFloat
+    var onCitation: (String) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(height: $height, onCitation: onCitation)
+    }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(context.coordinator, name: "height")
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = context.coordinator
+        webView.setValue(false, forKey: "drawsBackground")
+        webView.allowsMagnification = false
+        context.coordinator.currentHTML = html
+        webView.loadHTMLString(html, baseURL: URL(fileURLWithPath: "/"))
+        return webView
+    }
+
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        context.coordinator.onCitation = onCitation
+        if context.coordinator.currentHTML != html {
+            context.coordinator.currentHTML = html
+            webView.loadHTMLString(html, baseURL: URL(fileURLWithPath: "/"))
+        }
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        @Binding var height: CGFloat
+        var onCitation: (String) -> Void
+        var currentHTML: String?
+
+        init(height: Binding<CGFloat>, onCitation: @escaping (String) -> Void) {
+            _height = height
+            self.onCitation = onCitation
+        }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == "height" else {
+                return
+            }
+            let value: CGFloat?
+            if let number = message.body as? NSNumber {
+                value = CGFloat(truncating: number)
+            } else if let double = message.body as? Double {
+                value = CGFloat(double)
+            } else {
+                value = nil
+            }
+            if let value, value > 0, abs(value - height) > 1 {
+                DispatchQueue.main.async {
+                    self.height = value
+                }
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            webView.evaluateJavaScript("Math.ceil(document.documentElement.scrollHeight)") { [weak self] result, _ in
+                guard let self else {
+                    return
+                }
+                let value: CGFloat?
+                if let number = result as? NSNumber {
+                    value = CGFloat(truncating: number)
+                } else if let double = result as? Double {
+                    value = CGFloat(double)
+                } else {
+                    value = nil
+                }
+                if let value, value > 0 {
+                    DispatchQueue.main.async {
+                        self.height = value
+                    }
+                }
+            }
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
+        ) {
+            if let url = navigationAction.request.url,
+               let citationID = CitationParser.citationID(from: url) {
+                onCitation(citationID)
+                decisionHandler(.cancel)
+                return
+            }
+            decisionHandler(.allow)
+        }
+    }
+
+    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "height")
+        webView.navigationDelegate = nil
     }
 }

@@ -227,10 +227,20 @@ func runCitationChecks() throws {
     let parsed = CitationParser.parse("Answer [[cite:paper:paper-a:p5:b17]] and [[cite:paper:paper-a:p5:asel1]].")
     try check(parsed.citations.map(\.id) == ["paper:paper-a:p5:b17", "paper:paper-a:p5:asel1"], "citation parser should preserve citation IDs")
     try check(parsed.displayText == "Answer [1] and [2].", "citation parser should replace markers with display indices")
+    try check(parsed.displayMarkdown.contains("[1](papercodex-cite://open?id=paper%3Apaper-a%3Ap5%3Ab17)"), "citation parser should produce inline clickable markdown links")
+    try check(parsed.displayMarkdown.contains("[2](papercodex-cite://open?id=paper%3Apaper-a%3Ap5%3Aasel1)"), "citation parser should keep anchor citations clickable inline")
 
     let malformed = CitationParser.parse("Broken [[cite:not-a-paper]] marker.")
     try check(malformed.citations.isEmpty, "malformed markers should not become citations")
     try check(malformed.brokenMarkers == ["[[cite:not-a-paper]]"], "malformed markers should be reported")
+
+    let rendered = ChatMarkdownRenderer.renderDocument(
+        markdown: "## Result\n\nValue $x^2$.\n\n![figure](/tmp/figure.png)\n\n\(parsed.displayMarkdown)"
+    )
+    try check(rendered.contains("window.MathJax"), "markdown renderer should configure MathJax for formulas")
+    try check(rendered.contains("<h2>Result</h2>"), "markdown renderer should render markdown headings")
+    try check(rendered.contains(#"<img alt="figure" src="file:///tmp/figure.png">"#), "markdown renderer should render absolute local images")
+    try check(rendered.contains(#"href="papercodex-cite://open?id=paper%3Apaper-a%3Ap5%3Ab17""#), "markdown renderer should preserve clickable citation links")
 }
 
 func runAnchorResolverChecks() throws {
@@ -397,8 +407,18 @@ func runWorkspaceChecks() throws {
         paperID: "paper-a",
         page: 1,
         bbox: BoundingBox(x: 1, y: 2, width: 3, height: 4),
-        text: "Page text",
+        text: "Page text continues",
         charRange: TextRange(location: 0, length: 9),
+        sectionHint: nil,
+        confidence: 0.95
+    )
+    let wrappedSpan = Span(
+        id: Span.makeID(paperID: "paper-a", page: 1, blockIndex: 2),
+        paperID: "paper-a",
+        page: 1,
+        bbox: BoundingBox(x: 1, y: 20, width: 5, height: 4),
+        text: "onto the next visual line.",
+        charRange: TextRange(location: 20, length: 26),
         sectionHint: nil,
         confidence: 0.95
     )
@@ -420,7 +440,7 @@ func runWorkspaceChecks() throws {
         session: session,
         papers: [paper],
         pagesByPaperID: ["paper-a": [page]],
-        spansByPaperID: ["paper-a": [span]],
+        spansByPaperID: ["paper-a": [span, wrappedSpan]],
         anchorsByPaperID: ["paper-a": [anchor]]
     )
 
@@ -437,10 +457,11 @@ func runWorkspaceChecks() throws {
 
     let spans = try String(contentsOf: paperDir.appendingPathComponent("spans.jsonl"), encoding: .utf8)
     try check(spans.contains("paper:paper-a:p1:b1"), "spans jsonl should include span ID")
-    try check(spans.split(separator: "\n").count == 1, "spans jsonl should be one compact JSON object per span")
+    try check(spans.split(separator: "\n").count == 1, "workspace spans should compact wrapped visual lines into one citation block")
+    try check(spans.contains("Page text continues onto the next visual line."), "compacted workspace span should contain merged visual-line text")
     let fullText = try String(contentsOf: paperDir.appendingPathComponent("full_text.txt"), encoding: .utf8)
     try check(fullText.contains("original_pdf: \(paperDir.appendingPathComponent("original.pdf").path)"), "full text should point to the local workspace PDF copy")
-    try check(fullText.contains("[[cite:paper:paper-a:p1:b1]] Page text"), "full text should include all extracted spans with exact citation markers")
+    try check(fullText.contains("[[cite:paper:paper-a:p1:b1]] Page text continues onto the next visual line."), "full text should include compacted extracted spans with exact citation markers")
 }
 
 func runPDFChecks() throws {
@@ -473,6 +494,21 @@ func runPDFChecks() throws {
     try check(capturedSelection?.page == 1, "captured PDF selection should use one-based page numbers")
     try check(capturedSelection?.bboxList.count == 2, "captured multiline PDF selection should preserve per-line boxes")
     try check(capturedSelection?.text.contains("stable span") == true, "captured PDF selection should preserve selected text")
+
+    let abstractPDFURL = tempRoot.appendingPathComponent("abstract.pdf")
+    try writeFixturePDF(
+        to: abstractPDFURL,
+        lines: [
+            "Transformer-based large language models have considerably",
+            "advanced our understanding of language in the human",
+            "brain; however, their validity is questioned.",
+            "Autoregressive transformers are increasingly used in neuroscience."
+        ]
+    )
+    let abstractIndex = try PDFIndexExtractor().extract(paperID: "paper-b", pdfURL: abstractPDFURL)
+    try check(abstractIndex.spans.count == 2, "wrapped paragraph lines should be merged into larger citation spans")
+    try check(abstractIndex.spans[0].text.contains("considerably advanced"), "merged citation span should join wrapped lines")
+    try check(abstractIndex.spans[0].text.contains("validity is questioned."), "merged citation span should keep the paragraph ending")
 }
 
 func runCodexCLIChecks() throws {
@@ -508,10 +544,11 @@ func runCodexCLIChecks() throws {
     try check(reasoningEvent?.detail == "Reading paper context", "reasoning event should preserve summary text")
     let commandEvent = try CodexJSONEventParser.parseLine(#"{"type":"exec_command","cmd":"rg -n diffusion paper.md"}"#)
     try check(commandEvent?.kind == .terminal, "terminal command events should be classified for terminal display")
-    try check(commandEvent?.title == "Terminal", "terminal command events should use a stable display title")
-    try check(commandEvent?.detail.contains("rg -n diffusion") == true, "terminal command events should include the command")
+    try check(commandEvent?.title == "rg -n diffusion paper.md", "terminal command events should use the command as the display title")
+    try check(commandEvent?.detail == "Running command", "terminal command events should not duplicate the command in the detail text")
     let outputEvent = try CodexJSONEventParser.parseLine(#"{"type":"exec_command_output","stdout":"paper.md:12: diffusion\n"}"#)
     try check(outputEvent?.kind == .terminal, "terminal output events should be classified for terminal display")
+    try check(outputEvent?.title == "Command output", "terminal output events should be displayed as command output")
     try check(outputEvent?.detail.contains("paper.md:12") == true, "terminal output events should include stdout text")
     let toolEvent = try CodexJSONEventParser.parseLine(#"{"type":"tool_call","name":"web.search","arguments":{"query":"paper"}}"#)
     try check(toolEvent?.kind == .tool, "non-terminal tool calls should be classified as tool events")
