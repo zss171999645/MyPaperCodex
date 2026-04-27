@@ -11,7 +11,7 @@ struct ChatView: View {
             sessionBar
             Divider()
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 12) {
                     if model.messages.isEmpty && model.activeCodexRun == nil {
                         ContentUnavailableView(
                             "No Messages",
@@ -97,18 +97,16 @@ struct ChatView: View {
             }
 
             HStack(alignment: .bottom, spacing: 8) {
-                TextEditor(text: $draft)
-                    .font(.system(size: 14))
+                ComposerTextView(
+                    text: $draft,
+                    isEnabled: !model.isSending,
+                    onSubmit: sendDraft
+                )
                     .frame(minHeight: 72, maxHeight: 110)
-                    .scrollContentBackground(.hidden)
                     .background(Color(nsColor: .textBackgroundColor))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 Button {
-                    let message = draft
-                    draft = ""
-                    Task {
-                        await model.sendMessage(message)
-                    }
+                    sendDraft()
                 } label: {
                     Image(systemName: model.isSending ? "hourglass.circle.fill" : "arrow.up.circle.fill")
                         .font(.system(size: 26))
@@ -119,6 +117,17 @@ struct ChatView: View {
             }
         }
         .padding(14)
+    }
+
+    private func sendDraft() {
+        let message = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !model.isSending, !message.isEmpty else {
+            return
+        }
+        draft = ""
+        Task {
+            await model.sendMessage(message)
+        }
     }
 }
 
@@ -330,14 +339,17 @@ private struct CodexRunEventRow: View {
             Image(systemName: iconName)
                 .foregroundStyle(tint)
                 .frame(width: 14)
-            Text(event.title)
+            Text(event.displayTitle)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
             if event.kind == .terminal, !isExpanded {
-                Text(event.detail)
+                Text(event.previewDetail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
         }
     }
@@ -417,7 +429,7 @@ private struct MessageBubble: View {
                 Text(isUser ? "You" : "Codex")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                MarkdownMessageView(markdown: renderedMarkdown, onCitation: onCitation)
+                MarkdownMessageView(messageID: message.id, markdown: renderedMarkdown, onCitation: onCitation)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if failureNotice != nil {
                     HStack(spacing: 8) {
@@ -453,6 +465,7 @@ private struct MessageBubble: View {
 }
 
 private struct MarkdownMessageView: View {
+    var messageID: String
     var markdown: String
     var onCitation: (String) -> Void
     @State private var height: CGFloat = 24
@@ -463,8 +476,98 @@ private struct MarkdownMessageView: View {
             height: $height,
             onCitation: onCitation
         )
+        .id("\(messageID)-\(markdown.hashValue)")
         .frame(minHeight: 24)
         .frame(height: max(24, height))
+        .onChange(of: markdown) {
+            height = 24
+        }
+    }
+}
+
+private struct ComposerTextView: NSViewRepresentable {
+    @Binding var text: String
+    var isEnabled: Bool
+    var onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onSubmit: onSubmit)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.drawsBackground = false
+
+        let textView = SendingTextView()
+        textView.delegate = context.coordinator
+        textView.onSubmit = context.coordinator.submit
+        textView.isRichText = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.font = .systemFont(ofSize: 14)
+        textView.textContainerInset = NSSize(width: 8, height: 8)
+        textView.drawsBackground = false
+        textView.string = text
+        textView.minSize = NSSize(width: 0, height: 72)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.onSubmit = onSubmit
+        guard let textView = scrollView.documentView as? SendingTextView else {
+            return
+        }
+        textView.onSubmit = context.coordinator.submit
+        textView.isEditable = isEnabled
+        textView.textColor = isEnabled ? .labelColor : .secondaryLabelColor
+        if textView.string != text {
+            textView.string = text
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        @Binding var text: String
+        var onSubmit: () -> Void
+
+        init(text: Binding<String>, onSubmit: @escaping () -> Void) {
+            _text = text
+            self.onSubmit = onSubmit
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else {
+                return
+            }
+            text = textView.string
+        }
+
+        func submit() {
+            onSubmit()
+        }
+    }
+
+    final class SendingTextView: NSTextView {
+        var onSubmit: (() -> Void)?
+
+        override func keyDown(with event: NSEvent) {
+            let isReturn = event.keyCode == 36 || event.keyCode == 76
+            if isReturn, !event.modifierFlags.contains(.shift) {
+                onSubmit?()
+                return
+            }
+            super.keyDown(with: event)
+        }
     }
 }
 

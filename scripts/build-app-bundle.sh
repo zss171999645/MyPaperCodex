@@ -7,12 +7,13 @@ cd "$repo_root"
 swift build
 
 binary_path="$(swift build --show-bin-path)/PaperCodexApp"
-app_path="$repo_root/.build/PaperCodex.app"
+app_path="${PAPER_CODEX_APP_PATH:-$HOME/Applications/PaperCodex.app}"
 contents_path="$app_path/Contents"
 macos_path="$contents_path/MacOS"
 resources_path="$contents_path/Resources"
 
 rm -rf "$app_path"
+mkdir -p "$(dirname "$app_path")"
 mkdir -p "$macos_path" "$resources_path"
 cp "$binary_path" "$macos_path/PaperCodexApp"
 

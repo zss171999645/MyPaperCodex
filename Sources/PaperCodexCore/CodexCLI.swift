@@ -94,6 +94,26 @@ public struct CodexRunEvent: Codable, Equatable, Identifiable, Sendable {
         self.detail = detail
         self.createdAt = createdAt
     }
+
+    public var displayTitle: String {
+        firstLine(title, limit: 96)
+    }
+
+    public var previewDetail: String {
+        firstLine(detail, limit: 96)
+    }
+
+    private func firstLine(_ value: String, limit: Int) -> String {
+        let normalized = value
+            .split(whereSeparator: \.isNewline)
+            .first
+            .map(String.init) ?? ""
+        guard normalized.count > limit else {
+            return normalized
+        }
+        let end = normalized.index(normalized.startIndex, offsetBy: max(0, limit - 1))
+        return String(normalized[..<end]) + "…"
+    }
 }
 
 public enum CodexJSONEventParser {
