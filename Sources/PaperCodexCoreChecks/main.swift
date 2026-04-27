@@ -324,7 +324,7 @@ func runPromptChecks() throws {
         paperID: "paper-a",
         page: 5,
         bbox: BoundingBox(x: 1, y: 2, width: 3, height: 4),
-        text: "The selected mechanism controls latent trajectories.",
+        text: "This curated span should stay in workspace files instead of being inlined.",
         charRange: TextRange(location: 0, length: 52),
         sectionHint: "Method",
         confidence: 0.9
@@ -354,18 +354,26 @@ func runPromptChecks() throws {
 
     try check(prompt.contains("Compare this selection with Paper B."), "prompt should include the user message")
     try check(prompt.contains("anchor_id: paper:paper-a:p5:asel1"), "prompt should include selected anchor ID")
-    try check(prompt.contains("span_id: paper:paper-a:p5:b17"), "prompt should include relevant span ID")
     try check(prompt.contains("workspace: /tmp/session-a"), "prompt should include workspace guidance")
+    try check(prompt.contains("original_pdf: /tmp/session-a/papers/paper-a/original.pdf"), "prompt should point Codex at the workspace PDF copy")
+    try check(prompt.contains("full_text: /tmp/session-a/papers/paper-a/full_text.txt"), "prompt should point Codex at the full text workspace file")
+    try check(prompt.contains("spans_jsonl: /tmp/session-a/papers/paper-a/spans.jsonl"), "prompt should point Codex at the full span index")
     try check(prompt.contains("[[cite:paper:{paper_id}:p{page}:b{block_index}]]"), "prompt should include citation contract")
+    try check(!prompt.contains("[relevant span]"), "prompt should not inline a limited curated span list")
+    try check(!prompt.contains("This curated span should stay in workspace files"), "prompt should make Codex inspect workspace files instead of reading a narrowed prompt excerpt")
 }
 
 func runWorkspaceChecks() throws {
     let tempRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("paper-codex-workspace-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+    let sourcePDF = tempRoot.appendingPathComponent("source.pdf")
+    try writeFixturePDF(to: sourcePDF, lines: ["Page text"])
+    let workspaceRoot = tempRoot.appendingPathComponent("workspace", isDirectory: true)
     let now = Date(timeIntervalSince1970: 1_777_220_000)
     let paper = Paper(
         id: "paper-a",
-        filePath: "/tmp/paper.pdf",
+        filePath: sourcePDF.path,
         fileHash: "hash-a",
         title: "Paper A",
         authors: ["Alice"],
@@ -379,7 +387,7 @@ func runWorkspaceChecks() throws {
         title: "Mechanism Notes",
         paperIDs: ["paper-a"],
         codexSessionID: nil,
-        workspacePath: tempRoot.path,
+        workspacePath: workspaceRoot.path,
         createdAt: now,
         updatedAt: now
     )
@@ -416,17 +424,23 @@ func runWorkspaceChecks() throws {
         anchorsByPaperID: ["paper-a": [anchor]]
     )
 
-    let paperDir = tempRoot.appendingPathComponent("papers/paper-a", isDirectory: true)
-    try check(FileManager.default.fileExists(atPath: tempRoot.appendingPathComponent("session.json").path), "workspace should contain session.json")
-    try check(FileManager.default.fileExists(atPath: tempRoot.appendingPathComponent("prompt_contract.md").path), "workspace should contain prompt contract")
-    try check(FileManager.default.fileExists(atPath: tempRoot.appendingPathComponent("turns", isDirectory: true).path), "workspace should contain turns directory")
+    let paperDir = workspaceRoot.appendingPathComponent("papers/paper-a", isDirectory: true)
+    try check(FileManager.default.fileExists(atPath: workspaceRoot.appendingPathComponent("session.json").path), "workspace should contain session.json")
+    try check(FileManager.default.fileExists(atPath: workspaceRoot.appendingPathComponent("prompt_contract.md").path), "workspace should contain prompt contract")
+    try check(FileManager.default.fileExists(atPath: workspaceRoot.appendingPathComponent("turns", isDirectory: true).path), "workspace should contain turns directory")
     try check(FileManager.default.fileExists(atPath: paperDir.appendingPathComponent("metadata.json").path), "workspace should contain paper metadata")
+    try check(FileManager.default.fileExists(atPath: paperDir.appendingPathComponent("original.pdf").path), "workspace should contain a readable copy of the original PDF")
+    try check(FileManager.default.fileExists(atPath: paperDir.appendingPathComponent("full_text.txt").path), "workspace should contain full extracted text with citations")
     try check(FileManager.default.fileExists(atPath: paperDir.appendingPathComponent("pages.jsonl").path), "workspace should contain pages jsonl")
     try check(FileManager.default.fileExists(atPath: paperDir.appendingPathComponent("spans.jsonl").path), "workspace should contain spans jsonl")
     try check(FileManager.default.fileExists(atPath: paperDir.appendingPathComponent("anchors.jsonl").path), "workspace should contain anchors jsonl")
 
     let spans = try String(contentsOf: paperDir.appendingPathComponent("spans.jsonl"), encoding: .utf8)
     try check(spans.contains("paper:paper-a:p1:b1"), "spans jsonl should include span ID")
+    try check(spans.split(separator: "\n").count == 1, "spans jsonl should be one compact JSON object per span")
+    let fullText = try String(contentsOf: paperDir.appendingPathComponent("full_text.txt"), encoding: .utf8)
+    try check(fullText.contains("original_pdf: \(paperDir.appendingPathComponent("original.pdf").path)"), "full text should point to the local workspace PDF copy")
+    try check(fullText.contains("[[cite:paper:paper-a:p1:b1]] Page text"), "full text should include all extracted spans with exact citation markers")
 }
 
 func runPDFChecks() throws {

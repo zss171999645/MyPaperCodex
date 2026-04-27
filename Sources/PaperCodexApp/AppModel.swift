@@ -662,16 +662,6 @@ final class AppModel: ObservableObject {
         )
     }
 
-    private func relevantSpans(from spans: [Span], selectedAnchors: [PaperCodexCore.Anchor]) -> [Span] {
-        let matchedSpanIDs = selectedAnchors.flatMap(\.matchedSpanIDs)
-        let matchedSet = Set(matchedSpanIDs)
-        let matchedSpans = matchedSpanIDs.compactMap { id in
-            spans.first { $0.id == id }
-        }
-        let fallbackSpans = spans.filter { !matchedSet.contains($0.id) }
-        return Array((matchedSpans + fallbackSpans).prefix(8))
-    }
-
     private func anchorsReferenced(in content: String, context: SessionPaperContext) -> [PaperCodexCore.Anchor] {
         let allAnchors = context.anchorsByPaperID.values.flatMap { $0 }
         let anchorIDs = content
@@ -862,7 +852,7 @@ final class AppModel: ObservableObject {
                 workspacePath: session.workspacePath,
                 papers: context.papers,
                 selectedAnchors: selectedAnchors,
-                relevantSpans: relevantSpans(from: context.spans, selectedAnchors: selectedAnchors)
+                relevantSpans: []
             )
         )
         appendCodexRunEvent(

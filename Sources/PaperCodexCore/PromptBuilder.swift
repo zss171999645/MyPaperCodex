@@ -34,7 +34,9 @@ public struct PromptBuilder: Sendable {
 
         Rules:
         - Explain and reason normally.
-        - Ground claims in provided anchors, spans, or workspace files.
+        - The original PDFs and full extracted text/index files are available inside the workspace.
+        - Decide what to inspect from the workspace files before answering.
+        - Ground claims in the original PDF, full text, anchors, spans, or workspace files.
         - Cite source positions exactly as [[cite:paper:{paper_id}:p{page}:b{block_index}]] or [[cite:paper:{paper_id}:p{page}:a{anchor_suffix}]].
         - If evidence is insufficient, say what is missing.
         - Do not invent paper positions.
@@ -56,6 +58,30 @@ public struct PromptBuilder: Sendable {
             [papers]
             \(paperLines.joined(separator: "\n"))
             """)
+
+            let workspaceRoot = URL(fileURLWithPath: request.workspacePath, isDirectory: true)
+            let paperWorkspaceLines = request.papers.map { paper in
+                let paperRoot = workspaceRoot
+                    .appendingPathComponent("papers", isDirectory: true)
+                    .appendingPathComponent(paper.id, isDirectory: true)
+                return """
+                [paper workspace]
+                paper_id: \(paper.id)
+                paper_dir: \(paperRoot.path)
+                original_pdf: \(paperRoot.appendingPathComponent("original.pdf").path)
+                full_text: \(paperRoot.appendingPathComponent("full_text.txt").path)
+                pages_jsonl: \(paperRoot.appendingPathComponent("pages.jsonl").path)
+                spans_jsonl: \(paperRoot.appendingPathComponent("spans.jsonl").path)
+                anchors_jsonl: \(paperRoot.appendingPathComponent("anchors.jsonl").path)
+                metadata_json: \(paperRoot.appendingPathComponent("metadata.json").path)
+                """
+            }
+            sections.append("""
+            [workspace files]
+            Inspect these files directly. Do not treat the prompt as the full paper text.
+
+            \(paperWorkspaceLines.joined(separator: "\n\n"))
+            """)
         }
 
         if !request.selectedAnchors.isEmpty {
@@ -73,21 +99,6 @@ public struct PromptBuilder: Sendable {
                 """
             }
             sections.append(anchorBlocks.joined(separator: "\n\n"))
-        }
-
-        if !request.relevantSpans.isEmpty {
-            let spanBlocks = request.relevantSpans.map { span in
-                """
-                [relevant span]
-                span_id: \(span.id)
-                paper_id: \(span.paperID)
-                page: \(span.page)
-                section: \(span.sectionHint ?? "unknown")
-                text: "\(span.text)"
-                confidence: \(span.confidence)
-                """
-            }
-            sections.append(spanBlocks.joined(separator: "\n\n"))
         }
 
         return sections.joined(separator: "\n\n")
