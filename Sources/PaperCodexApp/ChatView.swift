@@ -20,9 +20,21 @@ struct ChatView: View {
                         .padding(.top, 80)
                     } else {
                         ForEach(model.messages) { message in
-                            MessageBubble(message: message) { citationID in
-                                model.jumpToCitation(citationID)
-                            }
+                            MessageBubble(
+                                message: message,
+                                isBusy: model.isSending,
+                                onCitation: { citationID in
+                                    model.jumpToCitation(citationID)
+                                },
+                                onRetryFailure: { messageID in
+                                    Task {
+                                        await model.retryCodexFailure(messageID: messageID)
+                                    }
+                                },
+                                onNewSession: {
+                                    model.startFreshSessionFromCurrentPaperSet()
+                                }
+                            )
                         }
                     }
                 }
@@ -168,7 +180,10 @@ private struct CodexStatusLine: View {
 
 private struct MessageBubble: View {
     var message: ChatMessage
+    var isBusy: Bool
     var onCitation: (String) -> Void
+    var onRetryFailure: (String) -> Void
+    var onNewSession: () -> Void
 
     private var isUser: Bool {
         message.role == .user
@@ -176,6 +191,10 @@ private struct MessageBubble: View {
 
     private var parsed: ParsedCitationText {
         CitationParser.parse(message.content)
+    }
+
+    private var failureNotice: CodexFailureNotice? {
+        CodexFailureNotice.parse(message.content)
     }
 
     var body: some View {
@@ -187,7 +206,7 @@ private struct MessageBubble: View {
                 Text(isUser ? "You" : "Codex")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text(parsed.displayText)
+                Text(failureNotice?.messageContent ?? parsed.displayText)
                     .font(.system(size: 14))
                     .textSelection(.enabled)
                 if !parsed.citations.isEmpty {
@@ -203,6 +222,28 @@ private struct MessageBubble: View {
                             .controlSize(.small)
                             .help(citation.id)
                         }
+                    }
+                    .padding(.top, 2)
+                }
+                if failureNotice != nil {
+                    HStack(spacing: 8) {
+                        Button {
+                            onRetryFailure(message.id)
+                        } label: {
+                            Label("Retry", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(isBusy)
+
+                        Button {
+                            onNewSession()
+                        } label: {
+                            Label("New Session", systemImage: "plus.bubble")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(isBusy)
                     }
                     .padding(.top, 2)
                 }

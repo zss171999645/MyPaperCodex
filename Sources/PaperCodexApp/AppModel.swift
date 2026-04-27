@@ -282,7 +282,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func createSession() throws {
+    func createSession(paperIDs requestedPaperIDs: [String]? = nil) throws {
         guard let paper = selectedPaper else {
             throw AppModelError.noSelectedPaper
         }
@@ -292,10 +292,11 @@ final class AppModel: ObservableObject {
         let now = Date()
         let sessionID = UUID().uuidString.lowercased()
         let workspacePath = supportRoot.appendingPathComponent("sessions/\(sessionID)", isDirectory: true).path
+        let sessionPaperIDs = uniqueIDs((requestedPaperIDs ?? [paper.id]) + [paper.id])
         let session = PaperSession(
             id: sessionID,
             title: "\(paper.title) Notes",
-            paperIDs: [paper.id],
+            paperIDs: sessionPaperIDs,
             codexSessionID: nil,
             workspacePath: workspacePath,
             createdAt: now,
@@ -317,7 +318,15 @@ final class AppModel: ObservableObject {
 
     func newSessionButtonTapped() {
         do {
-            try createSession()
+            try createSession(paperIDs: selectedSession?.paperIDs)
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func startFreshSessionFromCurrentPaperSet() {
+        do {
+            try createSession(paperIDs: selectedSession?.paperIDs)
         } catch {
             errorMessage = String(describing: error)
         }
@@ -474,10 +483,9 @@ final class AppModel: ObservableObject {
                 throw AppModelError.noSelectedSession
             }
 
-            var context = try loadSessionPaperContext(session: session, fallbackPaper: paper, repository: repository)
+            let context = try loadSessionPaperContext(session: session, fallbackPaper: paper, repository: repository)
             let focusedSpans = context.spansByPaperID[paper.id] ?? []
             var content = trimmed
-            var selectedAnchors: [PaperCodexCore.Anchor] = []
             if let selection = currentSelection {
                 let anchorID = PaperCodexCore.Anchor.makeID(paperID: paper.id, page: selection.page, suffix: UUID().uuidString.lowercased())
                 guard let anchor = AnchorResolver().resolve(
@@ -507,8 +515,6 @@ final class AppModel: ObservableObject {
                 after: "\(afterContext)"
                 """
                 try repository.upsertAnchor(anchor)
-                selectedAnchors = [anchor]
-                context.anchorsByPaperID[paper.id] = try repository.fetchAnchors(paperID: paper.id)
                 currentSelection = nil
             }
 
@@ -526,44 +532,56 @@ final class AppModel: ObservableObject {
             sessions = try repository.fetchSessions(paperID: paper.id)
             messages = try repository.fetchMessages(sessionID: session.id)
 
-            try workspaceManager.writeWorkspace(
+            let updatedSession = try await runCodexTurn(
+                content: content,
                 session: session,
-                papers: context.papers,
-                pagesByPaperID: context.pagesByPaperID,
-                spansByPaperID: context.spansByPaperID,
-                anchorsByPaperID: context.anchorsByPaperID
+                fallbackPaper: paper,
+                repository: repository
             )
-
-            let prompt = PromptBuilder().buildPrompt(
-                request: PromptRequest(
-                    userMessage: content,
-                    workspacePath: session.workspacePath,
-                    papers: context.papers,
-                    selectedAnchors: selectedAnchors,
-                    relevantSpans: relevantSpans(from: context.spans, selectedAnchors: selectedAnchors)
-                )
-            )
-            let codexReply = try await runCodex(prompt: prompt, session: session)
-            var updatedSession = session
-            if let threadID = codexReply.threadID {
-                updatedSession.codexSessionID = threadID
-            }
-            updatedSession.updatedAt = Date()
-            try repository.upsertSession(updatedSession)
-
-            let codexMessage = ChatMessage(
-                id: UUID().uuidString.lowercased(),
-                sessionID: session.id,
-                role: .codex,
-                content: codexReply.lastMessage.isEmpty ? codexReply.stdout : codexReply.lastMessage,
-                createdAt: Date()
-            )
-            try repository.appendMessage(codexMessage)
             selectedSession = updatedSession
             sessions = try repository.fetchSessions(paperID: paper.id)
             messages = try repository.fetchMessages(sessionID: session.id)
         } catch AppModelError.anchorMatchFailed {
             errorMessage = AppModelError.anchorMatchFailed.description
+        } catch {
+            await appendCodexFailureMessage(String(describing: error))
+        }
+    }
+
+    func retryCodexFailure(messageID: String) async {
+        guard !isSending else {
+            return
+        }
+        isSending = true
+        defer {
+            isSending = false
+        }
+
+        do {
+            guard let repository else {
+                throw AppModelError.repositoryUnavailable
+            }
+            guard let session = selectedSession else {
+                throw AppModelError.noSelectedSession
+            }
+            guard let failureIndex = messages.firstIndex(where: { $0.id == messageID }),
+                  CodexFailureNotice.parse(messages[failureIndex].content) != nil else {
+                throw AppModelError.noRecoverableCodexTurn
+            }
+            guard let userMessage = messages[..<failureIndex].last(where: { $0.role == .user }) else {
+                throw AppModelError.noRecoverableCodexTurn
+            }
+
+            let fallbackPaper = try fallbackPaper(for: session, repository: repository)
+            let updatedSession = try await runCodexTurn(
+                content: userMessage.content,
+                session: session,
+                fallbackPaper: fallbackPaper,
+                repository: repository
+            )
+            selectedSession = updatedSession
+            sessions = try repository.fetchSessions(paperID: fallbackPaper.id)
+            messages = try repository.fetchMessages(sessionID: session.id)
         } catch {
             await appendCodexFailureMessage(String(describing: error))
         }
@@ -611,6 +629,24 @@ final class AppModel: ObservableObject {
         }
         let fallbackSpans = spans.filter { !matchedSet.contains($0.id) }
         return Array((matchedSpans + fallbackSpans).prefix(8))
+    }
+
+    private func anchorsReferenced(in content: String, context: SessionPaperContext) -> [PaperCodexCore.Anchor] {
+        let allAnchors = context.anchorsByPaperID.values.flatMap { $0 }
+        let anchorIDs = content
+            .components(separatedBy: .newlines)
+            .compactMap { line -> String? in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard trimmed.hasPrefix("anchor_id:") else {
+                    return nil
+                }
+                return trimmed
+                    .dropFirst("anchor_id:".count)
+                    .trimmingCharacters(in: .whitespaces)
+            }
+        return anchorIDs.compactMap { anchorID in
+            allAnchors.first { $0.id == anchorID }
+        }
     }
 
     private func uniqueIDs(_ ids: [String]) -> [String] {
@@ -707,6 +743,61 @@ final class AppModel: ObservableObject {
         return (stdout: stdout, lastMessage: lastMessage, threadID: CodexCLI.parseThreadID(from: stdout))
     }
 
+    private func runCodexTurn(
+        content: String,
+        session: PaperSession,
+        fallbackPaper: Paper,
+        repository: PaperRepository
+    ) async throws -> PaperSession {
+        let context = try loadSessionPaperContext(session: session, fallbackPaper: fallbackPaper, repository: repository)
+        let selectedAnchors = anchorsReferenced(in: content, context: context)
+        try workspaceManager.writeWorkspace(
+            session: session,
+            papers: context.papers,
+            pagesByPaperID: context.pagesByPaperID,
+            spansByPaperID: context.spansByPaperID,
+            anchorsByPaperID: context.anchorsByPaperID
+        )
+
+        let prompt = PromptBuilder().buildPrompt(
+            request: PromptRequest(
+                userMessage: content,
+                workspacePath: session.workspacePath,
+                papers: context.papers,
+                selectedAnchors: selectedAnchors,
+                relevantSpans: relevantSpans(from: context.spans, selectedAnchors: selectedAnchors)
+            )
+        )
+        let codexReply = try await runCodex(prompt: prompt, session: session)
+        var updatedSession = session
+        if let threadID = codexReply.threadID {
+            updatedSession.codexSessionID = threadID
+        }
+        updatedSession.updatedAt = Date()
+        try repository.upsertSession(updatedSession)
+
+        let codexMessage = ChatMessage(
+            id: UUID().uuidString.lowercased(),
+            sessionID: session.id,
+            role: .codex,
+            content: codexReply.lastMessage.isEmpty ? codexReply.stdout : codexReply.lastMessage,
+            createdAt: Date()
+        )
+        try repository.appendMessage(codexMessage)
+        return updatedSession
+    }
+
+    private func fallbackPaper(for session: PaperSession, repository: PaperRepository) throws -> Paper {
+        if let selectedPaper {
+            return selectedPaper
+        }
+        guard let firstPaperID = session.paperIDs.first,
+              let paper = try repository.fetchPapers(ids: [firstPaperID]).first else {
+            throw AppModelError.noSelectedPaper
+        }
+        return paper
+    }
+
     private func appendCodexFailureMessage(_ failure: String) async {
         guard let repository, let session = selectedSession else {
             errorMessage = failure
@@ -717,7 +808,7 @@ final class AppModel: ObservableObject {
                 id: UUID().uuidString.lowercased(),
                 sessionID: session.id,
                 role: .codex,
-                content: "Codex failed: \(failure)",
+                content: CodexFailureNotice(detail: failure).messageContent,
                 createdAt: Date()
             )
             try repository.appendMessage(message)
@@ -735,6 +826,7 @@ enum AppModelError: Error, CustomStringConvertible {
     case emptyName
     case sourceNotFound(String)
     case anchorMatchFailed
+    case noRecoverableCodexTurn
 
     var description: String {
         switch self {
@@ -750,6 +842,8 @@ enum AppModelError: Error, CustomStringConvertible {
             "No source was found for citation \(id)."
         case .anchorMatchFailed:
             "The selected PDF text could not be matched to the paper index. Try selecting a slightly larger or smaller passage."
+        case .noRecoverableCodexTurn:
+            "No failed Codex turn could be retried."
         }
     }
 }

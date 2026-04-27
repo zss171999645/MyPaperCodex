@@ -490,6 +490,33 @@ func runCodexCLIChecks() throws {
     )
     try check(diagnostic.title == "Codex ready", "ready diagnostic should have a stable title")
     try check(diagnostic.detail.contains("0.114.0"), "ready diagnostic should include the CLI version")
+
+    let config = """
+    model = "gpt-5.5"
+
+    [profiles.fast]
+    model = "gpt-5.4"
+    """
+    try check(CodexCLI.parseConfiguredModel(from: config) == "gpt-5.5", "Codex config parser should read the top-level model")
+    let modelIssue = CodexCLI.configuredModelIssue(configText: config, cliVersion: "0.114.0")
+    try check(modelIssue?.contains("gpt-5.5") == true, "model compatibility issue should name the configured model")
+    let blockedDiagnostic = CodexCLI.diagnostic(
+        executablePath: "/opt/homebrew/bin/codex",
+        version: "0.114.0",
+        capabilities: capabilities,
+        configText: config
+    )
+    try check(blockedDiagnostic.severity == .blocked, "diagnostic should be blocked when the configured model needs a newer CLI")
+    try check(blockedDiagnostic.title == "Codex model incompatible", "model compatibility failures should have a specific diagnostic title")
+    try check(CodexCLI.configuredModelIssue(configText: #"model = "gpt-5.4""#, cliVersion: "0.114.0") == nil, "other configured models should not be blocked by the gpt-5.5 compatibility rule")
+}
+
+func runCodexRecoveryChecks() throws {
+    let notice = CodexFailureNotice(detail: "Codex process failed with status 1: session not found")
+    try check(notice.messageContent.hasPrefix("Codex failed:"), "failure notice should use a stable prefix")
+    try check(notice.messageContent.contains("session not found"), "failure notice should preserve Codex stderr detail")
+    try check(CodexFailureNotice.parse(notice.messageContent) == notice, "failure notice should parse from stored chat content")
+    try check(CodexFailureNotice.parse("A normal answer") == nil, "normal answers should not be treated as recovery notices")
 }
 
 func runPathChecks() throws {
@@ -799,6 +826,10 @@ do {
     if selectedChecks.isEmpty || selectedChecks.contains("codex") {
         try runCodexCLIChecks()
         print("codex: pass")
+    }
+    if selectedChecks.isEmpty || selectedChecks.contains("codex-recovery") {
+        try runCodexRecoveryChecks()
+        print("codex-recovery: pass")
     }
     if selectedChecks.isEmpty || selectedChecks.contains("paths") {
         try runPathChecks()

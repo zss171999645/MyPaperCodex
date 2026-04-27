@@ -67,10 +67,10 @@ public struct CodexDiagnostic: Equatable, Sendable {
         )
     }
 
-    public static func blocked(_ detail: String) -> CodexDiagnostic {
+    public static func blocked(_ detail: String, title: String = "Codex unavailable") -> CodexDiagnostic {
         CodexDiagnostic(
             severity: .blocked,
-            title: "Codex unavailable",
+            title: title,
             detail: detail,
             executablePath: nil,
             version: nil,
@@ -127,29 +127,108 @@ public struct CodexCLI: Sendable {
         try Self.parseCapabilities(fromExecHelp: run(arguments: ["exec", "--help"]))
     }
 
-    public static func diagnose(environment: [String: String] = ProcessInfo.processInfo.environment) -> CodexDiagnostic {
+    public static func diagnose(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        configText: String? = nil
+    ) -> CodexDiagnostic {
         do {
             let executable = try findCodexExecutable(environment: environment)
             let cli = CodexCLI(executablePath: executable)
             let version = try cli.version()
             let capabilities = try cli.capabilities()
-            var missing: [String] = []
-            if !capabilities.supportsJSONOutput {
-                missing.append("--json")
-            }
-            if !capabilities.supportsOutputLastMessage {
-                missing.append("--output-last-message")
-            }
-            if !capabilities.supportsResume {
-                missing.append("exec resume")
-            }
-            if missing.isEmpty {
-                return .ready(executablePath: executable, version: version, capabilities: capabilities)
-            }
-            return .warning(executablePath: executable, version: version, capabilities: capabilities, missing: missing)
+            return diagnostic(
+                executablePath: executable,
+                version: version,
+                capabilities: capabilities,
+                configText: configText ?? readDefaultConfig(environment: environment)
+            )
         } catch {
             return .blocked(String(describing: error))
         }
+    }
+
+    public static func diagnostic(
+        executablePath: String,
+        version: String?,
+        capabilities: CodexCapabilities,
+        configText: String?
+    ) -> CodexDiagnostic {
+        if let issue = configuredModelIssue(configText: configText, cliVersion: version) {
+            return .blocked(issue, title: "Codex model incompatible")
+        }
+
+        var missing: [String] = []
+        if !capabilities.supportsJSONOutput {
+            missing.append("--json")
+        }
+        if !capabilities.supportsOutputLastMessage {
+            missing.append("--output-last-message")
+        }
+        if !capabilities.supportsResume {
+            missing.append("exec resume")
+        }
+        if missing.isEmpty {
+            return .ready(executablePath: executablePath, version: version, capabilities: capabilities)
+        }
+        return .warning(executablePath: executablePath, version: version, capabilities: capabilities, missing: missing)
+    }
+
+    public static func parseConfiguredModel(from configText: String) -> String? {
+        for rawLine in configText.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("[") {
+                return nil
+            }
+            guard !line.isEmpty, !line.hasPrefix("#") else {
+                continue
+            }
+            let parts = line.split(separator: "=", maxSplits: 1).map {
+                $0.trimmingCharacters(in: .whitespaces)
+            }
+            guard parts.count == 2, parts[0] == "model" else {
+                continue
+            }
+            return parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        }
+        return nil
+    }
+
+    public static func configuredModelIssue(configText: String?, cliVersion: String?) -> String? {
+        guard let configText,
+              parseConfiguredModel(from: configText) == "gpt-5.5" else {
+            return nil
+        }
+        guard let cliVersion else {
+            return "Default Codex model gpt-5.5 is configured, but the CLI version could not be read. Run `codex --version`, upgrade Codex, or choose a supported model in ~/.codex/config.toml."
+        }
+        guard compareVersion(cliVersion, "0.114.0") != .orderedDescending else {
+            return nil
+        }
+        return "Default Codex model gpt-5.5 requires a newer Codex CLI than \(cliVersion). Upgrade Codex or choose a supported model in ~/.codex/config.toml."
+    }
+
+    private static func readDefaultConfig(environment: [String: String]) -> String? {
+        let home = environment["HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.path
+        let configURL = URL(fileURLWithPath: home)
+            .appendingPathComponent(".codex/config.toml")
+        return try? String(contentsOf: configURL, encoding: .utf8)
+    }
+
+    private static func compareVersion(_ left: String, _ right: String) -> ComparisonResult {
+        let leftNumbers = left.split(separator: ".").map { Int($0) ?? 0 }
+        let rightNumbers = right.split(separator: ".").map { Int($0) ?? 0 }
+        let count = max(leftNumbers.count, rightNumbers.count)
+        for index in 0..<count {
+            let leftValue = index < leftNumbers.count ? leftNumbers[index] : 0
+            let rightValue = index < rightNumbers.count ? rightNumbers[index] : 0
+            if leftValue < rightValue {
+                return .orderedAscending
+            }
+            if leftValue > rightValue {
+                return .orderedDescending
+            }
+        }
+        return .orderedSame
     }
 
     public func run(arguments: [String]) throws -> String {
