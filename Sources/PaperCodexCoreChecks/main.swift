@@ -819,6 +819,91 @@ func runWatchedFolderChecks() throws {
     try check(removedFolders.isEmpty, "watched folder should be removable")
 }
 
+func runArxivFeedChecks() throws {
+    let sample = """
+    {
+      "date": "2026-04-22",
+      "count": 1,
+      "papers": [
+        {
+          "id": "2604.18586",
+          "arxiv_id": "2604.18586",
+          "arxiv_id_versioned": "2604.18586v1",
+          "title": {"en": "Who Shapes Brazil's Vaccine Debate?", "zh": "谁塑造了巴西的疫苗辩论？"},
+          "abstract": {"en": "A longitudinal vaccine discourse study.", "zh": "一项疫苗话语纵向研究。"},
+          "summary": {"en": "Semi-supervised stance detection over YouTube comments.", "zh": "对 YouTube 评论进行半监督立场检测。"},
+          "authors": ["Geovana S. de Oliveira", "Ana P. C. Silva"],
+          "categories": ["cs.CY", "cs.AI"],
+          "primary_category": "cs.CY",
+          "list_categories": ["cs.AI", "cs.CL"],
+          "tags": ["text-cls", "SSL"],
+          "comment": "Paper accepted at WebSci'26",
+          "published": "2026-03-04T19:21:01Z",
+          "updated": "2026-03-04T19:21:01Z",
+          "list_date": "2026-04-22",
+          "thumbnail_version": 3,
+          "embedding": [0.1, 0.2, 0.3],
+          "links": {
+            "abs": "https://arxiv.org/abs/2604.18586",
+            "pdf": "https://arxiv.org/pdf/2604.18586.pdf"
+          },
+          "assets": {
+            "small": {"path": "images/2026-04-22/2604.18586_small.png", "url": "/api/v1/assets/2026-04-22/2604.18586_small.png"},
+            "large": {"path": "images/2026-04-22/2604.18586.png", "url": "/api/v1/assets/2026-04-22/2604.18586.png"}
+          }
+        }
+      ]
+    }
+    """
+    let decoder = JSONDecoder()
+    let response = try decoder.decode(ArxivFeedResponse.self, from: Data(sample.utf8))
+    try check(response.date == "2026-04-22", "arXiv feed response should decode the date")
+    try check(response.papers.count == 1, "arXiv feed response should decode papers")
+    let paper = response.papers[0]
+    try check(paper.id == "2604.18586", "arXiv paper should decode stable arxiv id")
+    try check(paper.displayTitle(language: "zh") == "谁塑造了巴西的疫苗辩论？", "arXiv paper should prefer Chinese title in zh mode")
+    try check(paper.displaySummary(language: "en") == "Semi-supervised stance detection over YouTube comments.", "arXiv paper should prefer English summary in en mode")
+    try check(paper.assets.small?.path == "images/2026-04-22/2604.18586_small.png", "arXiv paper should decode small asset path")
+
+    let tempRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("paper-codex-arxiv-cache-\(UUID().uuidString)", isDirectory: true)
+    let cache = ArxivFeedCache(root: tempRoot)
+    try cache.saveFeed(response)
+    let cached = try cache.loadFeed(date: "2026-04-22")
+    try check(cached == response, "arXiv feed cache should round-trip feed JSON")
+    let assetURL = try cache.saveAsset(Data("small".utf8), path: "images/2026-04-22/2604.18586_small.png")
+    try check(FileManager.default.fileExists(atPath: assetURL.path), "arXiv feed cache should store asset bytes")
+
+    let metadata = PaperImportMetadata(
+        title: paper.displayTitle(language: "en"),
+        authors: paper.authors,
+        year: paper.publishedYear,
+        sourceURL: paper.links.abs
+    )
+    try check(metadata.year == 2026, "paper import metadata should derive published year")
+
+    let importRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("paper-codex-arxiv-import-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: importRoot, withIntermediateDirectories: true)
+    let importPDFURL = importRoot.appendingPathComponent("2604.18586.pdf")
+    try writeFixturePDF(
+        to: importPDFURL,
+        lines: [
+            "A real PDF import should keep arXiv feed metadata.",
+            "The downloaded paper then becomes readable in Paper Codex."
+        ]
+    )
+    let repository = try PaperRepository(databasePath: importRoot.appendingPathComponent("store.sqlite").path)
+    try repository.migrate()
+    let imported = try PaperLibraryImporter(repository: repository, supportRoot: importRoot)
+        .importPDF(from: importPDFURL, metadata: metadata)
+    try check(imported.didImport, "arXiv PDF import should create a new library paper")
+    try check(imported.paper.title == "Who Shapes Brazil's Vaccine Debate?", "arXiv import should preserve feed title")
+    try check(imported.paper.authors == paper.authors, "arXiv import should preserve feed authors")
+    try check(imported.paper.year == 2026, "arXiv import should preserve feed year")
+    try check(imported.paper.sourceURL == "https://arxiv.org/abs/2604.18586", "arXiv import should preserve source URL")
+}
+
 func seedFixtureLibrary(at root: URL) throws {
     let fileManager = FileManager.default
     let storeURL = root.appendingPathComponent("store.sqlite")
@@ -1065,6 +1150,10 @@ do {
     if selectedChecks.isEmpty || selectedChecks.contains("watch") {
         try runWatchedFolderChecks()
         print("watch: pass")
+    }
+    if selectedChecks.isEmpty || selectedChecks.contains("arxiv-feed") {
+        try runArxivFeedChecks()
+        print("arxiv-feed: pass")
     }
 } catch {
     fputs("check failed: \(error)\n", stderr)

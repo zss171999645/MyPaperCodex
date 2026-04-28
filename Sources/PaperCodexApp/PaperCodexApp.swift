@@ -22,6 +22,8 @@ struct RootView: View {
             switch model.route {
             case .library:
                 LibraryView()
+            case .discover:
+                DiscoverView()
             case .reader:
                 ReaderView()
             }

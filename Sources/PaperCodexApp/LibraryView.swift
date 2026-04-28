@@ -91,6 +91,23 @@ struct LibraryView: View {
                 .font(.system(size: 24, weight: .semibold))
 
             VStack(alignment: .leading, spacing: 8) {
+                filterButton(
+                    title: "Library",
+                    systemImage: "books.vertical.fill",
+                    isSelected: true
+                ) {}
+                filterButton(
+                    title: "Discover",
+                    systemImage: "sparkle.magnifyingglass",
+                    isSelected: false
+                ) {
+                    model.showDiscover()
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
                 sidebarHeader("Categories", systemImage: "folder") {
                     newCategoryParentID = selectedCategoryID ?? ""
                     isCreatingCategory = true

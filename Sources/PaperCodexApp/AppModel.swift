@@ -4,6 +4,7 @@ import SwiftUI
 
 enum AppRoute {
     case library
+    case discover
     case reader
 }
 
@@ -42,6 +43,8 @@ private struct SessionPaperContext {
 
 private let codexModelOverrideDefaultsKey = "PaperCodexCodexModelOverride"
 private let codexReasoningEffortDefaultsKey = "PaperCodexCodexReasoningEffort"
+private let arxivFeedBaseURLDefaultsKey = "PaperCodexArxivFeedBaseURL"
+private let arxivFeedTokenDefaultsKey = "PaperCodexArxivFeedToken"
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -69,9 +72,20 @@ final class AppModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var isSending = false
     @Published var isScanningWatchedFolders = false
+    @Published var arxivFeedBaseURL: String = UserDefaults.standard.string(forKey: arxivFeedBaseURLDefaultsKey) ?? "http://nas.pucao.cn:20003"
+    @Published var arxivFeedToken: String = UserDefaults.standard.string(forKey: arxivFeedTokenDefaultsKey) ?? ""
+    @Published var arxivDates: [String] = []
+    @Published var selectedArxivDate: String?
+    @Published var arxivFeed: ArxivFeedResponse?
+    @Published var selectedArxivPaper: ArxivFeedPaper?
+    @Published var arxivAssetURLs: [String: URL] = [:]
+    @Published var isLoadingArxivFeed = false
+    @Published var isPreloadingArxivAssets = false
+    @Published var isAddingArxivPaper = false
 
     private var repository: PaperRepository?
     private let supportRoot: URL
+    private let arxivCache: ArxivFeedCache
     private let workspaceManager = SessionWorkspaceManager()
     private var watchedFolderAutoScanTask: Task<Void, Never>?
     private var activeCodexRunHandle: CodexRunHandle?
@@ -80,12 +94,14 @@ final class AppModel: ObservableObject {
     init() {
         let root = PaperCodexPaths.supportRoot()
         supportRoot = root
+        arxivCache = ArxivFeedCache(root: root.appendingPathComponent("arxiv-cache", isDirectory: true))
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let store = try PaperRepository(databasePath: root.appendingPathComponent("store.sqlite").path)
             try store.migrate()
             repository = store
             try reloadLibrary()
+            loadCachedArxivState()
             Task {
                 scanWatchedFolders()
                 await refreshCodexDiagnostic()
@@ -203,6 +219,141 @@ final class AppModel: ObservableObject {
 
     func selectLibraryPaper(_ paper: Paper) {
         selectedLibraryPaper = paper
+    }
+
+    func showDiscover() {
+        route = .discover
+        selectedPaper = nil
+        selectedSession = nil
+        sessions = []
+        messages = []
+        currentSelection = nil
+        pdfJumpTarget = nil
+    }
+
+    func setArxivFeedConnection(baseURL: String, token: String) {
+        let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        arxivFeedBaseURL = trimmedBaseURL
+        arxivFeedToken = trimmedToken
+        UserDefaults.standard.set(trimmedBaseURL, forKey: arxivFeedBaseURLDefaultsKey)
+        UserDefaults.standard.set(trimmedToken, forKey: arxivFeedTokenDefaultsKey)
+    }
+
+    func refreshArxivDatesAndFeed() async {
+        do {
+            isLoadingArxivFeed = true
+            defer {
+                isLoadingArxivFeed = false
+            }
+            let client = try makeArxivFeedClient()
+            let dates = try await client.fetchDates()
+            try arxivCache.saveDates(dates)
+            arxivDates = dates.dates
+            let date = selectedArxivDate ?? dates.latest ?? dates.dates.last
+            selectedArxivDate = date
+            if let date {
+                try await loadArxivFeed(date: date, client: client)
+            }
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func loadArxivFeed(date: String) async {
+        do {
+            isLoadingArxivFeed = true
+            defer {
+                isLoadingArxivFeed = false
+            }
+            selectedArxivDate = date
+            let client = try makeArxivFeedClient()
+            try await loadArxivFeed(date: date, client: client)
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func preloadArxivAssets(includeLarge: Bool) async {
+        do {
+            guard let arxivFeed else {
+                return
+            }
+            isPreloadingArxivAssets = true
+            defer {
+                isPreloadingArxivAssets = false
+            }
+            let client = try makeArxivFeedClient()
+            var assets: [ArxivFeedAsset] = arxivFeed.papers.compactMap(\.assets.small)
+            if includeLarge {
+                assets += arxivFeed.papers.compactMap(\.assets.large)
+            }
+            for asset in assets {
+                if try arxivCache.cachedAssetURL(path: asset.path) != nil {
+                    continue
+                }
+                let data = try await client.fetchAsset(asset)
+                arxivAssetURLs[asset.path] = try arxivCache.saveAsset(data, path: asset.path)
+            }
+            reloadCachedArxivAssets()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func cachedArxivAssetURL(for asset: ArxivFeedAsset?) -> URL? {
+        guard let asset else {
+            return nil
+        }
+        if let url = arxivAssetURLs[asset.path] {
+            return url
+        }
+        return try? arxivCache.cachedAssetURL(path: asset.path)
+    }
+
+    func libraryPaper(for arxivPaper: ArxivFeedPaper) -> Paper? {
+        let absURL = arxivPaper.links.abs
+        return papers.first { paper in
+            paper.sourceURL == absURL || paper.sourceURL?.contains(arxivPaper.id) == true
+        }
+    }
+
+    func addArxivPaperToLibrary(_ arxivPaper: ArxivFeedPaper) async {
+        if let existing = libraryPaper(for: arxivPaper) {
+            openPaper(existing)
+            return
+        }
+        do {
+            guard let repository else {
+                throw AppModelError.repositoryUnavailable
+            }
+            isAddingArxivPaper = true
+            defer {
+                isAddingArxivPaper = false
+            }
+            let client = try makeArxivFeedClient()
+            let pdfData = try await client.fetchPDF(for: arxivPaper)
+            guard pdfData.starts(with: Data("%PDF-".utf8)) else {
+                throw AppModelError.downloadedFileIsNotPDF(arxivPaper.id)
+            }
+            let downloadDir = supportRoot.appendingPathComponent("arxiv-downloads", isDirectory: true)
+            try FileManager.default.createDirectory(at: downloadDir, withIntermediateDirectories: true)
+            let pdfURL = downloadDir.appendingPathComponent("\(arxivPaper.id).pdf")
+            try pdfData.write(to: pdfURL, options: [.atomic])
+            let metadata = PaperImportMetadata(
+                title: arxivPaper.displayTitle(language: "en"),
+                authors: arxivPaper.authors,
+                year: arxivPaper.publishedYear,
+                sourceURL: arxivPaper.links.abs
+            )
+            let result = try PaperLibraryImporter(repository: repository, supportRoot: supportRoot)
+                .importPDF(from: pdfURL, metadata: metadata)
+            try? FileManager.default.removeItem(at: pdfURL)
+            try reloadLibrary()
+            openPaper(result.paper)
+        } catch {
+            errorMessage = String(describing: error)
+        }
     }
 
     func createCategory(name: String, parentID: String?) {
@@ -736,6 +887,58 @@ final class AppModel: ObservableObject {
         return result
     }
 
+    private func loadArxivFeed(date: String, client: ArxivFeedClient) async throws {
+        let feed = try await client.fetchFeed(date: date)
+        try arxivCache.saveFeed(feed)
+        arxivFeed = feed
+        if let selected = selectedArxivPaper,
+           feed.papers.contains(where: { $0.id == selected.id }) {
+            selectedArxivPaper = selected
+        } else {
+            selectedArxivPaper = feed.papers.first
+        }
+        reloadCachedArxivAssets()
+        Task {
+            await preloadArxivAssets(includeLarge: false)
+        }
+    }
+
+    private func loadCachedArxivState() {
+        if let cachedDates = try? arxivCache.loadDates() {
+            arxivDates = cachedDates.dates
+            selectedArxivDate = cachedDates.latest ?? cachedDates.dates.last
+        }
+        if let date = selectedArxivDate,
+           let cachedFeed = try? arxivCache.loadFeed(date: date) {
+            arxivFeed = cachedFeed
+            selectedArxivPaper = cachedFeed.papers.first
+            reloadCachedArxivAssets()
+        }
+    }
+
+    private func reloadCachedArxivAssets() {
+        guard let arxivFeed else {
+            return
+        }
+        var urls = arxivAssetURLs
+        for paper in arxivFeed.papers {
+            for asset in [paper.assets.small, paper.assets.large].compactMap({ $0 }) {
+                if let url = try? arxivCache.cachedAssetURL(path: asset.path) {
+                    urls[asset.path] = url
+                }
+            }
+        }
+        arxivAssetURLs = urls
+    }
+
+    private func makeArxivFeedClient() throws -> ArxivFeedClient {
+        let trimmedBaseURL = arxivFeedBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmedBaseURL), url.scheme != nil else {
+            throw ArxivFeedClientError.invalidURL(trimmedBaseURL)
+        }
+        return try ArxivFeedClient(baseURL: url, token: arxivFeedToken)
+    }
+
     private func makeManualID(prefix: String, name: String) -> String {
         let slug = makeSlug(from: name)
         return "\(prefix)-\(slug.isEmpty ? "item" : slug)-\(UUID().uuidString.prefix(8).lowercased())"
@@ -1042,6 +1245,7 @@ enum AppModelError: Error, CustomStringConvertible {
     case sourceNotFound(String)
     case anchorMatchFailed
     case noRecoverableCodexTurn
+    case downloadedFileIsNotPDF(String)
 
     var description: String {
         switch self {
@@ -1059,6 +1263,8 @@ enum AppModelError: Error, CustomStringConvertible {
             "The selected PDF text could not be matched to the paper index. Try selecting a slightly larger or smaller passage."
         case .noRecoverableCodexTurn:
             "No failed Codex turn could be retried."
+        case let .downloadedFileIsNotPDF(arxivID):
+            "Downloaded content for \(arxivID) was not a PDF."
         }
     }
 }
