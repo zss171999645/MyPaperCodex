@@ -31,7 +31,11 @@ public final class PaperLibraryImporter {
         let data = try Data(contentsOf: standardizedSource)
         let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         if let existing = try repository.fetchPaper(fileHash: hash) {
-            return PaperImportResult(paper: existing, didImport: false)
+            let enriched = enrichedDuplicatePaper(existing, metadata: metadata, now: now)
+            if enriched != existing {
+                try repository.upsertPaper(enriched)
+            }
+            return PaperImportResult(paper: enriched, didImport: false)
         }
 
         let fallbackTitle = standardizedSource.deletingPathExtension().lastPathComponent
@@ -86,6 +90,30 @@ public final class PaperLibraryImporter {
                 partial.append(character)
             }
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+
+    private func enrichedDuplicatePaper(_ paper: Paper, metadata: PaperImportMetadata?, now: Date) -> Paper {
+        guard let metadata else {
+            return paper
+        }
+
+        var enriched = paper
+        if let title = metadata.title?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty {
+            enriched.title = title
+        }
+        if !metadata.authors.isEmpty {
+            enriched.authors = metadata.authors
+        }
+        if let year = metadata.year {
+            enriched.year = year
+        }
+        if let sourceURL = metadata.sourceURL?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty {
+            enriched.sourceURL = sourceURL
+        }
+        if enriched != paper {
+            enriched.updatedAt = now
+        }
+        return enriched
     }
 }
 

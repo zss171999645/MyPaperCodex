@@ -902,6 +902,23 @@ func runArxivFeedChecks() throws {
     try check(imported.paper.authors == paper.authors, "arXiv import should preserve feed authors")
     try check(imported.paper.year == 2026, "arXiv import should preserve feed year")
     try check(imported.paper.sourceURL == "https://arxiv.org/abs/2604.18586", "arXiv import should preserve source URL")
+
+    let duplicateRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("paper-codex-arxiv-duplicate-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: duplicateRoot, withIntermediateDirectories: true)
+    let duplicatePDFURL = duplicateRoot.appendingPathComponent("2604.18586.pdf")
+    try FileManager.default.copyItem(at: importPDFURL, to: duplicatePDFURL)
+    let duplicateRepository = try PaperRepository(databasePath: duplicateRoot.appendingPathComponent("store.sqlite").path)
+    try duplicateRepository.migrate()
+    let duplicateImporter = PaperLibraryImporter(repository: duplicateRepository, supportRoot: duplicateRoot)
+    let manualImport = try duplicateImporter.importPDF(from: duplicatePDFURL)
+    try check(manualImport.paper.sourceURL == nil, "manual import fixture should start without source URL")
+    let enrichedDuplicate = try duplicateImporter.importPDF(from: duplicatePDFURL, metadata: metadata)
+    try check(!enrichedDuplicate.didImport, "duplicate arXiv import should reuse the existing PDF")
+    try check(enrichedDuplicate.paper.title == "Who Shapes Brazil's Vaccine Debate?", "duplicate arXiv import should enrich title")
+    try check(enrichedDuplicate.paper.authors == paper.authors, "duplicate arXiv import should enrich authors")
+    try check(enrichedDuplicate.paper.year == 2026, "duplicate arXiv import should enrich year")
+    try check(enrichedDuplicate.paper.sourceURL == "https://arxiv.org/abs/2604.18586", "duplicate arXiv import should enrich source URL")
 }
 
 func seedFixtureLibrary(at root: URL) throws {
