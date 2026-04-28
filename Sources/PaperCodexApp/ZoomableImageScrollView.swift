@@ -3,9 +3,10 @@ import SwiftUI
 
 struct ZoomableImageScrollView: NSViewRepresentable {
     var imageURL: URL
+    var onBackdropClick: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(onBackdropClick: onBackdropClick)
     }
 
     func makeNSView(context: Context) -> ZoomableImageCanvasView {
@@ -15,6 +16,10 @@ struct ZoomableImageScrollView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: ZoomableImageCanvasView, context: Context) {
+        context.coordinator.onBackdropClick = onBackdropClick
+        view.onBackdropClick = {
+            context.coordinator.onBackdropClick()
+        }
         guard context.coordinator.imageURL != imageURL else {
             return
         }
@@ -27,10 +32,17 @@ struct ZoomableImageScrollView: NSViewRepresentable {
 
     final class Coordinator {
         var imageURL: URL?
+        var onBackdropClick: () -> Void
+
+        init(onBackdropClick: @escaping () -> Void) {
+            self.onBackdropClick = onBackdropClick
+        }
     }
 }
 
 final class ZoomableImageCanvasView: NSView {
+    var onBackdropClick: (() -> Void)?
+
     private var image: NSImage?
     private var scale: CGFloat = 1
     private var offset: CGPoint = .zero
@@ -74,7 +86,16 @@ final class ZoomableImageCanvasView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        lastDragPoint = convert(event.locationInWindow, from: nil)
+        let point = convert(event.locationInWindow, from: nil)
+        if isBackdropEdge(point) {
+            onBackdropClick?()
+            return
+        }
+        if let image, !imageRect(for: image).contains(point) {
+            onBackdropClick?()
+            return
+        }
+        lastDragPoint = point
         if event.clickCount == 2 {
             fitImageToView()
         }
@@ -158,6 +179,14 @@ final class ZoomableImageCanvasView: NSView {
             width: scaledSize.width,
             height: scaledSize.height
         )
+    }
+
+    private func isBackdropEdge(_ point: CGPoint) -> Bool {
+        let closeInset: CGFloat = 34
+        return point.x < closeInset
+            || point.x > bounds.width - closeInset
+            || point.y < closeInset
+            || point.y > bounds.height - closeInset
     }
 
     private func clampOffset() {
