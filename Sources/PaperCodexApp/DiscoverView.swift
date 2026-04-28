@@ -6,6 +6,7 @@ struct DiscoverView: View {
     @EnvironmentObject private var model: AppModel
     @State private var searchText = ""
     @State private var selectedCategory: String?
+    @State private var paperPendingSave: ArxivFeedPaper?
 
     private var papers: [ArxivFeedPaper] {
         var result = model.arxivFeed?.papers ?? []
@@ -47,6 +48,23 @@ struct DiscoverView: View {
             Task {
                 await model.refreshArxivDatesAndFeed()
             }
+        }
+        .sheet(item: $paperPendingSave) { paper in
+            SaveToLibrarySheet(
+                paperTitle: paper.displayTitle(language: "zh"),
+                detail: paper.authors.prefix(4).joined(separator: ", "),
+                libraryTags: model.tags,
+                suggestedTagNames: model.suggestedTagNames(for: paper),
+                onSave: { tagNames in
+                    paperPendingSave = nil
+                    Task {
+                        await model.addArxivPaperToLibrary(paper, selectedTagNames: tagNames)
+                    }
+                },
+                onCancel: {
+                    paperPendingSave = nil
+                }
+            )
         }
     }
 
@@ -107,9 +125,7 @@ struct DiscoverView: View {
                                 isBusy: model.isDownloadingArxivPaper(paper),
                                 downloadProgress: model.arxivDownloadProgress(for: paper),
                                 onSave: {
-                                    Task {
-                                        await model.addArxivPaperToLibrary(paper)
-                                    }
+                                    paperPendingSave = paper
                                 },
                                 onOpen: {
                                     Task {

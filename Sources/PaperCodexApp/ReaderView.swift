@@ -4,6 +4,7 @@ import SwiftUI
 struct ReaderView: View {
     @EnvironmentObject private var model: AppModel
     @State private var isShowingSessionPapers = false
+    @State private var isShowingSaveToLibrarySheet = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,6 +18,23 @@ struct ReaderView: View {
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .sheet(isPresented: $isShowingSaveToLibrarySheet) {
+            if let paper = model.selectedPaper {
+                SaveToLibrarySheet(
+                    paperTitle: paper.title,
+                    detail: paper.authors.prefix(4).joined(separator: ", "),
+                    libraryTags: model.tags,
+                    suggestedTagNames: model.suggestedTagNames(for: paper),
+                    onSave: { tagNames in
+                        isShowingSaveToLibrarySheet = false
+                        model.saveCachedPaperToLibrary(paper, selectedTagNames: tagNames)
+                    },
+                    onCancel: {
+                        isShowingSaveToLibrarySheet = false
+                    }
+                )
+            }
+        }
     }
 
     private var header: some View {
@@ -40,7 +58,7 @@ struct ReaderView: View {
 
             if let paper = model.selectedPaper, !paper.isSaved {
                 Button {
-                    model.saveCachedPaperToLibrary(paper)
+                    isShowingSaveToLibrarySheet = true
                 } label: {
                     Label("Save to Library", systemImage: "tray.and.arrow.down")
                 }

@@ -503,20 +503,39 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func addArxivPaperToLibrary(_ arxivPaper: ArxivFeedPaper) async {
+    func suggestedTagNames(for arxivPaper: ArxivFeedPaper) -> [String] {
+        normalizedTagNames(arxivPaper.tags)
+    }
+
+    func suggestedTagNames(for paper: Paper) -> [String] {
+        if let arxivPaper = arxivFeed?.papers.first(where: { candidate in
+            paper.sourceURL == candidate.links.abs || paper.sourceURL?.contains(candidate.id) == true
+        }) {
+            return suggestedTagNames(for: arxivPaper)
+        }
+        return normalizedTagNames(paperTagsByID[paper.id, default: []].map(\.name))
+    }
+
+    func addArxivPaperToLibrary(_ arxivPaper: ArxivFeedPaper, selectedTagNames: [String] = []) async {
         do {
+            guard let repository else {
+                throw AppModelError.repositoryUnavailable
+            }
             if let existing = libraryPaper(for: arxivPaper) {
+                try assignTags(named: selectedTagNames, to: existing, repository: repository)
+                try reloadLibrary()
                 openPaper(existing)
                 return
             }
-            _ = try await importArxivPaper(arxivPaper, isSaved: true)
+            let paper = try await importArxivPaper(arxivPaper, isSaved: true)
+            try assignTags(named: selectedTagNames, to: paper, repository: repository)
             try reloadLibrary()
         } catch {
             errorMessage = String(describing: error)
         }
     }
 
-    func saveCachedPaperToLibrary(_ paper: Paper) {
+    func saveCachedPaperToLibrary(_ paper: Paper, selectedTagNames: [String] = []) {
         do {
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
@@ -538,10 +557,13 @@ final class AppModel: ObservableObject {
                     storageSubpath: arxivStorageSubpath(forCachedPaper: paper)
                 )
             try reloadLibrary()
-            selectedLibraryPaper = result.paper
-            selectedPaper = result.paper
+            try assignTags(named: selectedTagNames, to: result.paper, repository: repository)
+            try reloadLibrary()
+            let savedPaper = papers.first { $0.id == result.paper.id } ?? result.paper
+            selectedLibraryPaper = savedPaper
+            selectedPaper = savedPaper
             if let session = selectedSession {
-                let context = try loadSessionPaperContext(session: session, fallbackPaper: result.paper, repository: repository)
+                let context = try loadSessionPaperContext(session: session, fallbackPaper: savedPaper, repository: repository)
                 try workspaceManager.writeWorkspace(
                     session: session,
                     papers: context.papers,
@@ -1268,12 +1290,40 @@ final class AppModel: ObservableObject {
 
     private func ensureTag(named name: String, repository: PaperRepository) throws -> PaperTag {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw AppModelError.emptyName
+        }
         if let existing = try repository.fetchTags().first(where: { $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) {
             return existing
         }
         let tag = PaperTag(id: "codearxiv-tag-\(makeSlug(from: trimmed))", name: trimmed)
         try repository.upsertTag(tag)
         return tag
+    }
+
+    private func assignTags(named tagNames: [String], to paper: Paper, repository: PaperRepository) throws {
+        for tagName in normalizedTagNames(tagNames) {
+            let tag = try ensureTag(named: tagName, repository: repository)
+            try repository.assignPaper(paper.id, toTag: tag.id)
+        }
+    }
+
+    private func normalizedTagNames(_ tagNames: [String]) -> [String] {
+        var names: [String] = []
+        var seen: Set<String> = []
+        for tagName in tagNames {
+            let trimmed = tagName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                continue
+            }
+            let key = trimmed.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            guard !seen.contains(key) else {
+                continue
+            }
+            seen.insert(key)
+            names.append(trimmed)
+        }
+        return names
     }
 
     private func arxivStorageSubpath(for paper: ArxivFeedPaper) -> String? {
