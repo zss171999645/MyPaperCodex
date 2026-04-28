@@ -35,7 +35,7 @@ struct DiscoverView: View {
     var body: some View {
         HSplitView {
             sidebar
-                .frame(minWidth: 232, idealWidth: 260, maxWidth: 310)
+                .frame(minWidth: 250, idealWidth: 280, maxWidth: 340)
             feed
                 .frame(minWidth: 760)
         }
@@ -98,17 +98,14 @@ struct DiscoverView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVGrid(
-                        columns: [GridItem(.adaptive(minimum: 520), spacing: 12, alignment: .top)],
-                        alignment: .leading,
-                        spacing: 12
-                    ) {
+                    LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(papers) { paper in
                             ArxivPaperCard(
                                 paper: paper,
                                 imageURL: model.cachedArxivAssetURL(for: paper.assets.small),
                                 inLibrary: model.libraryPaper(for: paper) != nil,
-                                isBusy: model.isAddingArxivPaper,
+                                isBusy: model.isDownloadingArxivPaper(paper),
+                                downloadProgress: model.arxivDownloadProgress(for: paper),
                                 onSave: {
                                     Task {
                                         await model.addArxivPaperToLibrary(paper)
@@ -209,6 +206,8 @@ struct DiscoverView: View {
             }
             .padding(.horizontal, 9)
             .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
             .background(selected ? Color.accentColor.opacity(0.14) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
@@ -226,6 +225,8 @@ struct DiscoverView: View {
             }
             .padding(.horizontal, 9)
             .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
             .background(selected ? Color.accentColor.opacity(0.12) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
@@ -238,16 +239,17 @@ private struct ArxivPaperCard: View {
     var imageURL: URL?
     var inLibrary: Bool
     var isBusy: Bool
+    var downloadProgress: Double?
     var onSave: () -> Void
     var onOpen: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 ArxivPreviewImage(url: imageURL)
-                    .frame(width: 142, height: 92)
+                    .frame(width: 164, height: 112)
 
-                VStack(alignment: .leading, spacing: 7) {
+                VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 6) {
                         Text(paper.primaryCategory ?? paper.categories.first ?? "arXiv")
                             .font(.caption.weight(.semibold))
@@ -264,6 +266,20 @@ private struct ArxivPaperCard: View {
                                 .font(.caption)
                                 .foregroundStyle(.green)
                         }
+                        if let groupLabel {
+                            Text(groupLabel)
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(groupColor.opacity(0.12))
+                                .foregroundStyle(groupColor)
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        if let similarity = paper.similarity {
+                            Text("\(Int((similarity * 100).rounded()))%")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
                         Spacer(minLength: 0)
                     }
 
@@ -279,11 +295,21 @@ private struct ArxivPaperCard: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             HStack(spacing: 8) {
                 FlowTags(tags: Array(paper.tags.prefix(5)))
                 Spacer(minLength: 8)
+                if isBusy {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        ProgressView(value: downloadProgress)
+                            .frame(width: 120)
+                        Text("Downloading")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 Button {
                     onSave()
                 } label: {
@@ -302,12 +328,28 @@ private struct ArxivPaperCard: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(minHeight: 168, alignment: .top)
         .background(Color(nsColor: .textBackgroundColor))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.black.opacity(0.08), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var groupLabel: String? {
+        switch paper.filterGroup {
+        case "white":
+            "Whitelist"
+        case "black":
+            "Blacklist"
+        default:
+            nil
+        }
+    }
+
+    private var groupColor: Color {
+        paper.filterGroup == "black" ? .red : .blue
     }
 }
 
@@ -319,7 +361,8 @@ private struct ArxivPreviewImage: View {
             if let url, let image = NSImage(contentsOf: url) {
                 Image(nsImage: image)
                     .resizable()
-                    .scaledToFill()
+                    .scaledToFit()
+                    .padding(4)
             } else {
                 ZStack {
                     Color(nsColor: .separatorColor).opacity(0.22)
@@ -330,6 +373,7 @@ private struct ArxivPreviewImage: View {
             }
         }
         .clipped()
+        .background(Color(nsColor: .windowBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 7))
     }
 }

@@ -88,10 +88,12 @@ struct ChatView: View {
                 }
             }
 
-            CodexStatusLine(
+            QuickPromptLine(
+                prompts: model.quickPrompts,
                 diagnostic: model.codexDiagnostic,
                 modelOverride: model.codexModelOverride,
                 reasoningEffort: model.codexReasoningEffort,
+                onPrompt: { model.sendQuickPrompt($0) },
                 onModelOverride: { model.setCodexModelOverride($0) },
                 onReasoningEffort: { model.setCodexReasoningEffort($0) }
             ) {
@@ -148,6 +150,47 @@ struct ChatView: View {
         draft = ""
         Task {
             await model.sendMessage(message)
+        }
+    }
+}
+
+private struct QuickPromptLine: View {
+    var prompts: [QuickPrompt]
+    var diagnostic: CodexDiagnostic?
+    var modelOverride: String
+    var reasoningEffort: CodexReasoningEffort
+    var onPrompt: (QuickPrompt) -> Void
+    var onModelOverride: (String) -> Void
+    var onReasoningEffort: (CodexReasoningEffort) -> Void
+    var onRefresh: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Menu {
+                ForEach(prompts) { prompt in
+                    Button(prompt.title) {
+                        onPrompt(prompt)
+                    }
+                }
+            } label: {
+                Label("Quick Prompt", systemImage: "text.bubble")
+                    .frame(minWidth: 138, alignment: .leading)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
+            Spacer()
+
+            CodexStatusLine(
+                diagnostic: diagnostic,
+                modelOverride: modelOverride,
+                reasoningEffort: reasoningEffort,
+                onModelOverride: onModelOverride,
+                onReasoningEffort: onReasoningEffort,
+                onRefresh: onRefresh
+            )
+            .frame(maxWidth: 360)
         }
     }
 }

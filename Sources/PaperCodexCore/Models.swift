@@ -85,6 +85,18 @@ public struct PaperTag: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public struct QuickPrompt: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var title: String
+    public var content: String
+
+    public init(id: String, title: String, content: String) {
+        self.id = id
+        self.title = title
+        self.content = content
+    }
+}
+
 public struct WatchedFolder: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var path: String

@@ -1,18 +1,28 @@
+import PaperCodexCore
 import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var draftBaseURL = ""
     @State private var draftToken = ""
+    @State private var draftUsername = ""
+    @State private var newPromptTitle = ""
+    @State private var newPromptContent = ""
+    @State private var draftFilterCategories = ""
+    @State private var draftWhitelistTags = ""
+    @State private var draftBlacklistTags = ""
+    @State private var draftSimilarityFavoriteIDs: Set<Int> = []
 
     var body: some View {
         HSplitView {
             sidebar
-                .frame(minWidth: 232, idealWidth: 260, maxWidth: 310)
+                .frame(minWidth: 250, idealWidth: 280, maxWidth: 340)
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     header
                     feedConnection
+                    codeArxivPreferences
+                    quickPromptSettings
                     storageRules
                     cacheControls
                 }
@@ -21,10 +31,16 @@ struct SettingsView: View {
             }
             .frame(minWidth: 720)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
             draftBaseURL = model.arxivFeedBaseURL
             draftToken = model.arxivFeedToken
+            draftUsername = model.arxivFeedUsername
+            syncCodeArxivDrafts()
+        }
+        .onChange(of: model.codeArxivUserState) { _, _ in
+            syncCodeArxivDrafts()
         }
     }
 
@@ -63,11 +79,13 @@ struct SettingsView: View {
         settingsSection(title: "CodeArXiv Feed", systemImage: "server.rack") {
             TextField("Base URL", text: $draftBaseURL)
                 .textFieldStyle(.roundedBorder)
+            TextField("CodeArXiv username", text: $draftUsername)
+                .textFieldStyle(.roundedBorder)
             SecureField("API token", text: $draftToken)
                 .textFieldStyle(.roundedBorder)
             HStack {
                 Button {
-                    model.setArxivFeedConnection(baseURL: draftBaseURL, token: draftToken)
+                    model.setArxivFeedConnection(baseURL: draftBaseURL, token: draftToken, username: draftUsername)
                     Task {
                         await model.refreshArxivDatesAndFeed()
                     }
@@ -82,6 +100,162 @@ struct SettingsView: View {
                     }
                 } label: {
                     Label("Refresh Feed", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private var codeArxivPreferences: some View {
+        settingsSection(title: "CodeArXiv Preferences", systemImage: "slider.horizontal.3") {
+            if let state = model.codeArxivUserState {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Label(state.user.username, systemImage: "person.crop.circle")
+                        Spacer()
+                        Button {
+                            Task {
+                                await model.refreshCodeArxivUserState()
+                            }
+                        } label: {
+                            Label("Refresh", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    TextField("Categories, comma separated", text: $draftFilterCategories)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("Whitelist tags, comma separated", text: $draftWhitelistTags)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("Blacklist tags, comma separated", text: $draftBlacklistTags)
+                        .textFieldStyle(.roundedBorder)
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack {
+                            Text("Similarity folders")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(draftSimilarityFavoriteIDs.isEmpty ? "All favorites" : "\(draftSimilarityFavoriteIDs.count) selected")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if state.favorites.isEmpty {
+                            Text("No CodeArXiv favorites yet.")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        } else {
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    ForEach(state.favorites) { favorite in
+                                        Toggle(isOn: Binding(
+                                            get: { draftSimilarityFavoriteIDs.contains(favorite.id) },
+                                            set: { isOn in
+                                                if isOn {
+                                                    draftSimilarityFavoriteIDs.insert(favorite.id)
+                                                } else {
+                                                    draftSimilarityFavoriteIDs.remove(favorite.id)
+                                                }
+                                            }
+                                        )) {
+                                            Text("\(favorite.name) · \(favorite.paperIDs.count)")
+                                                .lineLimit(1)
+                                        }
+                                        .toggleStyle(.checkbox)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(maxHeight: 150, alignment: .top)
+                        }
+                    }
+
+                    HStack {
+                        Button {
+                            Task {
+                                await model.updateCodeArxivPreferences(
+                                    categories: splitDraftList(draftFilterCategories),
+                                    whitelistTags: splitDraftList(draftWhitelistTags),
+                                    blacklistTags: splitDraftList(draftBlacklistTags),
+                                    simFavoriteIDs: draftSimilarityFavoriteIDs.sorted()
+                                )
+                            }
+                        } label: {
+                            Label(model.isSavingCodeArxivPreferences ? "Saving Preferences" : "Save Preferences", systemImage: "slider.horizontal.3")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.isSavingCodeArxivPreferences)
+
+                        Button {
+                            Task {
+                                await model.syncCodeArxivFavorites()
+                            }
+                        } label: {
+                            Label(model.isSyncingCodeArxivFavorites ? "Syncing Favorites" : "Sync \(state.user.username) Favorites", systemImage: "square.and.arrow.down.on.square")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(model.isSyncingCodeArxivFavorites || state.favorites.isEmpty)
+                    }
+                }
+            } else {
+                HStack {
+                    Text("No CodeArXiv user state loaded.")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        Task {
+                            await model.refreshCodeArxivUserState()
+                        }
+                    } label: {
+                        Label("Load", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+        }
+    }
+
+    private var quickPromptSettings: some View {
+        settingsSection(title: "Quick Prompts", systemImage: "text.bubble") {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(model.quickPrompts) { prompt in
+                    HStack(alignment: .top, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(prompt.title)
+                                .font(.system(size: 13, weight: .semibold))
+                            Text(prompt.content)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        Spacer()
+                        Button {
+                            model.deleteQuickPrompt(prompt)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Delete Prompt")
+                    }
+                    .padding(10)
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+
+                TextField("Prompt title", text: $newPromptTitle)
+                    .textFieldStyle(.roundedBorder)
+                TextEditor(text: $newPromptContent)
+                    .font(.system(size: 13))
+                    .frame(minHeight: 78)
+                    .scrollContentBackground(.hidden)
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                Button {
+                    model.addQuickPrompt(title: newPromptTitle, content: newPromptContent)
+                    newPromptTitle = ""
+                    newPromptContent = ""
+                } label: {
+                    Label("Add Prompt", systemImage: "plus")
                 }
                 .buttonStyle(.bordered)
             }
@@ -162,9 +336,31 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 9)
             .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
             .background(selected ? Color.accentColor.opacity(0.14) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+    }
+
+    private func syncCodeArxivDrafts() {
+        guard let state = model.codeArxivUserState else {
+            draftFilterCategories = ""
+            draftWhitelistTags = ""
+            draftBlacklistTags = ""
+            draftSimilarityFavoriteIDs = []
+            return
+        }
+        draftFilterCategories = state.filters.categories.joined(separator: ", ")
+        draftWhitelistTags = state.filters.tags.whitelist.joined(separator: ", ")
+        draftBlacklistTags = state.filters.tags.blacklist.joined(separator: ", ")
+        draftSimilarityFavoriteIDs = Set(state.filters.simFavorites)
+    }
+
+    private func splitDraftList(_ text: String) -> [String] {
+        text.components(separatedBy: CharacterSet(charactersIn: ",\n"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 }

@@ -14,6 +14,7 @@ struct LibraryView: View {
     @State private var searchText = ""
     @State private var selectedCategoryID: String?
     @State private var selectedTagID: String?
+    @State private var sidebarDragStartWidth: CGFloat?
 
     private var filteredPapers: [Paper] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -38,9 +39,22 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        HSplitView {
+        HStack(spacing: 0) {
             sidebar
-                .frame(minWidth: 250, idealWidth: 280, maxWidth: 340)
+                .frame(width: model.librarySidebarWidth)
+            SplitterHandle()
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            if sidebarDragStartWidth == nil {
+                                sidebarDragStartWidth = model.librarySidebarWidth
+                            }
+                            model.setLibrarySidebarWidth((sidebarDragStartWidth ?? model.librarySidebarWidth) + value.translation.width)
+                        }
+                        .onEnded { _ in
+                            sidebarDragStartWidth = nil
+                        }
+                )
             HSplitView {
                 paperList
                     .frame(minWidth: 520)
@@ -217,6 +231,7 @@ struct LibraryView: View {
                                 paper: paper,
                                 categories: categories(for: paper),
                                 tags: model.paperTagsByID[paper.id, default: []],
+                                thumbnailURLs: model.paperThumbnailURLsByID[paper.id, default: []],
                                 isSelected: model.selectedLibraryPaper?.id == paper.id
                             ) {
                                 model.openPaper(paper)
@@ -380,6 +395,8 @@ struct LibraryView: View {
             .padding(.leading, CGFloat(depth * 14))
             .padding(.horizontal, 9)
             .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
             .background(isSelected ? Color.accentColor.opacity(0.14) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
@@ -553,15 +570,14 @@ private struct PaperRow: View {
     var paper: Paper
     var categories: [PaperCodexCore.Category]
     var tags: [PaperTag]
+    var thumbnailURLs: [URL]
     var isSelected: Bool
     var onRead: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
-            Image(systemName: "doc.richtext")
-                .font(.system(size: 22))
-                .foregroundStyle(.blue)
-                .frame(width: 36)
+            ThumbnailStrip(urls: Array(thumbnailURLs.prefix(5)))
+                .frame(width: 132, height: 54)
 
             VStack(alignment: .leading, spacing: 7) {
                 Text(paper.title)
@@ -596,6 +612,55 @@ private struct PaperRow: View {
                 .stroke(isSelected ? Color.accentColor.opacity(0.45) : Color.clear, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct SplitterHandle: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color(nsColor: .separatorColor).opacity(0.55))
+            .frame(width: 5)
+            .overlay(
+                Rectangle()
+                    .fill(Color.accentColor.opacity(0.0))
+                    .frame(width: 18)
+            )
+    }
+}
+
+private struct ThumbnailStrip: View {
+    var urls: [URL]
+
+    var body: some View {
+        HStack(spacing: -18) {
+            if urls.isEmpty {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(Color(nsColor: .windowBackgroundColor))
+                    Image(systemName: "doc.richtext")
+                        .foregroundStyle(.blue)
+                }
+                .frame(width: 42, height: 54)
+            } else {
+                ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
+                    if let image = NSImage(contentsOf: url) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .padding(2)
+                            .frame(width: 42, height: 54)
+                            .background(Color(nsColor: .textBackgroundColor))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 5)
+                                    .stroke(Color.black.opacity(0.12), lineWidth: 1)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                            .zIndex(Double(urls.count - index))
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

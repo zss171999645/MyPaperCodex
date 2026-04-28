@@ -68,7 +68,29 @@ private let codexModelOverrideDefaultsKey = "PaperCodexCodexModelOverride"
 private let codexReasoningEffortDefaultsKey = "PaperCodexCodexReasoningEffort"
 private let arxivFeedBaseURLDefaultsKey = "PaperCodexArxivFeedBaseURL"
 private let arxivFeedTokenDefaultsKey = "PaperCodexArxivFeedToken"
+private let arxivFeedUsernameDefaultsKey = "PaperCodexArxivFeedUsername"
 private let arxivSaveOrganizationDefaultsKey = "PaperCodexArxivSaveOrganization"
+private let quickPromptsDefaultsKey = "PaperCodexQuickPrompts"
+private let librarySidebarWidthDefaultsKey = "PaperCodexLibrarySidebarWidth"
+
+private func loadQuickPromptsFromDefaults() -> [QuickPrompt] {
+    guard let data = UserDefaults.standard.data(forKey: quickPromptsDefaultsKey),
+          let prompts = try? JSONDecoder().decode([QuickPrompt].self, from: data),
+          !prompts.isEmpty else {
+        return [
+            QuickPrompt(id: "summary", title: "Summary", content: "Summarize the paper's main contribution, method, and evidence."),
+            QuickPrompt(id: "limitations", title: "Limitations", content: "Identify the most important limitations, hidden assumptions, and missing experiments."),
+            QuickPrompt(id: "related", title: "Related Work", content: "Compare this paper with closely related work and explain what is genuinely new.")
+        ]
+    }
+    return prompts
+}
+
+private func saveQuickPromptsToDefaults(_ prompts: [QuickPrompt]) {
+    if let data = try? JSONEncoder().encode(prompts) {
+        UserDefaults.standard.set(data, forKey: quickPromptsDefaultsKey)
+    }
+}
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -98,22 +120,35 @@ final class AppModel: ObservableObject {
     @Published var isScanningWatchedFolders = false
     @Published var arxivFeedBaseURL: String = UserDefaults.standard.string(forKey: arxivFeedBaseURLDefaultsKey) ?? "http://nas.pucao.cn:20003"
     @Published var arxivFeedToken: String = UserDefaults.standard.string(forKey: arxivFeedTokenDefaultsKey) ?? ""
+    @Published var arxivFeedUsername: String = UserDefaults.standard.string(forKey: arxivFeedUsernameDefaultsKey) ?? "caopu"
     @Published var arxivSaveOrganization: ArxivSaveOrganization = {
         let stored = UserDefaults.standard.string(forKey: arxivSaveOrganizationDefaultsKey)
         return stored.flatMap(ArxivSaveOrganization.init(rawValue:)) ?? .primaryCategory
     }()
+    @Published var quickPrompts: [QuickPrompt] = loadQuickPromptsFromDefaults()
     @Published var arxivDates: [String] = []
     @Published var selectedArxivDate: String?
     @Published var arxivFeed: ArxivFeedResponse?
+    @Published var codeArxivUserState: CodeArxivUserState?
     @Published var selectedArxivPaper: ArxivFeedPaper?
     @Published var arxivAssetURLs: [String: URL] = [:]
     @Published var isLoadingArxivFeed = false
     @Published var isPreloadingArxivAssets = false
     @Published var isAddingArxivPaper = false
+    @Published var arxivDownloadingPaperIDs: Set<String> = []
+    @Published var arxivDownloadProgressByID: [String: Double] = [:]
+    @Published var isSyncingCodeArxivFavorites = false
+    @Published var isSavingCodeArxivPreferences = false
+    @Published var paperThumbnailURLsByID: [String: [URL]] = [:]
+    @Published var librarySidebarWidth: CGFloat = {
+        let stored = UserDefaults.standard.double(forKey: librarySidebarWidthDefaultsKey)
+        return stored > 0 ? CGFloat(stored) : 280
+    }()
 
     private var repository: PaperRepository?
     private let supportRoot: URL
     private let arxivCache: ArxivFeedCache
+    private let thumbnailCache: PDFThumbnailCache
     private let workspaceManager = SessionWorkspaceManager()
     private var watchedFolderAutoScanTask: Task<Void, Never>?
     private var activeCodexRunHandle: CodexRunHandle?
@@ -131,6 +166,7 @@ final class AppModel: ObservableObject {
         let root = PaperCodexPaths.supportRoot()
         supportRoot = root
         arxivCache = ArxivFeedCache(root: root.appendingPathComponent("arxiv-cache", isDirectory: true))
+        thumbnailCache = PDFThumbnailCache(root: root.appendingPathComponent("thumbnails", isDirectory: true))
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let store = try PaperRepository(databasePath: root.appendingPathComponent("store.sqlite").path)
@@ -167,6 +203,7 @@ final class AppModel: ObservableObject {
         paperTagsByID = try Dictionary(uniqueKeysWithValues: papers.map { paper in
             (paper.id, try repository.fetchTags(forPaperID: paper.id))
         })
+        refreshLibraryThumbnails()
         if let selectedLibraryPaperID {
             selectedLibraryPaper = papers.first { $0.id == selectedLibraryPaperID }
         }
@@ -277,18 +314,55 @@ final class AppModel: ObservableObject {
         pdfJumpTarget = nil
     }
 
-    func setArxivFeedConnection(baseURL: String, token: String) {
+    func setArxivFeedConnection(baseURL: String, token: String, username: String? = nil) {
         let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedUsername = (username ?? arxivFeedUsername).trimmingCharacters(in: .whitespacesAndNewlines)
         arxivFeedBaseURL = trimmedBaseURL
         arxivFeedToken = trimmedToken
+        arxivFeedUsername = trimmedUsername.isEmpty ? "caopu" : trimmedUsername
         UserDefaults.standard.set(trimmedBaseURL, forKey: arxivFeedBaseURLDefaultsKey)
         UserDefaults.standard.set(trimmedToken, forKey: arxivFeedTokenDefaultsKey)
+        UserDefaults.standard.set(arxivFeedUsername, forKey: arxivFeedUsernameDefaultsKey)
     }
 
     func setArxivSaveOrganization(_ organization: ArxivSaveOrganization) {
         arxivSaveOrganization = organization
         UserDefaults.standard.set(organization.rawValue, forKey: arxivSaveOrganizationDefaultsKey)
+    }
+
+    func setLibrarySidebarWidth(_ width: CGFloat) {
+        let clamped = min(max(width, 220), 420)
+        librarySidebarWidth = clamped
+        UserDefaults.standard.set(Double(clamped), forKey: librarySidebarWidthDefaultsKey)
+    }
+
+    func addQuickPrompt(title: String, content: String) {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty, !trimmedContent.isEmpty else {
+            errorMessage = AppModelError.emptyName.description
+            return
+        }
+        quickPrompts.append(
+            QuickPrompt(
+                id: "prompt-\(makeSlug(from: trimmedTitle))-\(UUID().uuidString.prefix(8).lowercased())",
+                title: trimmedTitle,
+                content: trimmedContent
+            )
+        )
+        saveQuickPromptsToDefaults(quickPrompts)
+    }
+
+    func deleteQuickPrompt(_ prompt: QuickPrompt) {
+        quickPrompts.removeAll { $0.id == prompt.id }
+        saveQuickPromptsToDefaults(quickPrompts)
+    }
+
+    func sendQuickPrompt(_ prompt: QuickPrompt) {
+        Task {
+            await sendMessage(prompt.content)
+        }
     }
 
     func refreshArxivDatesAndFeed() async {
@@ -305,6 +379,44 @@ final class AppModel: ObservableObject {
             selectedArxivDate = date
             if let date {
                 try await loadArxivFeed(date: date, client: client)
+            }
+            try await refreshCodeArxivUserState(client: client)
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func refreshCodeArxivUserState() async {
+        do {
+            let client = try makeArxivFeedClient()
+            try await refreshCodeArxivUserState(client: client)
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func updateCodeArxivPreferences(
+        categories: [String],
+        whitelistTags: [String],
+        blacklistTags: [String],
+        simFavoriteIDs: [Int]
+    ) async {
+        do {
+            isSavingCodeArxivPreferences = true
+            defer {
+                isSavingCodeArxivPreferences = false
+            }
+            let client = try makeArxivFeedClient()
+            codeArxivUserState = try await client.updateUserFilters(
+                username: arxivFeedUsername,
+                categories: categories,
+                whitelistTags: whitelistTags,
+                blacklistTags: blacklistTags,
+                simFavoriteIDs: simFavoriteIDs,
+                languagePreference: codeArxivUserState?.user.languagePreference
+            )
+            if let selectedArxivDate {
+                try await loadArxivFeed(date: selectedArxivDate, client: client)
             }
         } catch {
             errorMessage = String(describing: error)
@@ -362,6 +474,14 @@ final class AppModel: ObservableObject {
         return try? arxivCache.cachedAssetURL(path: asset.path)
     }
 
+    func isDownloadingArxivPaper(_ paper: ArxivFeedPaper) -> Bool {
+        arxivDownloadingPaperIDs.contains(paper.id)
+    }
+
+    func arxivDownloadProgress(for paper: ArxivFeedPaper) -> Double? {
+        arxivDownloadProgressByID[paper.id]
+    }
+
     func libraryPaper(for arxivPaper: ArxivFeedPaper) -> Paper? {
         let absURL = arxivPaper.links.abs
         return papers.first { paper in
@@ -415,7 +535,7 @@ final class AppModel: ObservableObject {
                     from: URL(fileURLWithPath: paper.filePath),
                     metadata: metadata,
                     isSaved: true,
-                    storageSubpath: arxivSaveOrganization == .flat ? nil : "arxiv"
+                    storageSubpath: arxivStorageSubpath(forCachedPaper: paper)
                 )
             try reloadLibrary()
             selectedLibraryPaper = result.paper
@@ -444,8 +564,51 @@ final class AppModel: ObservableObject {
             try removeDirectoryIfExists(supportRoot.appendingPathComponent("cache", isDirectory: true))
             try removeDirectoryIfExists(supportRoot.appendingPathComponent("arxiv-cache", isDirectory: true))
             arxivFeed = nil
+            codeArxivUserState = nil
             selectedArxivPaper = nil
             arxivAssetURLs = [:]
+            try reloadLibrary()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func syncCodeArxivFavorites() async {
+        do {
+            guard let repository else {
+                throw AppModelError.repositoryUnavailable
+            }
+            isSyncingCodeArxivFavorites = true
+            defer {
+                isSyncingCodeArxivFavorites = false
+            }
+            let client = try makeArxivFeedClient()
+            let state = try await client.fetchUserState(username: arxivFeedUsername, includePapers: true)
+            codeArxivUserState = state
+            var sortOrder = categories.count + 1
+            for favorite in state.favorites {
+                let category = PaperCodexCore.Category(
+                    id: codeArxivCategoryID(for: favorite),
+                    parentID: nil,
+                    name: favorite.name,
+                    sortOrder: sortOrder
+                )
+                sortOrder += 1
+                try repository.upsertCategory(category)
+                for remotePaper in favorite.papers {
+                    let localPaper: Paper
+                    if let existing = libraryPaper(for: remotePaper) {
+                        localPaper = existing
+                    } else {
+                        localPaper = try await importArxivPaper(remotePaper, isSaved: true)
+                    }
+                    try repository.assignPaper(localPaper.id, toCategory: category.id)
+                    for tagName in remotePaper.tags {
+                        let tag = try ensureTag(named: tagName, repository: repository)
+                        try repository.assignPaper(localPaper.id, toTag: tag.id)
+                    }
+                }
+            }
             try reloadLibrary()
         } catch {
             errorMessage = String(describing: error)
@@ -984,9 +1147,18 @@ final class AppModel: ObservableObject {
     }
 
     private func loadArxivFeed(date: String, client: ArxivFeedClient) async throws {
-        let feed = try await client.fetchFeed(date: date)
+        let feed = try await client.fetchFeed(date: date, username: arxivFeedUsername)
         try arxivCache.saveFeed(feed)
         arxivFeed = feed
+        if let user = feed.user,
+           let filters = feed.filters {
+            codeArxivUserState = CodeArxivUserState(
+                user: user,
+                filters: filters,
+                favorites: feed.favorites ?? [],
+                tagOptions: feed.tagOptions ?? []
+            )
+        }
         if let selected = selectedArxivPaper,
            feed.papers.contains(where: { $0.id == selected.id }) {
             selectedArxivPaper = selected
@@ -997,6 +1169,13 @@ final class AppModel: ObservableObject {
         Task {
             await preloadArxivAssets(includeLarge: false)
         }
+    }
+
+    private func refreshCodeArxivUserState(client: ArxivFeedClient) async throws {
+        guard !arxivFeedUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+        codeArxivUserState = try await client.fetchUserState(username: arxivFeedUsername)
     }
 
     private func loadCachedArxivState() {
@@ -1032,12 +1211,17 @@ final class AppModel: ObservableObject {
             throw AppModelError.repositoryUnavailable
         }
         isAddingArxivPaper = true
+        arxivDownloadingPaperIDs.insert(arxivPaper.id)
+        arxivDownloadProgressByID[arxivPaper.id] = 0.1
         defer {
             isAddingArxivPaper = false
+            arxivDownloadingPaperIDs.remove(arxivPaper.id)
+            arxivDownloadProgressByID.removeValue(forKey: arxivPaper.id)
         }
 
         let client = try makeArxivFeedClient()
         let pdfData = try await client.fetchPDF(for: arxivPaper)
+        arxivDownloadProgressByID[arxivPaper.id] = 0.65
         guard pdfData.starts(with: Data("%PDF-".utf8)) else {
             throw AppModelError.downloadedFileIsNotPDF(arxivPaper.id)
         }
@@ -1062,7 +1246,34 @@ final class AppModel: ObservableObject {
                 isSaved: isSaved,
                 storageSubpath: isSaved ? arxivStorageSubpath(for: arxivPaper) : nil
             )
+        arxivDownloadProgressByID[arxivPaper.id] = 1
         return result.paper
+    }
+
+    private func refreshLibraryThumbnails() {
+        var urlsByID = paperThumbnailURLsByID
+        for paper in papers where urlsByID[paper.id] == nil {
+            if let urls = try? thumbnailCache.thumbnails(for: paper) {
+                urlsByID[paper.id] = urls
+            }
+        }
+        paperThumbnailURLsByID = urlsByID.filter { entry in
+            papers.contains { $0.id == entry.key }
+        }
+    }
+
+    private func codeArxivCategoryID(for favorite: CodeArxivFavorite) -> String {
+        "codearxiv-favorite-\(favorite.id)-\(makeSlug(from: favorite.name))"
+    }
+
+    private func ensureTag(named name: String, repository: PaperRepository) throws -> PaperTag {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let existing = try repository.fetchTags().first(where: { $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) {
+            return existing
+        }
+        let tag = PaperTag(id: "codearxiv-tag-\(makeSlug(from: trimmed))", name: trimmed)
+        try repository.upsertTag(tag)
+        return tag
     }
 
     private func arxivStorageSubpath(for paper: ArxivFeedPaper) -> String? {
@@ -1076,6 +1287,18 @@ final class AppModel: ObservableObject {
         case .flat:
             return nil
         }
+    }
+
+    private func arxivStorageSubpath(forCachedPaper paper: Paper) -> String? {
+        guard arxivSaveOrganization != .flat else {
+            return nil
+        }
+        if let arxivPaper = arxivFeed?.papers.first(where: { candidate in
+            paper.sourceURL == candidate.links.abs || paper.sourceURL?.contains(candidate.id) == true
+        }) {
+            return arxivStorageSubpath(for: arxivPaper)
+        }
+        return "arxiv"
     }
 
     private func removeDirectoryIfExists(_ url: URL) throws {

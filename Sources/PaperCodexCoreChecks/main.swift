@@ -833,6 +833,30 @@ func runArxivFeedChecks() throws {
     {
       "date": "2026-04-22",
       "count": 1,
+      "groups": [
+        {"key": "white", "count": 1},
+        {"key": "neutral", "count": 0},
+        {"key": "black", "count": 0}
+      ],
+      "filters": {
+        "categories": ["cs.CV"],
+        "tags": {"whitelist": ["Diffusion"], "blacklist": ["Med"]},
+        "sim_favorites": [11],
+        "last_date": "2026-04-22",
+        "last_paper_id": "2604.18586",
+        "last_position": 123
+      },
+      "favorites": [
+        {
+          "id": 11,
+          "name": "Vision",
+          "paper_ids": ["2604.18586"],
+          "papers": [],
+          "embedding": [0.1, 0.2, 0.3]
+        }
+      ],
+      "tag_options": ["Diffusion", "Med", "Toolkit"],
+      "user": {"id": 4, "username": "caopu", "language_preference": "zh"},
       "papers": [
         {
           "id": "2604.18586",
@@ -852,6 +876,9 @@ func runArxivFeedChecks() throws {
           "list_date": "2026-04-22",
           "thumbnail_version": 3,
           "embedding": [0.1, 0.2, 0.3],
+          "similarity": 0.91,
+          "filter_group": "white",
+          "is_favorite": true,
           "links": {
             "abs": "https://arxiv.org/abs/2604.18586",
             "pdf": "https://arxiv.org/pdf/2604.18586.pdf"
@@ -868,11 +895,57 @@ func runArxivFeedChecks() throws {
     let response = try decoder.decode(ArxivFeedResponse.self, from: Data(sample.utf8))
     try check(response.date == "2026-04-22", "arXiv feed response should decode the date")
     try check(response.papers.count == 1, "arXiv feed response should decode papers")
+    try check(response.groups?.map(\.key) == ["white", "neutral", "black"], "CodeArXiv feed should decode group summaries")
+    try check(response.filters?.tags.whitelist == ["Diffusion"], "CodeArXiv feed should decode tag whitelist")
+    try check(response.favorites?.first?.name == "Vision", "CodeArXiv feed should decode favorite folders")
+    try check(response.tagOptions == ["Diffusion", "Med", "Toolkit"], "CodeArXiv feed should decode tag options")
+    try check(response.user?.username == "caopu", "CodeArXiv feed should decode bound username")
     let paper = response.papers[0]
     try check(paper.id == "2604.18586", "arXiv paper should decode stable arxiv id")
     try check(paper.displayTitle(language: "zh") == "谁塑造了巴西的疫苗辩论？", "arXiv paper should prefer Chinese title in zh mode")
     try check(paper.displaySummary(language: "en") == "Semi-supervised stance detection over YouTube comments.", "arXiv paper should prefer English summary in en mode")
     try check(paper.assets.small?.path == "images/2026-04-22/2604.18586_small.png", "arXiv paper should decode small asset path")
+    try check(paper.similarity == 0.91, "CodeArXiv paper should decode similarity score")
+    try check(paper.filterGroup == "white", "CodeArXiv paper should decode filter group")
+    try check(paper.isFavorite == true, "CodeArXiv paper should decode favorite membership")
+
+    let stateSample = """
+    {
+      "user": {"id": 4, "username": "caopu", "language_preference": "zh"},
+      "filters": {
+        "categories": ["cs.CV"],
+        "tags": {"whitelist": ["Diffusion"], "blacklist": ["Med"]},
+        "sim_favorites": [11],
+        "last_date": "2026-04-22",
+        "last_paper_id": "2604.18586",
+        "last_position": 123
+      },
+      "favorites": [
+        {
+          "id": 11,
+          "name": "Vision",
+          "paper_ids": ["2604.18586"],
+          "papers": [],
+          "embedding": [0.1, 0.2, 0.3]
+        }
+      ],
+      "tag_options": ["Diffusion", "Med", "Toolkit"]
+    }
+    """
+    let state = try decoder.decode(CodeArxivUserState.self, from: Data(stateSample.utf8))
+    try check(state.user.username == "caopu", "CodeArXiv user state should decode username")
+    try check(state.filters.lastPosition == 123, "CodeArXiv user state should decode reading position")
+    try check(state.favorites.first?.paperIDs == ["2604.18586"], "CodeArXiv user state should decode favorite paper ids")
+    try check(state.tagOptions == ["Diffusion", "Med", "Toolkit"], "CodeArXiv user state should decode tag options")
+
+    let quickPrompt = QuickPrompt(
+        id: "qp-summary",
+        title: "Summarize",
+        content: "Summarize the main contribution."
+    )
+    let quickPromptEncoder = JSONEncoder()
+    let decodedQuickPrompt = try decoder.decode(QuickPrompt.self, from: quickPromptEncoder.encode(quickPrompt))
+    try check(decodedQuickPrompt == quickPrompt, "quick prompt should JSON round-trip")
 
     let tempRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("paper-codex-arxiv-cache-\(UUID().uuidString)", isDirectory: true)
