@@ -67,7 +67,7 @@ struct DiscoverView: View {
             )
         }
         .sheet(item: $previewPaper) { paper in
-            ArxivLargePreviewSheet(paper: paper)
+            ArxivImagePreviewSheet(paper: paper)
                 .environmentObject(model)
         }
     }
@@ -258,6 +258,9 @@ struct DiscoverView: View {
 }
 
 private struct ArxivPaperCard: View {
+    private let previewWidth: CGFloat = 420
+    private let rowHeight: CGFloat = 218
+
     var paper: ArxivFeedPaper
     var imageURL: URL?
     var inLibrary: Bool
@@ -268,74 +271,67 @@ private struct ArxivPaperCard: View {
     var onOpen: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 16) {
+        HStack(alignment: .top, spacing: 16) {
+            Button {
+                onPreview()
+            } label: {
                 ArxivPreviewImage(url: imageURL)
-                    .frame(width: 236, height: 158)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    metadataRow
-
-                    Text(paper.displayTitle(language: "zh"))
-                        .font(.system(size: 16, weight: .semibold))
-                        .lineLimit(2)
-                    Text(paper.title.en)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Text(paper.displaySummary(language: "zh"))
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-
-                    Spacer(minLength: 0)
-
-                    HStack(alignment: .center, spacing: 8) {
-                        FlowTags(tags: Array(paper.tags.prefix(5)))
-                        Spacer(minLength: 8)
-                        ResourceLinkButtons(links: paper.externalLinks, compact: true)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(width: previewWidth, height: rowHeight)
             }
+            .buttonStyle(.plain)
+            .disabled(paper.assets.large == nil && paper.assets.small == nil)
+            .help("Open image preview")
 
-            HStack(spacing: 8) {
-                Button {
-                    onPreview()
-                } label: {
-                    Label("Preview", systemImage: "magnifyingglass")
+            VStack(alignment: .leading, spacing: 10) {
+                metadataRow
+
+                Text(paper.displayTitle(language: "zh"))
+                    .font(.system(size: 16, weight: .semibold))
+                    .lineLimit(2)
+                Text(paper.title.en)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text(paper.displaySummary(language: "zh"))
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+
+                Spacer(minLength: 0)
+
+                HStack(alignment: .center, spacing: 8) {
+                    FlowTags(tags: Array(paper.tags.prefix(5)))
+                    Spacer(minLength: 8)
+                    ResourceLinkButtons(links: paper.externalLinks, compact: true)
                 }
-                .buttonStyle(.bordered)
-                .disabled(paper.assets.large == nil && paper.assets.small == nil)
-                Spacer(minLength: 8)
-                if isBusy {
-                    VStack(alignment: .trailing, spacing: 4) {
-                        ProgressView(value: downloadProgress)
-                            .frame(width: 120)
-                        Text("Downloading")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+
+                HStack(spacing: 8) {
+                    Spacer(minLength: 8)
+                    if isBusy {
+                        VStack(alignment: .trailing, spacing: 4) {
+                            ProgressView(value: downloadProgress)
+                                .frame(width: 120)
+                            Text("Downloading")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
+                    Button {
+                        onSave()
+                    } label: {
+                        Label(inLibrary ? "Saved" : "Add", systemImage: inLibrary ? "checkmark" : "plus")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(inLibrary || isBusy)
+                    StableOpenButton(isBusy: isBusy, action: onOpen)
                 }
-                Button {
-                    onSave()
-                } label: {
-                    Label(inLibrary ? "Saved" : "Add", systemImage: inLibrary ? "checkmark" : "plus")
-                }
-                .buttonStyle(.bordered)
-                .disabled(inLibrary || isBusy)
-                Button {
-                    onOpen()
-                } label: {
-                    Label("Open", systemImage: "bubble.left.and.text.bubble.right")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(isBusy)
             }
+            .frame(height: rowHeight, alignment: .top)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(minHeight: 222, alignment: .top)
+        .frame(minHeight: rowHeight + 24, alignment: .top)
         .background(Color(nsColor: .textBackgroundColor))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
@@ -395,6 +391,28 @@ private struct ArxivPaperCard: View {
     }
 }
 
+private struct StableOpenButton: View {
+    var isBusy: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label("Open", systemImage: "bubble.left.and.text.bubble.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(isBusy ? Color.gray.opacity(0.55) : Color.accentColor)
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isBusy)
+        .opacity(isBusy ? 0.65 : 1)
+        .help("Open in reader")
+    }
+}
+
 private struct ArxivPreviewImage: View {
     var url: URL?
 
@@ -420,7 +438,7 @@ private struct ArxivPreviewImage: View {
     }
 }
 
-private struct ArxivLargePreviewSheet: View {
+private struct ArxivImagePreviewSheet: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     var paper: ArxivFeedPaper
@@ -430,60 +448,21 @@ private struct ArxivLargePreviewSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(paper.displayTitle(language: "zh"))
-                        .font(.title3.weight(.semibold))
-                        .lineLimit(2)
-                    Text("\(paper.id) · \(paper.authors.prefix(4).joined(separator: ", "))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer()
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .frame(width: 18, height: 18)
-                }
-                .buttonStyle(.bordered)
-                .help("Close")
-            }
-
-            ZStack {
-                if let imageURL, let image = NSImage(contentsOf: imageURL) {
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .padding(12)
-                } else {
-                    ProgressView("Loading preview")
-                }
-            }
-            .frame(minWidth: 760, idealWidth: 900, maxWidth: .infinity, minHeight: 460, idealHeight: 560)
-            .background(Color(nsColor: .textBackgroundColor))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-
-            HStack(spacing: 8) {
-                ResourceLinkButtons(links: paper.externalLinks, compact: false)
-                Spacer()
-                Button {
-                    dismiss()
-                } label: {
-                    Label("Done", systemImage: "checkmark")
-                }
-                .buttonStyle(.borderedProminent)
+        ZStack {
+            Color(nsColor: .textBackgroundColor)
+            if let imageURL {
+                ZoomableImageScrollView(imageURL: imageURL)
+                    .padding(10)
+            } else {
+                ProgressView()
             }
         }
-        .padding(20)
+        .frame(minWidth: 880, idealWidth: 1040, minHeight: 620, idealHeight: 720)
         .task(id: paper.id) {
             await model.ensureArxivAssetCached(paper.assets.large ?? paper.assets.small)
+        }
+        .onExitCommand {
+            dismiss()
         }
     }
 }
