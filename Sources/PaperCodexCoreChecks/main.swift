@@ -1518,6 +1518,55 @@ func runArxivFeedChecks() throws {
     try check(!FileManager.default.fileExists(atPath: oldCachedPath), "promoted arXiv PDF should be moved out of disposable cache")
 }
 
+func runLocalDiscoverEngineChecks() throws {
+    let range = try DiscoverDateRange(start: "2026-04-27", end: "2026-04-29")
+    try check(range.dates == ["2026-04-27", "2026-04-28", "2026-04-29"], "discover date range should expand inclusive dates")
+
+    let queryA = DiscoverQuery(
+        keyword: "diffusion policy",
+        dateRange: range,
+        categories: ["cs.CV", "cs.AI"],
+        similaritySourceIDs: ["tag-robot", "cat-vision"],
+        rankingVersion: "rank-v1"
+    )
+    let queryB = DiscoverQuery(
+        keyword: "  diffusion   policy ",
+        dateRange: range,
+        categories: ["cs.AI", "cs.CV", "cs.AI"],
+        similaritySourceIDs: ["cat-vision", "tag-robot", "tag-robot"],
+        rankingVersion: "rank-v1"
+    )
+    try check(queryA.normalized == queryB.normalized, "discover query normalization should ignore whitespace and duplicate order")
+    try check(queryA.cacheKey == queryB.cacheKey, "discover query cache key should be stable for equivalent queries")
+
+    let enrichment = DiscoverPaperEnrichment(
+        arxivID: "2604.18803",
+        processorVersion: DiscoverPaperEnrichment.currentProcessorVersion,
+        promptVersion: DiscoverPaperEnrichment.currentPromptVersion,
+        modelIdentity: "codex",
+        titleZH: "本地论文阅读器",
+        summaryZH: "提出一个本地优先的论文发现和阅读流程。",
+        contribution: "把 arXiv 检索、缓存和阅读工作流连接起来。",
+        tags: ["paper-reader", "local-first"],
+        links: ["github": "https://github.com/example/paper-reader"],
+        generatedAt: Date(timeIntervalSince1970: 1_777_300_000),
+        error: nil
+    )
+    try check(enrichment.isCurrent, "fresh enrichment should be current")
+
+    let tempRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("paper-codex-discover-engine-\(UUID().uuidString)", isDirectory: true)
+    let cache = LocalDiscoverCache(root: tempRoot)
+    try cache.saveQueryResult(
+        DiscoverQueryResult(query: queryA.normalized, arxivIDs: ["2604.18803"], generatedAt: enrichment.generatedAt)
+    )
+    try cache.saveEnrichment(enrichment)
+    let cachedQuery = try cache.loadQueryResult(cacheKey: queryA.cacheKey)
+    let cachedEnrichment = try cache.loadEnrichment(arxivID: "2604.18803")
+    try check(cachedQuery?.arxivIDs == ["2604.18803"], "discover query cache should round-trip ordered ids")
+    try check(cachedEnrichment?.titleZH == "本地论文阅读器", "discover enrichment cache should round-trip processed metadata")
+}
+
 func runLocalArxivClientChecks() throws {
     let listHTML = """
     <html><body>
@@ -1992,6 +2041,10 @@ do {
     if selectedChecks.isEmpty || selectedChecks.contains("local-arxiv-client") {
         try runLocalArxivClientChecks()
         print("local-arxiv-client: pass")
+    }
+    if selectedChecks.isEmpty || selectedChecks.contains("local-discover-engine") {
+        try runLocalDiscoverEngineChecks()
+        print("local-discover-engine: pass")
     }
     if selectedChecks.isEmpty || selectedChecks.contains("local-discover-preferences") {
         try runLocalDiscoverPreferenceChecks()
