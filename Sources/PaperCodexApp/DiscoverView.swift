@@ -4,9 +4,12 @@ import SwiftUI
 
 struct DiscoverView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var searchText = ""
     @State private var selectedCategory: String?
     @State private var selectedTag: String?
+    @State private var selectedProcessingFilter: DiscoverProcessingFilter = .all
+    @State private var selectedLibraryFilter: DiscoverLibraryFilter = .all
+    @State private var requiresProjectLink = false
+    @State private var selectedSimilarityBucket: DiscoverSimilarityBucket = .all
     @State private var paperPendingSave: ArxivFeedPaper?
     @State private var previewPaper: ArxivFeedPaper?
 
@@ -18,17 +21,31 @@ struct DiscoverView: View {
             }
         }
         if let selectedTag {
-            result = result.filter { $0.tags.contains(selectedTag) }
+            result = result.filter { tags(for: $0).contains(selectedTag) }
         }
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !query.isEmpty {
-            result = result.filter { paper in
-                paper.displayTitle(language: "zh").localizedCaseInsensitiveContains(query)
-                    || paper.displayTitle(language: "en").localizedCaseInsensitiveContains(query)
-                    || paper.authors.joined(separator: " ").localizedCaseInsensitiveContains(query)
-                    || paper.tags.joined(separator: " ").localizedCaseInsensitiveContains(query)
-                    || paper.id.localizedCaseInsensitiveContains(query)
-            }
+        switch selectedProcessingFilter {
+        case .all:
+            break
+        case .processed:
+            result = result.filter { model.discoverEnrichment(for: $0)?.error == nil && model.discoverEnrichment(for: $0)?.isCurrent == true }
+        case .unprocessed:
+            result = result.filter { model.discoverEnrichment(for: $0) == nil }
+        case .failed:
+            result = result.filter { model.discoverEnrichment(for: $0)?.error != nil }
+        }
+        switch selectedLibraryFilter {
+        case .all:
+            break
+        case .newOnly:
+            result = result.filter { model.libraryPaper(for: $0) == nil }
+        case .inLibrary:
+            result = result.filter { model.libraryPaper(for: $0) != nil }
+        }
+        if requiresProjectLink {
+            result = result.filter { $0.links.github != nil || $0.links.project != nil || $0.links.huggingFace != nil || !(model.discoverEnrichment(for: $0)?.links.isEmpty ?? true) }
+        }
+        if selectedSimilarityBucket != .all {
+            result = result.filter { selectedSimilarityBucket.contains($0.similarity) }
         }
         return result
     }
@@ -51,7 +68,31 @@ struct DiscoverView: View {
     }
 
     private var tagCounts: [String: Int] {
-        Dictionary((model.arxivFeed?.papers ?? []).flatMap(\.tags).map { ($0, 1) }, uniquingKeysWith: +)
+        Dictionary((model.arxivFeed?.papers ?? []).flatMap { tags(for: $0) }.map { ($0, 1) }, uniquingKeysWith: +)
+    }
+
+    private var commonCategories: [String] {
+        ["cs.CV", "cs.CL", "cs.AI", "cs.LG", "cs.RO", "stat.ML", "cs.HC", "cs.IR", "cs.SE"]
+    }
+
+    private func tags(for paper: ArxivFeedPaper) -> [String] {
+        let generated = model.discoverEnrichment(for: paper)?.tags ?? []
+        let combined = generated + paper.tags + Array(paper.categories.prefix(2))
+        var seen: Set<String> = []
+        var result: [String] = []
+        for tag in combined {
+            let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                continue
+            }
+            let key = trimmed.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            guard !seen.contains(key) else {
+                continue
+            }
+            seen.insert(key)
+            result.append(trimmed)
+        }
+        return result
     }
 
     var body: some View {
@@ -93,11 +134,11 @@ struct DiscoverView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
-            guard model.arxivFeed == nil, !model.isLoadingArxivFeed else {
+            guard model.arxivFeed == nil, !model.isSearchingDiscover else {
                 return
             }
             Task {
-                await model.refreshArxivDatesAndFeed()
+                await model.searchDiscover()
             }
         }
     }
@@ -139,6 +180,45 @@ struct DiscoverView: View {
                     Divider()
 
                     VStack(alignment: .leading, spacing: 8) {
+                        Label("Status", systemImage: "checklist")
+                            .font(.headline)
+                        ForEach(DiscoverProcessingFilter.allCases) { filter in
+                            filterButton(title: filter.title, selected: selectedProcessingFilter == filter) {
+                                selectedProcessingFilter = filter
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Library", systemImage: "books.vertical")
+                            .font(.headline)
+                        ForEach(DiscoverLibraryFilter.allCases) { filter in
+                            filterButton(title: filter.title, selected: selectedLibraryFilter == filter) {
+                                selectedLibraryFilter = filter
+                            }
+                        }
+                        filterButton(title: "Has Code / Project", selected: requiresProjectLink) {
+                            requiresProjectLink.toggle()
+                        }
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Similarity", systemImage: "point.3.connected.trianglepath.dotted")
+                            .font(.headline)
+                        ForEach(DiscoverSimilarityBucket.allCases) { bucket in
+                            filterButton(title: bucket.title, selected: selectedSimilarityBucket == bucket) {
+                                selectedSimilarityBucket = bucket
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 8) {
                         Label("Tags", systemImage: "tag")
                             .font(.headline)
                         filterButton(
@@ -171,7 +251,7 @@ struct DiscoverView: View {
         VStack(alignment: .leading, spacing: 14) {
             toolbar
 
-            if model.isLoadingArxivFeed && model.arxivFeed == nil {
+            if model.isSearchingDiscover && model.arxivFeed == nil {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if papers.isEmpty {
@@ -188,6 +268,7 @@ struct DiscoverView: View {
                             ForEach(papers) { paper in
                                 ArxivPaperCard(
                                     paper: paper,
+                                    enrichment: model.discoverEnrichment(for: paper),
                                     imageURL: model.cachedArxivAssetURL(for: paper.assets.small),
                                     inLibrary: model.libraryPaper(for: paper) != nil,
                                     isBusy: model.isDownloadingArxivPaper(paper),
@@ -234,9 +315,9 @@ struct DiscoverView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Daily arXiv")
+                    Text("Discover")
                         .font(.system(size: 28, weight: .semibold))
-                    Text("\(model.arxivFeed?.count ?? 0) papers · \(model.selectedArxivDate ?? "No date")")
+                    Text("\(papers.count) visible · \(model.arxivFeed?.count ?? 0) found · \(model.selectedArxivDate ?? "\(model.discoverStartDate)...\(model.discoverEndDate)")")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -244,41 +325,60 @@ struct DiscoverView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                TextField("Search title, author, tag, arXiv ID", text: $searchText)
+                TextField("Keyword, method, author, arXiv ID", text: $model.discoverKeyword)
                     .textFieldStyle(.roundedBorder)
                     .layoutPriority(-1)
+                    .onSubmit {
+                        Task {
+                            await model.searchDiscover()
+                        }
+                    }
 
-                HStack(spacing: 8) {
-                    DateMenuButton()
-                        .environmentObject(model)
-
+                HStack(alignment: .center, spacing: 8) {
                     ArxivSourceBadge()
 
-                    ToolbarActionButton(title: "Refresh", systemImage: "arrow.clockwise", tint: .blue) {
+                    DateRangeFields(start: $model.discoverStartDate, end: $model.discoverEndDate)
+
+                    QuickRangeButtons { range in
+                        model.applyDiscoverQuickRange(range)
+                    }
+
+                    DiscoverCategoryMenu(
+                        categories: commonCategories,
+                        selected: model.discoverSelectedCategories.first ?? "cs.CV"
+                    ) { category in
+                        model.discoverSelectedCategories = [category]
+                    }
+
+                    SimilaritySourceMenu()
+                        .environmentObject(model)
+
+                    ToolbarActionButton(
+                        title: model.isSearchingDiscover ? "Searching" : "Search",
+                        systemImage: "magnifyingglass",
+                        tint: .blue,
+                        disabled: model.isSearchingDiscover || model.isProcessingDiscoverResults
+                    ) {
                         Task {
-                            await model.refreshArxivDatesAndFeed()
+                            await model.searchDiscover()
                         }
                     }
 
-                    ToolbarActionButton(
-                        title: model.isPreloadingArxivAssets ? "Loading" : "Thumbs",
-                        systemImage: "photo.on.rectangle.angled",
-                        tint: .teal,
-                        disabled: model.arxivFeed == nil || model.isPreloadingArxivAssets
-                    ) {
-                        Task {
-                            await model.preloadArxivAssets(includeLarge: false)
+                    if model.isProcessingDiscoverResults {
+                        ToolbarActionButton(title: "Cancel", systemImage: "xmark.circle", tint: .red) {
+                            model.cancelDiscoverProcessing()
                         }
-                    }
-
-                    ToolbarActionButton(
-                        title: "Full Images",
-                        systemImage: "photo.stack",
-                        tint: .indigo,
-                        disabled: model.arxivFeed == nil || model.isPreloadingArxivAssets
-                    ) {
-                        Task {
-                            await model.preloadArxivAssets(includeLarge: true)
+                    } else {
+                        ToolbarActionButton(
+                            title: "Process Results",
+                            systemImage: "sparkles",
+                            tint: .indigo,
+                            disabled: papers.isEmpty || model.isSearchingDiscover
+                        ) {
+                            let visible = papers
+                            Task {
+                                await model.processCurrentDiscoverResults(visible)
+                            }
                         }
                     }
 
@@ -286,6 +386,9 @@ struct DiscoverView: View {
                 }
 
                 if let progress = model.arxivCacheProgress {
+                    ArxivCacheProgressStrip(progress: progress)
+                }
+                if let progress = model.discoverProcessingProgress {
                     ArxivCacheProgressStrip(progress: progress)
                 }
             }
@@ -298,6 +401,87 @@ struct DiscoverView: View {
 
     private func filterButton(title: String, detail: String? = nil, selected: Bool, action: @escaping () -> Void) -> some View {
         SidebarFilterButton(title: title, detail: detail, selected: selected, action: action)
+    }
+}
+
+private enum DiscoverProcessingFilter: String, CaseIterable, Identifiable {
+    case all
+    case processed
+    case unprocessed
+    case failed
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all:
+            "All"
+        case .processed:
+            "Processed"
+        case .unprocessed:
+            "Unprocessed"
+        case .failed:
+            "Failed"
+        }
+    }
+}
+
+private enum DiscoverLibraryFilter: String, CaseIterable, Identifiable {
+    case all
+    case newOnly
+    case inLibrary
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all:
+            "All Papers"
+        case .newOnly:
+            "New Only"
+        case .inLibrary:
+            "In Library"
+        }
+    }
+}
+
+private enum DiscoverSimilarityBucket: String, CaseIterable, Identifiable {
+    case all
+    case high
+    case medium
+    case low
+    case none
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all:
+            "All Scores"
+        case .high:
+            "High"
+        case .medium:
+            "Medium"
+        case .low:
+            "Low"
+        case .none:
+            "No Similarity"
+        }
+    }
+
+    func contains(_ value: Double?) -> Bool {
+        switch self {
+        case .all:
+            true
+        case .high:
+            (value ?? 0) >= 0.78
+        case .medium:
+            (value ?? 0) >= 0.62 && (value ?? 0) < 0.78
+        case .low:
+            value != nil && (value ?? 0) < 0.62
+        case .none:
+            value == nil
+        }
     }
 }
 
@@ -411,6 +595,148 @@ private struct ToolbarActionButton: View {
     }
 }
 
+private struct DateRangeFields: View {
+    @Binding var start: String
+    @Binding var end: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "calendar")
+                .foregroundStyle(.secondary)
+            TextField("Start", text: $start)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12.5, weight: .medium).monospacedDigit())
+                .frame(width: 104)
+            Text("to")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField("End", text: $end)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12.5, weight: .medium).monospacedDigit())
+                .frame(width: 104)
+        }
+        .help("arXiv date range")
+    }
+}
+
+private struct QuickRangeButtons: View {
+    var onSelect: (DiscoverQuickRange) -> Void
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach([DiscoverQuickRange.thisWeek, .thisMonth, .last7Days, .last30Days]) { range in
+                Button(range.title) {
+                    onSelect(range)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help(range.title)
+            }
+        }
+    }
+}
+
+private struct DiscoverCategoryMenu: View {
+    var categories: [String]
+    var selected: String
+    var onSelect: (String) -> Void
+
+    var body: some View {
+        Menu {
+            ForEach(categories, id: \.self) { category in
+                Button {
+                    onSelect(category)
+                } label: {
+                    if category == selected {
+                        Label(category, systemImage: "checkmark")
+                    } else {
+                        Text(category)
+                    }
+                }
+            }
+        } label: {
+            Label(selected, systemImage: "tray.full")
+                .font(.system(size: 12.5, weight: .semibold))
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Primary arXiv category")
+    }
+}
+
+private struct SimilaritySourceMenu: View {
+    @EnvironmentObject private var model: AppModel
+
+    private var selectedTitle: String {
+        guard let first = model.discoverSelectedSimilaritySourceIDs.first else {
+            return "Similarity"
+        }
+        if let tag = model.tags.first(where: { "tag:\($0.id)" == first }) {
+            return tag.name
+        }
+        if let category = model.categories.first(where: { "category:\($0.id)" == first }) {
+            return category.name
+        }
+        return "\(model.discoverSelectedSimilaritySourceIDs.count) sources"
+    }
+
+    var body: some View {
+        Menu {
+            Button {
+                model.discoverSelectedSimilaritySourceIDs = []
+            } label: {
+                if model.discoverSelectedSimilaritySourceIDs.isEmpty {
+                    Label("None", systemImage: "checkmark")
+                } else {
+                    Text("None")
+                }
+            }
+            if !model.tags.isEmpty {
+                Divider()
+                Section("Tags") {
+                    ForEach(model.tags) { tag in
+                        Button {
+                            model.discoverSelectedSimilaritySourceIDs = ["tag:\(tag.id)"]
+                        } label: {
+                            if model.discoverSelectedSimilaritySourceIDs == ["tag:\(tag.id)"] {
+                                Label(tag.name, systemImage: "checkmark")
+                            } else {
+                                Text(tag.name)
+                            }
+                        }
+                    }
+                }
+            }
+            if !model.categories.isEmpty {
+                Divider()
+                Section("Folders") {
+                    ForEach(model.categories) { category in
+                        Button {
+                            model.discoverSelectedSimilaritySourceIDs = ["category:\(category.id)"]
+                        } label: {
+                            if model.discoverSelectedSimilaritySourceIDs == ["category:\(category.id)"] {
+                                Label(category.name, systemImage: "checkmark")
+                            } else {
+                                Text(category.name)
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            Label(selectedTitle, systemImage: "point.3.connected.trianglepath.dotted")
+                .font(.system(size: 12.5, weight: .semibold))
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Similarity source")
+    }
+}
+
 private struct DateMenuButton: View {
     @EnvironmentObject private var model: AppModel
     @State private var isHovering = false
@@ -520,6 +846,7 @@ private struct ArxivPaperCard: View {
     @State private var isHovering = false
 
     var paper: ArxivFeedPaper
+    var enrichment: DiscoverPaperEnrichment?
     var imageURL: URL?
     var inLibrary: Bool
     var isBusy: Bool
@@ -530,35 +857,53 @@ private struct ArxivPaperCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Button {
-                onPreview()
-            } label: {
-                ArxivPreviewImage(url: imageURL)
-                    .frame(maxWidth: .infinity)
+            if imageURL != nil {
+                Button {
+                    onPreview()
+                } label: {
+                    ArxivPreviewImage(url: imageURL)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+                .disabled(paper.assets.large == nil && paper.assets.small == nil)
+                .help("Open image preview")
             }
-            .buttonStyle(.plain)
-            .disabled(paper.assets.large == nil && paper.assets.small == nil)
-            .help("Open image preview")
 
             VStack(alignment: .leading, spacing: 10) {
                 metadataRow
 
-                Text(paper.displayTitle(language: "zh"))
+                Text(primaryTitle)
                     .font(.system(size: 16, weight: .semibold))
                     .fixedSize(horizontal: false, vertical: true)
-                Text(paper.title.en)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(paper.displaySummary(language: "zh"))
+                if secondaryTitle != primaryTitle {
+                    Text(secondaryTitle)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text(summaryText)
                     .font(.system(size: 13.5))
                     .foregroundStyle(.secondary)
+                    .lineLimit(5)
                     .fixedSize(horizontal: false, vertical: true)
+                if let contribution = enrichment?.contribution,
+                   !contribution.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(contribution)
+                        .font(.system(size: 13.5, weight: .medium))
+                        .foregroundStyle(Color.accentColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let error = enrichment?.error, !error.isEmpty {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(Color(nsColor: .systemRed))
+                        .lineLimit(3)
+                }
 
-                FlowTags(tags: Array(paper.tags.prefix(5)))
+                FlowTags(tags: Array(displayTags.prefix(7)))
 
                 HStack(alignment: .bottom, spacing: 8) {
-                    ResourceLinkButtons(links: paper.externalLinks, compact: true)
+                    ResourceLinkButtons(links: resourceLinks, compact: true)
                         .layoutPriority(0)
                     Spacer(minLength: 10)
                     if isBusy {
@@ -604,6 +949,7 @@ private struct ArxivPaperCard: View {
                     background: Color.teal.opacity(0.12)
                 )
                 ArxivIDPill(id: paper.id)
+                ProcessingStatePill(enrichment: enrichment)
             }
             .layoutPriority(1)
 
@@ -614,6 +960,69 @@ private struct ArxivPaperCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var primaryTitle: String {
+        if let title = enrichment?.titleZH.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            return title
+        }
+        return paper.title.en
+    }
+
+    private var secondaryTitle: String {
+        paper.title.en
+    }
+
+    private var summaryText: String {
+        if let summary = enrichment?.summaryZH.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+            return summary
+        }
+        if !paper.summary.zh.isEmpty {
+            return paper.summary.zh
+        }
+        if !paper.summary.en.isEmpty {
+            return paper.summary.en
+        }
+        return paper.abstract.en
+    }
+
+    private var displayTags: [String] {
+        let generated = enrichment?.tags ?? []
+        let fallback = paper.tags.isEmpty ? paper.categories : paper.tags
+        var seen: Set<String> = []
+        var result: [String] = []
+        for tag in generated + fallback {
+            let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                continue
+            }
+            let key = trimmed.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            guard !seen.contains(key) else {
+                continue
+            }
+            seen.insert(key)
+            result.append(trimmed)
+        }
+        return result
+    }
+
+    private var resourceLinks: [PaperResourceLink] {
+        var result = paper.externalLinks
+        func append(id: String, title: String, systemImage: String, key: String) {
+            guard let value = enrichment?.links[key] else {
+                return
+            }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty,
+                  !result.contains(where: { $0.urlString.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) else {
+                return
+            }
+            result.append(PaperResourceLink(id: id, title: title, systemImage: systemImage, urlString: trimmed))
+        }
+        append(id: "github-enriched", title: "GitHub", systemImage: "chevron.left.forwardslash.chevron.right", key: "github")
+        append(id: "project-enriched", title: "Project", systemImage: "globe", key: "project")
+        append(id: "hf-enriched", title: "HF", systemImage: "shippingbox", key: "hugging_face")
+        return result
     }
 }
 
@@ -648,6 +1057,42 @@ private struct ArxivIDPill: View {
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.72))
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .help("arXiv ID")
+    }
+}
+
+private struct ProcessingStatePill: View {
+    var enrichment: DiscoverPaperEnrichment?
+
+    private var title: String {
+        if enrichment == nil {
+            return "Raw"
+        }
+        if enrichment?.error != nil {
+            return "Failed"
+        }
+        return "Processed"
+    }
+
+    private var color: Color {
+        if enrichment == nil {
+            return .secondary
+        }
+        if enrichment?.error != nil {
+            return Color(nsColor: .systemRed)
+        }
+        return Color(nsColor: .systemGreen)
+    }
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 11.5, weight: .semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 7)
+            .frame(height: 23)
+            .foregroundStyle(color)
+            .background(color.opacity(0.11))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .help(title == "Raw" ? "Unprocessed arXiv metadata" : title)
     }
 }
 
