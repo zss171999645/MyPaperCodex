@@ -1153,6 +1153,24 @@ func runCodexCLIChecks() throws {
     try check(overrideDiagnostic.severity == .ready, "app-local model override should bypass the incompatible default model")
     try check(overrideDiagnostic.detail.contains("gpt-5.4"), "override diagnostic should name the selected model")
     try check(CodexCLI.configuredModelIssue(configText: #"model = "gpt-5.4""#, cliVersion: "0.114.0") == nil, "other configured models should not be blocked by the gpt-5.5 compatibility rule")
+
+    let detectedModels = CodexCLI.availableModelIDs(
+        cliVersion: "0.120.0",
+        embeddedText: "gpt-5.4 gpt-5.3-codex gpt-5.1-codex-mini gpt-5-4 gpt-account-id gptAuthTokens gpt.com",
+        configText: #"model = "gpt-5.2""#
+    )
+    try check(detectedModels.contains("gpt-5.4"), "Codex model detector should include embedded GPT models")
+    try check(detectedModels.contains("gpt-5.1-codex-mini"), "Codex model detector should include embedded Codex model variants")
+    try check(detectedModels.contains("gpt-5.2"), "Codex model detector should include the configured model")
+    try check(!detectedModels.contains("gpt-account-id"), "Codex model detector should filter telemetry strings")
+    try check(!detectedModels.contains("gptAuthTokens"), "Codex model detector should filter auth implementation strings")
+    try check(!detectedModels.contains("gpt-5-4"), "Codex model detector should filter hyphenated version noise")
+    let oldVersionModels = CodexCLI.availableModelIDs(
+        cliVersion: "0.114.0",
+        embeddedText: "gpt-5.5 gpt-5.4",
+        configText: nil
+    )
+    try check(!oldVersionModels.contains("gpt-5.5"), "Codex model detector should filter models blocked by the current CLI version")
 }
 
 func runGeneratedImageChecks() throws {

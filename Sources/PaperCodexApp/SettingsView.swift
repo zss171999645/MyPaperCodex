@@ -9,6 +9,8 @@ struct SettingsView: View {
     @State private var draftSimilaritySources = ""
     @State private var draftAutoEnrichOnOpen = false
     @State private var draftAutoEnrichOnSave = false
+    @State private var draftDiscoverCodexModel = ""
+    @State private var draftDiscoverCodexConcurrency = 10
     @State private var draftEmbeddingEnabled = false
     @State private var draftEmbeddingBaseURL = ""
     @State private var draftEmbeddingAPIKey = ""
@@ -26,6 +28,7 @@ struct SettingsView: View {
                     arxivFeedSettings
                     localRankingSettings
                     codexEnrichmentSettings
+                    discoverCodexProcessingSettings
                     embeddingProviderSettings
                     quickPromptSettings
                     storageRules
@@ -38,6 +41,9 @@ struct SettingsView: View {
         }
         .onAppear {
             syncLocalDrafts()
+            Task {
+                await model.refreshAvailableCodexModels()
+            }
         }
         .onChange(of: model.localDiscoverPreferences) { _, _ in
             syncLocalDrafts()
@@ -153,6 +159,59 @@ struct SettingsView: View {
                 Label("Save Enrichment", systemImage: "checkmark")
             }
             .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private var discoverCodexProcessingSettings: some View {
+        settingsSection(title: "Discover Processing", systemImage: "cpu") {
+            Picker("Model", selection: $draftDiscoverCodexModel) {
+                Text("Codex default").tag("")
+                ForEach(model.availableCodexModelIDs, id: \.self) { modelID in
+                    Text(modelID).tag(modelID)
+                }
+                if !draftDiscoverCodexModel.isEmpty,
+                   !model.availableCodexModelIDs.contains(draftDiscoverCodexModel) {
+                    Text("\(draftDiscoverCodexModel) (custom)").tag(draftDiscoverCodexModel)
+                }
+            }
+            .pickerStyle(.menu)
+
+            TextField("Custom model override", text: $draftDiscoverCodexModel)
+                .textFieldStyle(.roundedBorder)
+
+            Stepper(
+                "Concurrent Codex processes: \(draftDiscoverCodexConcurrency)",
+                value: $draftDiscoverCodexConcurrency,
+                in: 1...20
+            )
+
+            HStack {
+                Button {
+                    model.setDiscoverCodexSettings(
+                        modelOverride: draftDiscoverCodexModel,
+                        concurrency: draftDiscoverCodexConcurrency
+                    )
+                } label: {
+                    Label("Save Processing", systemImage: "checkmark")
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button {
+                    Task {
+                        await model.refreshAvailableCodexModels()
+                    }
+                } label: {
+                    Label(model.isRefreshingCodexModels ? "Refreshing" : "Refresh Models", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.isRefreshingCodexModels)
+
+                Spacer()
+
+                Text("\(model.discoverCodexConcurrency) workers")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -311,6 +370,8 @@ struct SettingsView: View {
         draftSimilaritySources = preferences.similaritySourceTagIDs.joined(separator: ", ")
         draftAutoEnrichOnOpen = preferences.enrichment.autoEnrichOnOpen
         draftAutoEnrichOnSave = preferences.enrichment.autoEnrichOnSave
+        draftDiscoverCodexModel = model.discoverCodexModelOverride
+        draftDiscoverCodexConcurrency = model.discoverCodexConcurrency
         draftEmbeddingEnabled = preferences.embedding.enabled
         draftEmbeddingBaseURL = preferences.embedding.baseURL
         draftEmbeddingModel = preferences.embedding.model

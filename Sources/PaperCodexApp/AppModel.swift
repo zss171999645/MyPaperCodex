@@ -69,6 +69,18 @@ struct ArxivCacheProgress: Equatable {
     }
 }
 
+private enum DiscoverPaperProcessingState: Sendable {
+    case processed
+    case cached
+    case failed
+    case cancelled
+}
+
+private struct DiscoverPaperProcessingResult: Sendable {
+    var paperID: String
+    var state: DiscoverPaperProcessingState
+}
+
 private struct SessionPaperContext {
     var papers: [Paper]
     var pagesByPaperID: [String: [PageIndex]]
@@ -82,12 +94,20 @@ private struct SessionPaperContext {
 
 private let codexModelOverrideDefaultsKey = "PaperCodexCodexModelOverride"
 private let codexReasoningEffortDefaultsKey = "PaperCodexCodexReasoningEffort"
+private let discoverCodexModelOverrideDefaultsKey = "PaperCodexDiscoverCodexModelOverride"
+private let discoverCodexConcurrencyDefaultsKey = "PaperCodexDiscoverCodexConcurrency"
 private let localDiscoverPreferencesDefaultsKey = "PaperCodexLocalDiscoverPreferences"
 private let embeddingProviderAPIKeyService = "PaperCodexEmbeddingProvider"
 private let embeddingProviderAPIKeyAccount = "default"
 private let arxivSaveOrganizationDefaultsKey = "PaperCodexArxivSaveOrganization"
 private let quickPromptsDefaultsKey = "PaperCodexQuickPrompts"
 private let librarySidebarWidthDefaultsKey = "PaperCodexLibrarySidebarWidth"
+private let defaultDiscoverCodexConcurrency = 10
+
+private func loadDiscoverCodexConcurrencyFromDefaults() -> Int {
+    let stored = UserDefaults.standard.integer(forKey: discoverCodexConcurrencyDefaultsKey)
+    return stored == 0 ? defaultDiscoverCodexConcurrency : min(max(stored, 1), 20)
+}
 
 private func loadQuickPromptsFromDefaults() -> [QuickPrompt] {
     guard let data = UserDefaults.standard.data(forKey: quickPromptsDefaultsKey),
@@ -215,6 +235,10 @@ final class AppModel: ObservableObject {
     @Published var activeCodexRun: ActiveCodexRun?
     @Published var errorMessage: String?
     @Published var isSending = false
+    @Published var discoverCodexModelOverride: String = UserDefaults.standard.string(forKey: discoverCodexModelOverrideDefaultsKey) ?? ""
+    @Published var discoverCodexConcurrency: Int = loadDiscoverCodexConcurrencyFromDefaults()
+    @Published var availableCodexModelIDs: [String] = []
+    @Published var isRefreshingCodexModels = false
     @Published var isScanningWatchedFolders = false
     @Published var localDiscoverPreferences: LocalDiscoverPreferences = loadLocalDiscoverPreferencesFromDefaults()
     @Published var embeddingProviderAPIKey: String = loadEmbeddingProviderAPIKeyFromKeychain()
@@ -235,6 +259,7 @@ final class AppModel: ObservableObject {
     @Published var discoverResultIDs: [String] = []
     @Published var discoverEnrichmentsByID: [String: DiscoverPaperEnrichment] = [:]
     @Published var isSearchingDiscover = false
+    @Published var isCancellingDiscoverSearch = false
     @Published var isProcessingDiscoverResults = false
     @Published var discoverProcessingProgress: ArxivCacheProgress?
     @Published var arxivAssetURLs: [String: URL] = [:]
@@ -258,8 +283,9 @@ final class AppModel: ObservableObject {
     private let thumbnailCache: PDFThumbnailCache
     private let workspaceManager = SessionWorkspaceManager()
     private var watchedFolderAutoScanTask: Task<Void, Never>?
+    private var activeDiscoverSearchTask: Task<Void, Never>?
     private var activeCodexRunHandle: CodexRunHandle?
-    private var activeDiscoverCodexRunHandle: CodexRunHandle?
+    private var activeDiscoverCodexRunHandles: [CodexRunHandle] = []
     private var isCancellingCodexRun = false
     private var isCancellingDiscoverProcessing = false
 
@@ -288,6 +314,7 @@ final class AppModel: ObservableObject {
             Task {
                 scanWatchedFolders()
                 await refreshCodexDiagnostic()
+                await refreshAvailableCodexModels()
             }
             startWatchedFolderAutoScan()
         } catch {
@@ -471,6 +498,19 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func setDiscoverCodexSettings(modelOverride: String, concurrency: Int) {
+        let trimmedModel = modelOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+        discoverCodexModelOverride = trimmedModel
+        discoverCodexConcurrency = min(max(concurrency, 1), 20)
+        if trimmedModel.isEmpty {
+            UserDefaults.standard.removeObject(forKey: discoverCodexModelOverrideDefaultsKey)
+        } else {
+            UserDefaults.standard.set(trimmedModel, forKey: discoverCodexModelOverrideDefaultsKey)
+        }
+        UserDefaults.standard.set(discoverCodexConcurrency, forKey: discoverCodexConcurrencyDefaultsKey)
+        mergeAvailableCodexModelIDs([trimmedModel])
+    }
+
     func setArxivSaveOrganization(_ organization: ArxivSaveOrganization) {
         arxivSaveOrganization = organization
         UserDefaults.standard.set(organization.rawValue, forKey: arxivSaveOrganizationDefaultsKey)
@@ -520,11 +560,30 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func startDiscoverSearch() {
+        guard activeDiscoverSearchTask == nil, !isSearchingDiscover else {
+            return
+        }
+        activeDiscoverSearchTask = Task { [weak self] in
+            await self?.searchDiscover()
+            await MainActor.run {
+                self?.activeDiscoverSearchTask = nil
+            }
+        }
+    }
+
+    func cancelDiscoverSearch() {
+        isCancellingDiscoverSearch = true
+        activeDiscoverSearchTask?.cancel()
+    }
+
     func searchDiscover() async {
         do {
             isSearchingDiscover = true
+            isCancellingDiscoverSearch = false
             defer {
                 isSearchingDiscover = false
+                isCancellingDiscoverSearch = false
             }
 
             let range = try DiscoverDateRange(start: discoverStartDate, end: discoverEndDate)
@@ -557,7 +616,9 @@ final class AppModel: ObservableObject {
             let filteredFeed = filterDiscoverFeed(rankedFeed, keyword: query.keyword)
             try displayDiscoverFeed(filteredFeed, query: query, progressTitle: "Search results cached", cacheRangeFeed: false)
         } catch {
-            if (try? loadCachedDiscoverSearch()) == true {
+            if isCancellationError(error) || isCancellingDiscoverSearch || Task.isCancelled {
+                arxivCacheProgress = nil
+            } else if (try? loadCachedDiscoverSearch()) == true {
                 errorMessage = "Using cached Discover results. Search failed: \(error)"
             } else {
                 errorMessage = String(describing: error)
@@ -574,7 +635,8 @@ final class AppModel: ObservableObject {
         defer {
             isProcessingDiscoverResults = false
             isCancellingDiscoverProcessing = false
-            activeDiscoverCodexRunHandle = nil
+            activeDiscoverCodexRunHandles.removeAll()
+            discoverProcessingProgress = nil
         }
 
         let visiblePapers = papers
@@ -590,53 +652,97 @@ final class AppModel: ObservableObject {
             total: total
         )
 
-        for paper in visiblePapers {
-            if isCancellingDiscoverProcessing || Task.isCancelled {
-                break
-            }
-            if let existing = try? localDiscoverCache.loadEnrichment(arxivID: paper.id),
-               existing.isCurrent {
-                discoverEnrichmentsByID[paper.id] = existing
-                completed += 1
-                cached += 1
-                updateDiscoverProcessingProgress(completed: completed, cached: cached, failed: failed, total: total)
-                continue
-            }
+        let workerCount = min(max(discoverCodexConcurrency, 1), max(total, 1))
+        var nextIndex = 0
 
-            do {
-                let enrichment = try await runDiscoverCodexEnrichment(for: paper)
-                try localDiscoverCache.saveEnrichment(enrichment)
-                discoverEnrichmentsByID[paper.id] = enrichment
-            } catch {
-                if isCancellingDiscoverProcessing || Task.isCancelled {
+        await withTaskGroup(of: DiscoverPaperProcessingResult.self) { group in
+            for _ in 0..<workerCount {
+                guard nextIndex < visiblePapers.count else {
                     break
                 }
-                let failedEnrichment = DiscoverPaperEnrichment(
-                    arxivID: paper.id,
-                    processorVersion: DiscoverPaperEnrichment.currentProcessorVersion,
-                    promptVersion: DiscoverPaperEnrichment.currentPromptVersion,
-                    modelIdentity: "codex",
-                    titleZH: "",
-                    summaryZH: "",
-                    contribution: "",
-                    tags: [],
-                    links: [:],
-                    generatedAt: Date(),
-                    error: String(describing: error)
-                )
-                try? localDiscoverCache.saveEnrichment(failedEnrichment)
-                discoverEnrichmentsByID[paper.id] = failedEnrichment
-                failed += 1
+                let paper = visiblePapers[nextIndex]
+                nextIndex += 1
+                group.addTask {
+                    await self.processDiscoverPaperForEnrichment(paper)
+                }
             }
 
-            completed += 1
-            updateDiscoverProcessingProgress(completed: completed, cached: cached, failed: failed, total: total)
+            while let result = await group.next() {
+                if result.state == .cancelled {
+                    group.cancelAll()
+                    break
+                }
+                completed += 1
+                switch result.state {
+                case .processed:
+                    break
+                case .cached:
+                    cached += 1
+                case .failed:
+                    failed += 1
+                case .cancelled:
+                    break
+                }
+                updateDiscoverProcessingProgress(completed: completed, cached: cached, failed: failed, total: total)
+                if isCancellingDiscoverProcessing || Task.isCancelled {
+                    group.cancelAll()
+                    break
+                }
+                if nextIndex < visiblePapers.count {
+                    let paper = visiblePapers[nextIndex]
+                    nextIndex += 1
+                    group.addTask {
+                        await self.processDiscoverPaperForEnrichment(paper)
+                    }
+                }
+            }
         }
     }
 
     func cancelDiscoverProcessing() {
         isCancellingDiscoverProcessing = true
-        activeDiscoverCodexRunHandle?.cancel()
+        for runHandle in activeDiscoverCodexRunHandles {
+            runHandle.cancel()
+        }
+    }
+
+    private func processDiscoverPaperForEnrichment(_ paper: ArxivFeedPaper) async -> DiscoverPaperProcessingResult {
+        if isCancellingDiscoverProcessing || Task.isCancelled {
+            return DiscoverPaperProcessingResult(paperID: paper.id, state: .cancelled)
+        }
+
+        if let existing = try? localDiscoverCache.loadEnrichment(arxivID: paper.id),
+           existing.isCurrent {
+            discoverEnrichmentsByID[paper.id] = existing
+            return DiscoverPaperProcessingResult(paperID: paper.id, state: .cached)
+        }
+
+        do {
+            let enrichment = try await runDiscoverCodexEnrichment(for: paper)
+            try localDiscoverCache.saveEnrichment(enrichment)
+            discoverEnrichmentsByID[paper.id] = enrichment
+            return DiscoverPaperProcessingResult(paperID: paper.id, state: .processed)
+        } catch {
+            if isCancellingDiscoverProcessing || Task.isCancelled || isCancellationError(error) {
+                return DiscoverPaperProcessingResult(paperID: paper.id, state: .cancelled)
+            }
+            let failedEnrichment = DiscoverPaperEnrichment(
+                arxivID: paper.id,
+                processorVersion: DiscoverPaperEnrichment.currentProcessorVersion,
+                promptVersion: DiscoverPaperEnrichment.currentPromptVersion,
+                modelIdentity: "codex",
+                titleZH: "",
+                summaryZH: "",
+                contribution: "",
+                tags: [],
+                links: [:],
+                generatedAt: Date(),
+                error: String(describing: error)
+            )
+            try? localDiscoverCache.saveEnrichment(failedEnrichment)
+            discoverEnrichmentsByID[paper.id] = failedEnrichment
+            return DiscoverPaperProcessingResult(paperID: paper.id, state: .failed)
+        }
     }
 
     func discoverEnrichment(for paper: ArxivFeedPaper) -> DiscoverPaperEnrichment? {
@@ -1124,6 +1230,28 @@ final class AppModel: ObservableObject {
         codexDiagnostic = diagnostic
     }
 
+    func refreshAvailableCodexModels() async {
+        guard !isRefreshingCodexModels else {
+            return
+        }
+        isRefreshingCodexModels = true
+        defer {
+            isRefreshingCodexModels = false
+        }
+        do {
+            let models = try await Task.detached(priority: .utility) {
+                let executable = try CodexCLI.findCodexExecutable()
+                return try CodexCLI(executablePath: executable).availableModelIDs()
+            }.value
+            availableCodexModelIDs = uniqueCodexModelIDs(
+                models + [codexModelOverride, discoverCodexModelOverride]
+            )
+        } catch {
+            mergeAvailableCodexModelIDs([codexModelOverride, discoverCodexModelOverride])
+            errorMessage = String(describing: error)
+        }
+    }
+
     func setCodexModelOverride(_ model: String) {
         let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
         codexModelOverride = trimmed
@@ -1135,6 +1263,7 @@ final class AppModel: ObservableObject {
         Task {
             await refreshCodexDiagnostic()
         }
+        mergeAvailableCodexModelIDs([trimmed])
     }
 
     func setCodexReasoningEffort(_ effort: CodexReasoningEffort) {
@@ -1405,6 +1534,24 @@ final class AppModel: ObservableObject {
         for id in ids where !seen.contains(id) {
             seen.insert(id)
             result.append(id)
+        }
+        return result
+    }
+
+    private func mergeAvailableCodexModelIDs(_ ids: [String]) {
+        availableCodexModelIDs = uniqueCodexModelIDs(availableCodexModelIDs + ids)
+    }
+
+    private func uniqueCodexModelIDs(_ ids: [String]) -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        for id in ids {
+            let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !seen.contains(trimmed) else {
+                continue
+            }
+            seen.insert(trimmed)
+            result.append(trimmed)
         }
         return result
     }
@@ -2082,7 +2229,7 @@ final class AppModel: ObservableObject {
         try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
         let outputURL = workspaceURL.appendingPathComponent("last-message.json")
         let eventLogURL = workspaceURL.appendingPathComponent("events.jsonl")
-        let modelOverride = effectiveModelOverride(prefersWorkspaceImageOutput: false)
+        let modelOverride = effectiveDiscoverCodexModelOverride()
         let modelIdentity = modelOverride.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "codex" : "codex:\(modelOverride)"
         let prompt = discoverEnrichmentPrompt(for: paper)
         let arguments = cli.startArguments(
@@ -2093,11 +2240,13 @@ final class AppModel: ObservableObject {
             reasoningEffort: codexReasoningEffort
         )
         let runHandle = CodexRunHandle()
-        activeDiscoverCodexRunHandle = runHandle
+        activeDiscoverCodexRunHandles.append(runHandle)
+        defer {
+            activeDiscoverCodexRunHandles.removeAll { $0 === runHandle }
+        }
         _ = try await Task.detached(priority: .userInitiated) {
             try cli.runStreaming(arguments: arguments, eventLogURL: eventLogURL, runHandle: runHandle) { _ in }
         }.value
-        activeDiscoverCodexRunHandle = nil
         let lastMessage = try String(contentsOf: outputURL, encoding: .utf8)
         return try DiscoverEnrichmentParser.parse(
             lastMessage,
@@ -2300,6 +2449,14 @@ final class AppModel: ObservableObject {
             return "gpt-5.4-mini"
         }
         return trimmed
+    }
+
+    private func effectiveDiscoverCodexModelOverride() -> String {
+        let trimmed = discoverCodexModelOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        return effectiveModelOverride(prefersWorkspaceImageOutput: false)
     }
 
     private func codexRunModeDescription(

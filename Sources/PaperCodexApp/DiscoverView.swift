@@ -139,9 +139,7 @@ struct DiscoverView: View {
                   model.arxivFeed == nil || model.selectedArxivDate != expectedDate else {
                 return
             }
-            Task {
-                await model.searchDiscover()
-            }
+            model.startDiscoverSearch()
         }
     }
 
@@ -331,9 +329,7 @@ struct DiscoverView: View {
                     .textFieldStyle(.roundedBorder)
                     .layoutPriority(-1)
                     .onSubmit {
-                        Task {
-                            await model.searchDiscover()
-                        }
+                        model.startDiscoverSearch()
                     }
 
                 HStack(alignment: .center, spacing: 8) {
@@ -361,14 +357,17 @@ struct DiscoverView: View {
                         tint: .blue,
                         disabled: model.isSearchingDiscover || model.isProcessingDiscoverResults
                     ) {
-                        Task {
-                            await model.searchDiscover()
-                        }
+                        model.startDiscoverSearch()
                     }
 
-                    if model.isProcessingDiscoverResults {
-                        ToolbarActionButton(title: "Cancel", systemImage: "xmark.circle", tint: .red) {
-                            model.cancelDiscoverProcessing()
+                    if model.isSearchingDiscover || model.isProcessingDiscoverResults {
+                        ToolbarActionButton(title: "Stop", systemImage: "stop.circle", tint: .red) {
+                            if model.isSearchingDiscover {
+                                model.cancelDiscoverSearch()
+                            }
+                            if model.isProcessingDiscoverResults {
+                                model.cancelDiscoverProcessing()
+                            }
                         }
                     } else {
                         ToolbarActionButton(
@@ -387,10 +386,12 @@ struct DiscoverView: View {
                     Spacer()
                 }
 
-                if let progress = model.arxivCacheProgress {
+                if (model.isSearchingDiscover || model.isPreloadingArxivAssets),
+                   let progress = model.arxivCacheProgress {
                     ArxivCacheProgressStrip(progress: progress)
                 }
-                if let progress = model.discoverProcessingProgress {
+                if model.isProcessingDiscoverResults,
+                   let progress = model.discoverProcessingProgress {
                     ArxivCacheProgressStrip(progress: progress)
                 }
             }

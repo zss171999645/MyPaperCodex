@@ -645,11 +645,99 @@ public struct CodexCLI: Sendable {
         return "Default Codex model gpt-5.5 requires a newer Codex CLI than \(cliVersion). Upgrade Codex or choose a supported model in ~/.codex/config.toml."
     }
 
+    public func availableModelIDs(configText: String? = nil) throws -> [String] {
+        let version = try version()
+        let data = try Data(contentsOf: URL(fileURLWithPath: executablePath))
+        let embeddedText = String(decoding: data, as: UTF8.self)
+        return Self.availableModelIDs(
+            cliVersion: version,
+            embeddedText: embeddedText,
+            configText: configText ?? Self.readDefaultConfig(environment: ProcessInfo.processInfo.environment)
+        )
+    }
+
+    public static func availableModelIDs(
+        cliVersion: String?,
+        embeddedText: String?,
+        configText: String?
+    ) -> [String] {
+        var models: Set<String> = []
+        for fallback in fallbackModelIDs {
+            models.insert(fallback)
+        }
+        if let configured = configText.flatMap(parseConfiguredModel(from:)) {
+            models.insert(configured)
+        }
+        if let embeddedText {
+            for model in extractEmbeddedModelIDs(from: embeddedText) {
+                models.insert(model)
+            }
+        }
+        return models
+            .filter { isSupportedModelID($0, cliVersion: cliVersion) }
+            .sorted(by: compareModelIDs)
+    }
+
     private static func readDefaultConfig(environment: [String: String]) -> String? {
         let home = environment["HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.path
         let configURL = URL(fileURLWithPath: home)
             .appendingPathComponent(".codex/config.toml")
         return try? String(contentsOf: configURL, encoding: .utf8)
+    }
+
+    private static let fallbackModelIDs = [
+        "gpt-5.4",
+        "gpt-5.3-codex",
+        "gpt-5.2",
+        "gpt-5.1-codex",
+        "gpt-5-codex"
+    ]
+
+    private static func extractEmbeddedModelIDs(from text: String) -> [String] {
+        let pattern = #"\bgpt-(?:oss-\d+b|\d+[a-z]?(?:\.\d+)*(?:-(?:codex|max|mini|nano|latest))*)\b"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return []
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        var seen: Set<String> = []
+        var result: [String] = []
+        for match in regex.matches(in: text, range: range) {
+            guard let modelRange = Range(match.range, in: text) else {
+                continue
+            }
+            let model = String(text[modelRange])
+            guard !seen.contains(model) else {
+                continue
+            }
+            seen.insert(model)
+            result.append(model)
+        }
+        return result
+    }
+
+    private static func isSupportedModelID(_ modelID: String, cliVersion: String?) -> Bool {
+        let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed == trimmed.lowercased(),
+              trimmed.hasPrefix("gpt-") else {
+            return false
+        }
+        if trimmed == "gpt-5.5" {
+            return configuredModelIssue(configText: #"model = "gpt-5.5""#, cliVersion: cliVersion) == nil
+        }
+        return true
+    }
+
+    private static func compareModelIDs(_ left: String, _ right: String) -> Bool {
+        if left == right {
+            return false
+        }
+        let leftCodex = left.contains("codex")
+        let rightCodex = right.contains("codex")
+        if leftCodex != rightCodex {
+            return leftCodex
+        }
+        return left.localizedStandardCompare(right) == .orderedDescending
     }
 
     private static func compareVersion(_ left: String, _ right: String) -> ComparisonResult {
