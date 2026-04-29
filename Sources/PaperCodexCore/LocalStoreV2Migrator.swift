@@ -1,5 +1,27 @@
 import Foundation
 
+public struct LocalStoreV2SourceInfo: Equatable, Sendable {
+    public var sourceKind: PaperSourceType
+    public var sourceID: String?
+    public var version: String?
+    public var arxivID: String?
+    public var arxivIDVersioned: String?
+
+    public init(
+        sourceKind: PaperSourceType,
+        sourceID: String?,
+        version: String?,
+        arxivID: String?,
+        arxivIDVersioned: String?
+    ) {
+        self.sourceKind = sourceKind
+        self.sourceID = sourceID
+        self.version = version
+        self.arxivID = arxivID
+        self.arxivIDVersioned = arxivIDVersioned
+    }
+}
+
 public enum LocalStoreV2Migrator {
     public static func migrate(database: SQLiteDatabase) throws {
         try database.transaction {
@@ -10,6 +32,76 @@ public enum LocalStoreV2Migrator {
             try backfillPaperFiles(database: database)
             try backfillPaperSources(database: database)
         }
+    }
+
+    public static func sourceInfo(for sourceURL: String?) -> LocalStoreV2SourceInfo {
+        guard let sourceURL,
+              !sourceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return LocalStoreV2SourceInfo(
+                sourceKind: .manual,
+                sourceID: nil,
+                version: nil,
+                arxivID: nil,
+                arxivIDVersioned: nil
+            )
+        }
+        guard let components = URLComponents(string: sourceURL),
+              let host = components.host?.lowercased() else {
+            return LocalStoreV2SourceInfo(
+                sourceKind: .url,
+                sourceID: nil,
+                version: nil,
+                arxivID: nil,
+                arxivIDVersioned: nil
+            )
+        }
+        guard host == "arxiv.org" || host.hasSuffix(".arxiv.org") else {
+            return LocalStoreV2SourceInfo(
+                sourceKind: .url,
+                sourceID: nil,
+                version: nil,
+                arxivID: nil,
+                arxivIDVersioned: nil
+            )
+        }
+
+        let pathComponents = components.path
+            .split(separator: "/")
+            .map(String.init)
+        guard let sourcePath = pathComponents.first,
+              sourcePath == "abs" || sourcePath == "pdf",
+              pathComponents.count >= 2 else {
+            return LocalStoreV2SourceInfo(
+                sourceKind: .arxiv,
+                sourceID: nil,
+                version: nil,
+                arxivID: nil,
+                arxivIDVersioned: nil
+            )
+        }
+
+        var versionedID = pathComponents.dropFirst().joined(separator: "/")
+        if versionedID.hasSuffix(".pdf") {
+            versionedID.removeLast(4)
+        }
+        let versionMatch = versionedID.range(of: #"v[0-9]+$"#, options: .regularExpression)
+        let version = versionMatch.map { String(versionedID[$0]) }
+        let arxivID = versionMatch.map { String(versionedID[..<$0.lowerBound]) } ?? versionedID
+
+        return LocalStoreV2SourceInfo(
+            sourceKind: .arxiv,
+            sourceID: arxivID.isEmpty ? nil : arxivID,
+            version: version,
+            arxivID: arxivID.isEmpty ? nil : arxivID,
+            arxivIDVersioned: versionedID.isEmpty ? nil : versionedID
+        )
+    }
+
+    public static func canonicalKey(fileHash: String, sourceInfo: LocalStoreV2SourceInfo) -> String {
+        if let arxivID = sourceInfo.arxivID {
+            return "arxiv:\(arxivID)"
+        }
+        return fileHash
     }
 
     private static func createTables(database: SQLiteDatabase) throws {
@@ -193,17 +285,31 @@ public enum LocalStoreV2Migrator {
         for (name, definition) in additions where !columns.contains(name) {
             try database.execute("ALTER TABLE papers ADD COLUMN \(name) \(definition);")
         }
-        try database.run("""
-        UPDATE papers
-        SET canonical_key = COALESCE(canonical_key, file_hash),
-            source_kind = CASE
-              WHEN source_url LIKE 'https://arxiv.org/%' THEN 'arxiv'
-              WHEN source_url IS NOT NULL THEN 'url'
-              ELSE COALESCE(source_kind, 'manual')
-            END,
-            sync_revision = COALESCE(sync_revision, 0)
-        WHERE canonical_key IS NULL OR source_kind IS NULL;
-        """)
+        let papers = try database.query("SELECT id, file_hash, source_url FROM papers;") { row in
+            (
+                id: try row.text(0),
+                fileHash: try row.text(1),
+                sourceURL: row.optionalText(2)
+            )
+        }
+        for paper in papers {
+            let sourceInfo = sourceInfo(for: paper.sourceURL)
+            try database.run("""
+            UPDATE papers
+            SET canonical_key = ?,
+                source_kind = ?,
+                arxiv_id = ?,
+                arxiv_id_versioned = ?,
+                sync_revision = COALESCE(sync_revision, 0)
+            WHERE id = ?;
+            """, bindings: [
+                .text(canonicalKey(fileHash: paper.fileHash, sourceInfo: sourceInfo)),
+                .text(sourceInfo.sourceKind.rawValue),
+                sourceInfo.arxivID.map(SQLiteValue.text) ?? .null,
+                sourceInfo.arxivIDVersioned.map(SQLiteValue.text) ?? .null,
+                .text(paper.id)
+            ])
+        }
     }
 
     private static func addTagColumns(database: SQLiteDatabase) throws {
@@ -222,18 +328,33 @@ public enum LocalStoreV2Migrator {
 
     private static func backfillFolders(database: SQLiteDatabase) throws {
         try database.run("""
-        INSERT OR IGNORE INTO folders (id, parent_id, name, sort_order, deleted_at, sync_revision)
-        SELECT id, parent_id, name, sort_order, NULL, 0 FROM categories;
+        INSERT INTO folders (id, parent_id, name, sort_order, deleted_at, sync_revision)
+        SELECT id, parent_id, name, sort_order, NULL, 0 FROM categories
+        WHERE true
+        ON CONFLICT(id) DO UPDATE SET
+          parent_id = excluded.parent_id,
+          name = excluded.name,
+          sort_order = excluded.sort_order,
+          deleted_at = NULL;
         """)
         try database.run("""
-        INSERT OR IGNORE INTO paper_folders (paper_id, folder_id, created_at, deleted_at)
-        SELECT paper_id, category_id, '', NULL FROM paper_categories;
+        INSERT INTO paper_folders (paper_id, folder_id, created_at, deleted_at)
+        SELECT paper_categories.paper_id, paper_categories.category_id, papers.imported_at, NULL
+        FROM paper_categories
+        JOIN papers ON papers.id = paper_categories.paper_id
+        WHERE true
+        ON CONFLICT(paper_id, folder_id) DO UPDATE SET
+          created_at = CASE
+            WHEN paper_folders.created_at = '' THEN excluded.created_at
+            ELSE paper_folders.created_at
+          END,
+          deleted_at = NULL;
         """)
     }
 
     private static func backfillPaperFiles(database: SQLiteDatabase) throws {
         try database.run("""
-        INSERT OR IGNORE INTO paper_files (
+        INSERT INTO paper_files (
           id, paper_id, storage_state, local_path, content_hash, byte_count, mime_type,
           remote_file_id, encryption_state, created_at, updated_at
         )
@@ -249,32 +370,44 @@ public enum LocalStoreV2Migrator {
           'none',
           imported_at,
           updated_at
-        FROM papers;
+        FROM papers
+        WHERE true
+        ON CONFLICT(id) DO UPDATE SET
+          storage_state = excluded.storage_state,
+          local_path = excluded.local_path,
+          content_hash = excluded.content_hash,
+          mime_type = excluded.mime_type,
+          updated_at = excluded.updated_at;
         """)
     }
 
     private static func backfillPaperSources(database: SQLiteDatabase) throws {
-        try database.run("""
-        INSERT OR IGNORE INTO paper_sources (id, paper_id, source_type, source_id, url, version, metadata_json, created_at)
-        SELECT
-          'source:' || id || ':primary',
-          id,
-          CASE
-            WHEN source_url LIKE 'https://arxiv.org/%' THEN 'arxiv'
-            WHEN source_url IS NOT NULL THEN 'url'
-            ELSE 'manual'
-          END,
-          CASE
-            WHEN source_url LIKE 'https://arxiv.org/abs/%' THEN replace(source_url, 'https://arxiv.org/abs/', '')
-            WHEN source_url LIKE 'https://arxiv.org/pdf/%' THEN replace(replace(source_url, 'https://arxiv.org/pdf/', ''), '.pdf', '')
-            ELSE NULL
-          END,
-          source_url,
-          NULL,
-          NULL,
-          imported_at
-        FROM papers
-        WHERE source_url IS NOT NULL;
-        """)
+        let papers = try database.query("SELECT id, source_url, imported_at FROM papers WHERE source_url IS NOT NULL;") { row in
+            (
+                id: try row.text(0),
+                sourceURL: row.optionalText(1),
+                importedAt: try row.text(2)
+            )
+        }
+        for paper in papers {
+            let sourceInfo = sourceInfo(for: paper.sourceURL)
+            try database.run("""
+            INSERT INTO paper_sources (id, paper_id, source_type, source_id, url, version, metadata_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              source_type = excluded.source_type,
+              source_id = excluded.source_id,
+              url = excluded.url,
+              version = excluded.version;
+            """, bindings: [
+                .text("source:\(paper.id):primary"),
+                .text(paper.id),
+                .text(sourceInfo.sourceKind.rawValue),
+                sourceInfo.sourceID.map(SQLiteValue.text) ?? .null,
+                paper.sourceURL.map(SQLiteValue.text) ?? .null,
+                sourceInfo.version.map(SQLiteValue.text) ?? .null,
+                .text(paper.importedAt)
+            ])
+        }
     }
 }

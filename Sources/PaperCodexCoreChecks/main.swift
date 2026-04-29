@@ -307,30 +307,74 @@ func runLocalStoreV2MigrationChecks() throws {
         importedAt: now,
         updatedAt: now
     )
+    let versionedPaper = Paper(
+        id: "paper-b",
+        filePath: tempRoot.appendingPathComponent("paper-b/original.pdf").path,
+        fileHash: "hash-b",
+        title: "Paper B",
+        authors: ["Bob"],
+        year: 2026,
+        sourceURL: "http://arxiv.org/pdf/2604.18587v2.pdf?download=1",
+        isSaved: false,
+        importedAt: now,
+        updatedAt: now
+    )
     try repository.upsertPaper(paper)
+    try repository.upsertPaper(versionedPaper)
     try repository.upsertCategory(Category(id: "cat-methods", parentID: nil, name: "Methods", sortOrder: 1))
     try repository.upsertCategory(Category(id: "cat-vae", parentID: "cat-methods", name: "VAE", sortOrder: 2))
     try repository.upsertTag(PaperTag(id: "tag-diffusion", name: "Diffusion"))
     try repository.assignPaper("paper-a", toCategory: "cat-vae")
     try repository.assignPaper("paper-a", toTag: "tag-diffusion")
 
-    try repository.migrate()
     let database = try SQLiteDatabase(path: tempRoot.appendingPathComponent("store.sqlite").path)
     let paperColumns = try database.tableColumns("papers")
+    let paperMetadata = try database.query("SELECT id, canonical_key, source_kind, arxiv_id, arxiv_id_versioned FROM papers ORDER BY id;") { row in
+        "\(try row.text(0))|\(try row.text(1))|\(try row.text(2))|\(row.optionalText(3) ?? "")|\(row.optionalText(4) ?? "")"
+    }
     let folders = try database.query("SELECT id, parent_id, name FROM folders ORDER BY sort_order, name;") { row in
         "\(try row.text(0))|\(row.optionalText(1) ?? "")|\(try row.text(2))"
     }
-    let fileRows = try database.query("SELECT paper_id, storage_state, local_path, content_hash FROM paper_files;") { row in
+    let folderCreatedAt = try database.query("SELECT created_at FROM paper_folders WHERE paper_id = ? AND folder_id = ?;", bindings: [.text("paper-a"), .text("cat-vae")]) { row in
+        try row.text(0)
+    }.first
+    let fileRows = try database.query("SELECT paper_id, storage_state, local_path, content_hash FROM paper_files ORDER BY paper_id;") { row in
         "\(try row.text(0))|\(try row.text(1))|\(try row.text(2))|\(try row.text(3))"
     }
-    let sources = try database.query("SELECT paper_id, source_type, source_id, url FROM paper_sources;") { row in
-        "\(try row.text(0))|\(try row.text(1))|\(row.optionalText(2) ?? "")|\(row.optionalText(3) ?? "")"
+    let sources = try database.query("SELECT paper_id, source_type, source_id, version, url FROM paper_sources ORDER BY paper_id;") { row in
+        "\(try row.text(0))|\(try row.text(1))|\(row.optionalText(2) ?? "")|\(row.optionalText(3) ?? "")|\(row.optionalText(4) ?? "")"
     }
 
     try check(paperColumns.contains("canonical_key"), "V2 migration should add canonical paper columns")
+    try check(
+        paperMetadata == [
+            "paper-a|arxiv:2604.18586|arxiv|2604.18586|2604.18586",
+            "paper-b|arxiv:2604.18587|arxiv|2604.18587|2604.18587v2"
+        ],
+        "V2 paper metadata should stay current after normal repository writes"
+    )
     try check(folders == ["cat-methods||Methods", "cat-vae|cat-methods|VAE"], "V2 migration should backfill folders from categories")
-    try check(fileRows == ["paper-a|saved_local|\(paper.filePath)|hash-a"], "V2 migration should backfill paper file records")
-    try check(sources == ["paper-a|arxiv|2604.18586|https://arxiv.org/abs/2604.18586"], "V2 migration should backfill arXiv source records")
+    try check(folderCreatedAt.flatMap { ISO8601DateFormatter().date(from: $0) } != nil, "V2 folder membership timestamps should be ISO8601 dates")
+    try check(
+        fileRows == [
+            "paper-a|saved_local|\(paper.filePath)|hash-a",
+            "paper-b|cache_preview|\(versionedPaper.filePath)|hash-b"
+        ],
+        "V2 migration should backfill paper file records"
+    )
+    try check(
+        sources == [
+            "paper-a|arxiv|2604.18586||https://arxiv.org/abs/2604.18586",
+            "paper-b|arxiv|2604.18587|v2|http://arxiv.org/pdf/2604.18587v2.pdf?download=1"
+        ],
+        "V2 migration should backfill arXiv source records"
+    )
+
+    try repository.migrate()
+    let fileRowsAfterRemigration = try database.query("SELECT paper_id, storage_state, local_path, content_hash FROM paper_files ORDER BY paper_id;") { row in
+        "\(try row.text(0))|\(try row.text(1))|\(try row.text(2))|\(try row.text(3))"
+    }
+    try check(fileRowsAfterRemigration == fileRows, "V2 migration should be idempotent after live repository writes")
 }
 
 func runSQLiteHelperChecks() throws {

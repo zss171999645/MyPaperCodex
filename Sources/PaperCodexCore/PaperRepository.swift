@@ -139,30 +139,33 @@ public final class PaperRepository {
     }
 
     public func upsertPaper(_ paper: Paper) throws {
-        try database.run("""
-        INSERT INTO papers (id, file_path, file_hash, title, authors_json, year, source_url, is_saved, imported_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          file_path = excluded.file_path,
-          file_hash = excluded.file_hash,
-          title = excluded.title,
-          authors_json = excluded.authors_json,
-          year = excluded.year,
-          source_url = excluded.source_url,
-          is_saved = excluded.is_saved,
-          updated_at = excluded.updated_at;
-        """, bindings: [
-            .text(paper.id),
-            .text(paper.filePath),
-            .text(paper.fileHash),
-            .text(paper.title),
-            .text(try jsonString(paper.authors)),
-            paper.year.map(SQLiteValue.int) ?? .null,
-            paper.sourceURL.map(SQLiteValue.text) ?? .null,
-            .int(paper.isSaved ? 1 : 0),
-            .text(dates.string(from: paper.importedAt)),
-            .text(dates.string(from: paper.updatedAt))
-        ])
+        try database.transaction {
+            try database.run("""
+            INSERT INTO papers (id, file_path, file_hash, title, authors_json, year, source_url, is_saved, imported_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              file_path = excluded.file_path,
+              file_hash = excluded.file_hash,
+              title = excluded.title,
+              authors_json = excluded.authors_json,
+              year = excluded.year,
+              source_url = excluded.source_url,
+              is_saved = excluded.is_saved,
+              updated_at = excluded.updated_at;
+            """, bindings: [
+                .text(paper.id),
+                .text(paper.filePath),
+                .text(paper.fileHash),
+                .text(paper.title),
+                .text(try jsonString(paper.authors)),
+                paper.year.map(SQLiteValue.int) ?? .null,
+                paper.sourceURL.map(SQLiteValue.text) ?? .null,
+                .int(paper.isSaved ? 1 : 0),
+                .text(dates.string(from: paper.importedAt)),
+                .text(dates.string(from: paper.updatedAt))
+            ])
+            try syncLocalStoreV2Paper(paper)
+        }
     }
 
     public func fetchPapers() throws -> [Paper] {
@@ -207,19 +210,22 @@ public final class PaperRepository {
     }
 
     public func upsertCategory(_ category: Category) throws {
-        try database.run("""
-        INSERT INTO categories (id, parent_id, name, sort_order)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          parent_id = excluded.parent_id,
-          name = excluded.name,
-          sort_order = excluded.sort_order;
-        """, bindings: [
-            .text(category.id),
-            category.parentID.map(SQLiteValue.text) ?? .null,
-            .text(category.name),
-            .int(category.sortOrder)
-        ])
+        try database.transaction {
+            try database.run("""
+            INSERT INTO categories (id, parent_id, name, sort_order)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              parent_id = excluded.parent_id,
+              name = excluded.name,
+              sort_order = excluded.sort_order;
+            """, bindings: [
+                .text(category.id),
+                category.parentID.map(SQLiteValue.text) ?? .null,
+                .text(category.name),
+                .int(category.sortOrder)
+            ])
+            try syncLocalStoreV2Folder(category)
+        }
     }
 
     public func fetchCategories() throws -> [Category] {
@@ -234,10 +240,13 @@ public final class PaperRepository {
     }
 
     public func upsertTag(_ tag: PaperTag) throws {
-        try database.run("""
-        INSERT INTO tags (id, name) VALUES (?, ?)
-        ON CONFLICT(id) DO UPDATE SET name = excluded.name;
-        """, bindings: [.text(tag.id), .text(tag.name)])
+        try database.transaction {
+            try database.run("""
+            INSERT INTO tags (id, name) VALUES (?, ?)
+            ON CONFLICT(id) DO UPDATE SET name = excluded.name;
+            """, bindings: [.text(tag.id), .text(tag.name)])
+            try syncLocalStoreV2Tag(tag)
+        }
     }
 
     public func fetchTags() throws -> [PaperTag] {
@@ -247,15 +256,21 @@ public final class PaperRepository {
     }
 
     public func assignPaper(_ paperID: String, toCategory categoryID: String) throws {
-        try database.run("""
-        INSERT OR IGNORE INTO paper_categories (paper_id, category_id) VALUES (?, ?);
-        """, bindings: [.text(paperID), .text(categoryID)])
+        try database.transaction {
+            try database.run("""
+            INSERT OR IGNORE INTO paper_categories (paper_id, category_id) VALUES (?, ?);
+            """, bindings: [.text(paperID), .text(categoryID)])
+            try syncLocalStoreV2PaperFolder(paperID: paperID, folderID: categoryID, deletedAt: nil)
+        }
     }
 
     public func removePaper(_ paperID: String, fromCategory categoryID: String) throws {
-        try database.run("""
-        DELETE FROM paper_categories WHERE paper_id = ? AND category_id = ?;
-        """, bindings: [.text(paperID), .text(categoryID)])
+        try database.transaction {
+            try database.run("""
+            DELETE FROM paper_categories WHERE paper_id = ? AND category_id = ?;
+            """, bindings: [.text(paperID), .text(categoryID)])
+            try syncLocalStoreV2PaperFolder(paperID: paperID, folderID: categoryID, deletedAt: Date())
+        }
     }
 
     public func assignPaper(_ paperID: String, toTag tagID: String) throws {
@@ -514,6 +529,115 @@ public final class PaperRepository {
                 createdAt: try date(from: try row.text(4))
             )
         }
+    }
+
+    private func syncLocalStoreV2Paper(_ paper: Paper) throws {
+        let sourceInfo = LocalStoreV2Migrator.sourceInfo(for: paper.sourceURL)
+        try database.run("""
+        UPDATE papers
+        SET canonical_key = ?,
+            source_kind = ?,
+            arxiv_id = ?,
+            arxiv_id_versioned = ?,
+            sync_revision = COALESCE(sync_revision, 0)
+        WHERE id = ?;
+        """, bindings: [
+            .text(LocalStoreV2Migrator.canonicalKey(fileHash: paper.fileHash, sourceInfo: sourceInfo)),
+            .text(sourceInfo.sourceKind.rawValue),
+            sourceInfo.arxivID.map(SQLiteValue.text) ?? .null,
+            sourceInfo.arxivIDVersioned.map(SQLiteValue.text) ?? .null,
+            .text(paper.id)
+        ])
+        try database.run("""
+        INSERT INTO paper_files (
+          id, paper_id, storage_state, local_path, content_hash, byte_count, mime_type,
+          remote_file_id, encryption_state, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          storage_state = excluded.storage_state,
+          local_path = excluded.local_path,
+          content_hash = excluded.content_hash,
+          mime_type = excluded.mime_type,
+          updated_at = excluded.updated_at;
+        """, bindings: [
+            .text("file:\(paper.id):original"),
+            .text(paper.id),
+            .text((paper.isSaved ? PaperStorageState.savedLocal : .cachePreview).rawValue),
+            .text(paper.filePath),
+            .text(paper.fileHash),
+            .text("application/pdf"),
+            .text(PaperFileEncryptionState.none.rawValue),
+            .text(dates.string(from: paper.importedAt)),
+            .text(dates.string(from: paper.updatedAt))
+        ])
+
+        guard let sourceURL = paper.sourceURL else {
+            try database.run("DELETE FROM paper_sources WHERE id = ?;", bindings: [.text("source:\(paper.id):primary")])
+            return
+        }
+        try database.run("""
+        INSERT INTO paper_sources (id, paper_id, source_type, source_id, url, version, metadata_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          source_type = excluded.source_type,
+          source_id = excluded.source_id,
+          url = excluded.url,
+          version = excluded.version;
+        """, bindings: [
+            .text("source:\(paper.id):primary"),
+            .text(paper.id),
+            .text(sourceInfo.sourceKind.rawValue),
+            sourceInfo.sourceID.map(SQLiteValue.text) ?? .null,
+            .text(sourceURL),
+            sourceInfo.version.map(SQLiteValue.text) ?? .null,
+            .text(dates.string(from: paper.importedAt))
+        ])
+    }
+
+    private func syncLocalStoreV2Folder(_ category: Category) throws {
+        try database.run("""
+        INSERT INTO folders (id, parent_id, name, sort_order, deleted_at, sync_revision)
+        VALUES (?, ?, ?, ?, NULL, 0)
+        ON CONFLICT(id) DO UPDATE SET
+          parent_id = excluded.parent_id,
+          name = excluded.name,
+          sort_order = excluded.sort_order,
+          deleted_at = NULL;
+        """, bindings: [
+            .text(category.id),
+            category.parentID.map(SQLiteValue.text) ?? .null,
+            .text(category.name),
+            .int(category.sortOrder)
+        ])
+    }
+
+    private func syncLocalStoreV2Tag(_ tag: PaperTag) throws {
+        try database.run("""
+        UPDATE tags
+        SET deleted_at = NULL,
+            sync_revision = COALESCE(sync_revision, 0)
+        WHERE id = ?;
+        """, bindings: [.text(tag.id)])
+    }
+
+    private func syncLocalStoreV2PaperFolder(paperID: String, folderID: String, deletedAt: Date?) throws {
+        let now = dates.string(from: Date())
+        try database.run("""
+        INSERT INTO paper_folders (paper_id, folder_id, created_at, deleted_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(paper_id, folder_id) DO UPDATE SET
+          created_at = CASE
+            WHEN paper_folders.created_at = '' THEN excluded.created_at
+            ELSE paper_folders.created_at
+          END,
+          deleted_at = excluded.deleted_at;
+        """, bindings: [
+            .text(paperID),
+            .text(folderID),
+            .text(now),
+            deletedAt.map { .text(dates.string(from: $0)) } ?? .null
+        ])
     }
 
     private func fetchPaperIDs(sessionID: String) throws -> [String] {
