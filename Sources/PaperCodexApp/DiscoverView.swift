@@ -1119,7 +1119,6 @@ private struct ArxivPaperCard: View {
                 background: Color.teal.opacity(0.12)
             )
             ArxivIDPill(id: paper.id)
-            ProcessingStatePill(enrichment: enrichment)
         }
     }
 
@@ -1241,42 +1240,6 @@ private struct ArxivIDPill: View {
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.72))
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .help("arXiv ID")
-    }
-}
-
-private struct ProcessingStatePill: View {
-    var enrichment: DiscoverPaperEnrichment?
-
-    private var title: String {
-        if enrichment == nil {
-            return "Raw"
-        }
-        if enrichment?.error != nil {
-            return "Failed"
-        }
-        return "Processed"
-    }
-
-    private var color: Color {
-        if enrichment == nil {
-            return .secondary
-        }
-        if enrichment?.error != nil {
-            return Color(nsColor: .systemRed)
-        }
-        return Color(nsColor: .systemGreen)
-    }
-
-    var body: some View {
-        Text(title)
-            .font(.system(size: 11.5, weight: .semibold))
-            .lineLimit(1)
-            .padding(.horizontal, 7)
-            .frame(height: 23)
-            .foregroundStyle(color)
-            .background(color.opacity(0.11))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .help(title == "Raw" ? "Unprocessed arXiv metadata" : title)
     }
 }
 
@@ -1616,14 +1579,6 @@ private struct DiscoverPDFThumbnailHero: View {
         }
         .frame(height: 154)
         .background(Color(nsColor: .controlBackgroundColor))
-        .overlay(alignment: .bottomLeading) {
-            Label("Cached PDF", systemImage: "doc.richtext")
-                .font(.system(size: 11.5, weight: .semibold))
-                .padding(.horizontal, 8)
-                .frame(height: 24)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
-                .padding(8)
-        }
     }
 }
 
