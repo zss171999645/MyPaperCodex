@@ -188,6 +188,11 @@ public final class LocalArxivClient: Sendable {
         return ArxivFeedResponse(date: rangeLabel, count: papers.count, papers: papers)
     }
 
+    public func fetchPapers(ids: [String], listDate: String = "library-import") async throws -> [ArxivFeedPaper] {
+        let normalizedIDs = uniqueVersionedIDs(ids)
+        return try await fetchMetadata(ids: normalizedIDs, listDate: listDate, listCategoriesByID: [:])
+    }
+
     public func fetchPDF(for paper: ArxivFeedPaper) async throws -> Data {
         guard let value = paper.links.pdf, let url = URL(string: value) else {
             throw LocalArxivClientError.missingPDFURL(paper.id)
@@ -396,7 +401,7 @@ public final class LocalArxivClient: Sendable {
                 papersByID[paper.id] = paper
             }
         }
-        return ids.compactMap { papersByID[$0] }
+        return ids.compactMap { papersByID[Self.normalizeArxivID($0)] }
     }
 
     private func listURL(category: String) throws -> URL {
@@ -483,6 +488,24 @@ public final class LocalArxivClient: Sendable {
 }
 
 private let arXivAPIRequestDelayNanoseconds: UInt64 = 3_000_000_000
+
+private func uniqueVersionedIDs(_ ids: [String]) -> [String] {
+    var seen: Set<String> = []
+    var result: [String] = []
+    for id in ids {
+        let versionedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !versionedID.isEmpty else {
+            continue
+        }
+        let canonicalID = ArxivIDExtractor.canonicalID(from: versionedID).lowercased()
+        guard !seen.contains(canonicalID) else {
+            continue
+        }
+        seen.insert(canonicalID)
+        result.append(versionedID)
+    }
+    return result
+}
 
 private struct RegexMatch {
     var range: Range<String.Index>

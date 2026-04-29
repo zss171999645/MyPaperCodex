@@ -281,6 +281,22 @@ func runUILayoutSourceChecks() throws {
         librarySource.contains("@FocusState private var isNameFocused"),
         "category creation sheet should focus the name field for fast child folder creation"
     )
+    try check(
+        librarySource.contains("isShowingArxivImport"),
+        "library toolbar should expose a direct arXiv import sheet"
+    )
+    try check(
+        librarySource.contains("LibrarySortOption"),
+        "library list should expose explicit sort options"
+    )
+    try check(
+        librarySource.contains("sortedPapers"),
+        "library should sort papers after filtering"
+    )
+    try check(
+        librarySource.contains("systemImage: \"number\""),
+        "library toolbar should show an arXiv import button next to PDF import"
+    )
 
     let chatViewURL = root.appendingPathComponent("Sources/PaperCodexApp/ChatView.swift")
     let chatSource = try String(contentsOf: chatViewURL)
@@ -1773,6 +1789,21 @@ func runLocalDiscoverEngineChecks() throws {
 }
 
 func runLocalArxivClientChecks() throws {
+    let extractedIDs = ArxivIDExtractor.extractVersionedIDs(
+        from: """
+        read arXiv:2604.18803v2 and https://arxiv.org/abs/2501.01234.
+        Also fetch random text 2604.18803 and old id hep-th/9901001v3 plus https://arxiv.org/pdf/2408.99999.pdf
+        """
+    )
+    try check(
+        extractedIDs == ["2604.18803v2", "2501.01234", "hep-th/9901001v3", "2408.99999"],
+        "arXiv ID extractor should parse multiple canonical and versioned ids from arbitrary text"
+    )
+    try check(
+        ArxivIDExtractor.extractCanonicalIDs(from: extractedIDs.joined(separator: " ")) == ["2604.18803", "2501.01234", "hep-th/9901001", "2408.99999"],
+        "arXiv ID extractor should expose canonical ids without version suffixes"
+    )
+
     let apiRange = try DiscoverDateRange(start: "2026-04-27", end: "2026-04-29")
     let apiQuery = try LocalArxivClient.submittedDateSearchQuery(range: apiRange, categories: ["cs.AI", "cs.CL"])
     let apiURL = try LocalArxivClient.apiSearchURL(query: apiQuery, start: 2_000, maxResults: 1_000)

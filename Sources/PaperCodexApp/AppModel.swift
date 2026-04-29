@@ -69,6 +69,20 @@ struct ArxivCacheProgress: Equatable {
     }
 }
 
+enum LibraryArxivImportOutcomeState: Equatable {
+    case imported
+    case alreadyInLibrary
+    case failed
+}
+
+struct LibraryArxivImportOutcome: Equatable {
+    var requestedID: String
+    var canonicalID: String
+    var title: String
+    var state: LibraryArxivImportOutcomeState
+    var message: String
+}
+
 private enum DiscoverPaperProcessingState: Sendable {
     case processed
     case cached
@@ -1012,6 +1026,59 @@ final class AppModel: ObservableObject {
             try reloadLibrary()
         } catch {
             errorMessage = String(describing: error)
+        }
+    }
+
+    func addArxivIDToLibrary(_ versionedID: String, categoryID: String?) async -> LibraryArxivImportOutcome {
+        let canonicalID = ArxivIDExtractor.canonicalID(from: versionedID)
+        do {
+            guard let repository else {
+                throw AppModelError.repositoryUnavailable
+            }
+            let client = makeLocalArxivClient()
+            let metadataPapers = try await client.fetchPapers(ids: [versionedID])
+            guard let arxivPaper = metadataPapers.first(where: { $0.id == canonicalID }) ?? metadataPapers.first else {
+                throw AppModelError.arxivMetadataNotFound(versionedID)
+            }
+
+            if let existing = libraryPaper(for: arxivPaper) {
+                if let categoryID {
+                    try repository.assignPaper(existing.id, toCategory: categoryID)
+                }
+                try reloadLibrary()
+                selectedLibraryPaper = papers.first { $0.id == existing.id } ?? existing
+                return LibraryArxivImportOutcome(
+                    requestedID: versionedID,
+                    canonicalID: canonicalID,
+                    title: existing.title,
+                    state: .alreadyInLibrary,
+                    message: categoryID == nil ? "Already in Library" : "Already in Library · folder updated"
+                )
+            }
+
+            let importedPaper = try await importArxivPaper(arxivPaper, isSaved: true)
+            if let categoryID {
+                try repository.assignPaper(importedPaper.id, toCategory: categoryID)
+            }
+            try reloadLibrary()
+            selectedLibraryPaper = papers.first { $0.id == importedPaper.id } ?? importedPaper
+            return LibraryArxivImportOutcome(
+                requestedID: versionedID,
+                canonicalID: canonicalID,
+                title: importedPaper.title,
+                state: .imported,
+                message: categoryID == nil ? "Imported" : "Imported to folder"
+            )
+        } catch {
+            let message = String(describing: error)
+            errorMessage = message
+            return LibraryArxivImportOutcome(
+                requestedID: versionedID,
+                canonicalID: canonicalID,
+                title: "",
+                state: .failed,
+                message: message
+            )
         }
     }
 
@@ -2910,6 +2977,7 @@ enum AppModelError: Error, CustomStringConvertible {
     case anchorMatchFailed
     case noRecoverableCodexTurn
     case downloadedFileIsNotPDF(String)
+    case arxivMetadataNotFound(String)
     case keychainFailure(OSStatus)
 
     var description: String {
@@ -2930,6 +2998,8 @@ enum AppModelError: Error, CustomStringConvertible {
             "No failed Codex turn could be retried."
         case let .downloadedFileIsNotPDF(arxivID):
             "Downloaded content for \(arxivID) was not a PDF."
+        case let .arxivMetadataNotFound(arxivID):
+            "No arXiv metadata was found for \(arxivID)."
         case let .keychainFailure(status):
             "Keychain operation failed with status \(status)."
         }

@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct LibraryView: View {
     @EnvironmentObject private var model: AppModel
     @State private var isShowingWatchedFolders = false
+    @State private var isShowingArxivImport = false
     @State private var isCreatingCategory = false
     @State private var isCreatingTag = false
     @State private var newCategoryName = ""
@@ -14,6 +15,7 @@ struct LibraryView: View {
     @State private var searchText = ""
     @State private var selectedCategoryID: String?
     @State private var selectedTagID: String?
+    @AppStorage("PaperCodexLibrarySortOption") private var librarySortRawValue = LibrarySortOption.addedNewest.rawValue
 
     private var filteredPapers: [Paper] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -35,6 +37,11 @@ struct LibraryView: View {
             }
         }
         return result
+    }
+
+    private var sortedPapers: [Paper] {
+        let option = LibrarySortOption(rawValue: librarySortRawValue) ?? .addedNewest
+        return option.sorted(filteredPapers)
     }
 
     var body: some View {
@@ -81,6 +88,15 @@ struct LibraryView: View {
                 presentWatchedFolderPanel()
             } onClose: {
                 isShowingWatchedFolders = false
+            }
+            .environmentObject(model)
+        }
+        .sheet(isPresented: $isShowingArxivImport) {
+            LibraryArxivImportSheet(
+                categoryItems: flattenedCategoryItems(),
+                initialCategoryID: selectedCategoryID
+            ) {
+                isShowingArxivImport = false
             }
             .environmentObject(model)
         }
@@ -190,6 +206,21 @@ struct LibraryView: View {
                 }
                 .buttonStyle(.bordered)
                 Button {
+                    isShowingArxivImport = true
+                } label: {
+                    Label("arXiv", systemImage: "number")
+                }
+                .buttonStyle(.bordered)
+                Picker("Sort", selection: $librarySortRawValue) {
+                    ForEach(LibrarySortOption.allCases) { option in
+                        Label(option.title, systemImage: option.systemImage)
+                            .tag(option.rawValue)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 142)
+                .help("Sort Library")
+                Button {
                     presentPDFImportPanel()
                 } label: {
                     Label("Import PDF", systemImage: "plus")
@@ -211,13 +242,13 @@ struct LibraryView: View {
                 .buttonStyle(.borderless)
             }
 
-            if filteredPapers.isEmpty {
+            if sortedPapers.isEmpty {
                 ContentUnavailableView("No Papers", systemImage: "doc.text.magnifyingglass")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 5) {
-                        ForEach(filteredPapers) { paper in
+                        ForEach(sortedPapers) { paper in
                             PaperRow(
                                 paper: paper,
                                 categories: categories(for: paper),
@@ -684,6 +715,355 @@ private struct SidebarEmptyText: View {
         Text(text)
             .foregroundStyle(.secondary)
             .padding(.vertical, 5)
+    }
+}
+
+private enum LibrarySortOption: String, CaseIterable, Identifiable {
+    case addedNewest
+    case title
+    case arxivID
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .addedNewest:
+            "Added"
+        case .title:
+            "Title"
+        case .arxivID:
+            "arXiv ID"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .addedNewest:
+            "clock.arrow.circlepath"
+        case .title:
+            "textformat"
+        case .arxivID:
+            "number"
+        }
+    }
+
+    func sorted(_ papers: [Paper]) -> [Paper] {
+        papers.sorted { left, right in
+            switch self {
+            case .addedNewest:
+                if left.importedAt != right.importedAt {
+                    return left.importedAt > right.importedAt
+                }
+                return titleComesBefore(left, right)
+            case .title:
+                return titleComesBefore(left, right)
+            case .arxivID:
+                return arxivIDComesBefore(left, right)
+            }
+        }
+    }
+
+    private func titleComesBefore(_ left: Paper, _ right: Paper) -> Bool {
+        let titleComparison = left.title.localizedStandardCompare(right.title)
+        if titleComparison != .orderedSame {
+            return titleComparison == .orderedAscending
+        }
+        return left.id < right.id
+    }
+
+    private func arxivIDComesBefore(_ left: Paper, _ right: Paper) -> Bool {
+        let leftID = left.sourceURL.flatMap(ArxivIDExtractor.firstCanonicalID(in:))
+        let rightID = right.sourceURL.flatMap(ArxivIDExtractor.firstCanonicalID(in:))
+        switch (leftID, rightID) {
+        case let (leftID?, rightID?):
+            let comparison = leftID.localizedStandardCompare(rightID)
+            if comparison != .orderedSame {
+                return comparison == .orderedDescending
+            }
+            return titleComesBefore(left, right)
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            return titleComesBefore(left, right)
+        }
+    }
+}
+
+private enum LibraryArxivImportStatus: Equatable {
+    case queued
+    case downloading
+    case imported
+    case alreadyInLibrary
+    case failed(String)
+
+    var title: String {
+        switch self {
+        case .queued:
+            "Queued"
+        case .downloading:
+            "Downloading"
+        case .imported:
+            "Imported"
+        case .alreadyInLibrary:
+            "Already in Library"
+        case .failed:
+            "Failed"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .queued:
+            "clock"
+        case .downloading:
+            "arrow.down.circle"
+        case .imported:
+            "checkmark.circle.fill"
+        case .alreadyInLibrary:
+            "checkmark.seal.fill"
+        case .failed:
+            "exclamationmark.triangle.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .queued:
+            .secondary
+        case .downloading:
+            .accentColor
+        case .imported, .alreadyInLibrary:
+            .green
+        case .failed:
+            .red
+        }
+    }
+
+    var detail: String? {
+        if case let .failed(message) = self {
+            return message
+        }
+        return nil
+    }
+}
+
+private struct LibraryArxivImportRow: Identifiable, Equatable {
+    var id: String { versionedID }
+    var versionedID: String
+    var canonicalID: String
+    var title: String = ""
+    var status: LibraryArxivImportStatus
+}
+
+private struct LibraryArxivImportSheet: View {
+    @EnvironmentObject private var model: AppModel
+    var categoryItems: [CategoryListItem]
+    var onClose: () -> Void
+
+    @State private var inputText = ""
+    @State private var targetCategoryID: String
+    @State private var rows: [LibraryArxivImportRow] = []
+    @State private var isImporting = false
+    @FocusState private var isInputFocused: Bool
+
+    init(categoryItems: [CategoryListItem], initialCategoryID: String?, onClose: @escaping () -> Void) {
+        self.categoryItems = categoryItems
+        self.onClose = onClose
+        _targetCategoryID = State(initialValue: initialCategoryID ?? "")
+    }
+
+    private var parsedIDs: [String] {
+        ArxivIDExtractor.extractVersionedIDs(from: inputText)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Label("Add arXiv Papers", systemImage: "number")
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                Button("Close", action: onClose)
+                    .disabled(isImporting)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                TextEditor(text: $inputText)
+                    .font(.system(size: 13, design: .monospaced))
+                    .frame(minHeight: 110)
+                    .focused($isInputFocused)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                    )
+                if parsedIDs.isEmpty {
+                    Text("Paste arXiv IDs, links, PDFs, or any text containing one or more IDs.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    FlowLayout(spacing: 6) {
+                        ForEach(parsedIDs, id: \.self) { id in
+                            Text(id)
+                                .font(.caption.monospaced())
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+                        }
+                    }
+                }
+            }
+
+            Picker("Folder", selection: $targetCategoryID) {
+                Text("No folder").tag("")
+                ForEach(categoryItems) { item in
+                    Text(String(repeating: "  ", count: item.depth) + item.category.name)
+                        .tag(item.category.id)
+                }
+            }
+
+            if !rows.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(rows) { row in
+                            HStack(spacing: 8) {
+                                Image(systemName: row.status.systemImage)
+                                    .foregroundStyle(row.status.color)
+                                    .frame(width: 18)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(row.canonicalID)
+                                        .font(.caption.monospaced().weight(.semibold))
+                                    if !row.title.isEmpty {
+                                        Text(row.title)
+                                            .font(.caption)
+                                            .lineLimit(1)
+                                    }
+                                    if let detail = row.status.detail {
+                                        Text(detail)
+                                            .font(.caption2)
+                                            .foregroundStyle(.red)
+                                            .lineLimit(2)
+                                    }
+                                }
+                                Spacer()
+                                Text(row.status.title)
+                                    .font(.caption)
+                                    .foregroundStyle(row.status.color)
+                            }
+                            .padding(8)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
+                        }
+                    }
+                }
+                .frame(maxHeight: 180)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onClose)
+                    .disabled(isImporting)
+                Button {
+                    Task {
+                        await importParsedIDs()
+                    }
+                } label: {
+                    if isImporting {
+                        ProgressView()
+                            .scaleEffect(0.72)
+                    } else {
+                        Label("Add", systemImage: "arrow.down.doc")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(parsedIDs.isEmpty || isImporting)
+            }
+        }
+        .padding(22)
+        .frame(width: 540)
+        .onAppear {
+            isInputFocused = true
+        }
+    }
+
+    @MainActor
+    private func importParsedIDs() async {
+        let ids = parsedIDs
+        rows = ids.map { id in
+            LibraryArxivImportRow(
+                versionedID: id,
+                canonicalID: ArxivIDExtractor.canonicalID(from: id),
+                status: .queued
+            )
+        }
+        isImporting = true
+        defer {
+            isImporting = false
+        }
+
+        for id in ids {
+            updateRow(id: id, status: .downloading)
+            let outcome = await model.addArxivIDToLibrary(
+                id,
+                categoryID: targetCategoryID.isEmpty ? nil : targetCategoryID
+            )
+            switch outcome.state {
+            case .imported:
+                updateRow(id: id, title: outcome.title, status: .imported)
+            case .alreadyInLibrary:
+                updateRow(id: id, title: outcome.title, status: .alreadyInLibrary)
+            case .failed:
+                updateRow(id: id, status: .failed(outcome.message))
+            }
+        }
+    }
+
+    private func updateRow(id: String, title: String? = nil, status: LibraryArxivImportStatus) {
+        guard let index = rows.firstIndex(where: { $0.versionedID == id }) else {
+            return
+        }
+        if let title {
+            rows[index].title = title
+        }
+        rows[index].status = status
+    }
+}
+
+private struct FlowLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 320
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return CGSize(width: width, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
 
