@@ -377,6 +377,38 @@ func runLocalStoreV2MigrationChecks() throws {
     try check(fileRowsAfterRemigration == fileRows, "V2 migration should be idempotent after live repository writes")
 }
 
+func runLibraryDataStoreChecks() throws {
+    let tempRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("paper-codex-library-store-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+    let repository = try PaperRepository(databasePath: tempRoot.appendingPathComponent("store.sqlite").path)
+    try repository.migrate()
+    let database = try SQLiteDatabase(path: tempRoot.appendingPathComponent("store.sqlite").path)
+    let store = LibraryDataStore(database: database)
+    let now = Date(timeIntervalSince1970: 1_777_300_000)
+
+    let folder = LibraryFolder(id: "folder-root", parentID: nil, name: "Root", sortOrder: 0, deletedAt: nil, syncRevision: 1)
+    let tag = HierarchicalPaperTag(id: "tag-ai", parentID: nil, name: "AI", color: "#0A84FF", sortOrder: 0, deletedAt: nil, syncRevision: 1)
+    let note = PaperNote(id: "note-a", paperID: "paper-a", anchorID: nil, title: "Idea", bodyMarkdown: "Use in intro.", createdAt: now, updatedAt: now, deletedAt: nil, syncRevision: 1)
+    try store.upsertFolder(folder)
+    try store.upsertTag(tag)
+    try repository.upsertPaper(Paper(id: "paper-a", filePath: "/tmp/a.pdf", fileHash: "hash-a", title: "A", authors: [], year: nil, sourceURL: nil, importedAt: now, updatedAt: now))
+    try store.assignPaper("paper-a", toFolder: "folder-root", at: now)
+    try store.assignPaper("paper-a", toTag: "tag-ai", at: now)
+    try store.upsertNote(note)
+
+    let fetchedFolders = try store.fetchFolders()
+    let fetchedTags = try store.fetchTags()
+    let fetchedFolderIDs = try store.fetchFolderIDs(forPaperID: "paper-a")
+    let fetchedTagIDs = try store.fetchTagIDs(forPaperID: "paper-a")
+    let fetchedNotes = try store.fetchNotes(paperID: "paper-a")
+    try check(fetchedFolders == [folder], "LibraryDataStore should round-trip folders")
+    try check(fetchedTags == [tag], "LibraryDataStore should round-trip hierarchical tags")
+    try check(fetchedFolderIDs == ["folder-root"], "LibraryDataStore should round-trip folder memberships")
+    try check(fetchedTagIDs == ["tag-ai"], "LibraryDataStore should round-trip tag memberships")
+    try check(fetchedNotes == [note], "LibraryDataStore should round-trip paper notes")
+}
+
 func runSQLiteHelperChecks() throws {
     let databaseURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("paper-codex-sqlite-helpers-\(UUID().uuidString).sqlite")
@@ -1437,6 +1469,10 @@ do {
     if selectedChecks.isEmpty || selectedChecks.contains("local-store-v2-migration") {
         try runLocalStoreV2MigrationChecks()
         print("local-store-v2-migration: pass")
+    }
+    if selectedChecks.isEmpty || selectedChecks.contains("library-data-store") {
+        try runLibraryDataStoreChecks()
+        print("library-data-store: pass")
     }
     if selectedChecks.isEmpty || selectedChecks.contains("sqlite-helpers") {
         try runSQLiteHelperChecks()
