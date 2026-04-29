@@ -590,10 +590,15 @@ func runSyncDataStoreChecks() throws {
         .appendingPathComponent("paper-codex-sync-store-\(UUID().uuidString).sqlite")
     let repository = try PaperRepository(databasePath: databaseURL.path)
     try repository.migrate()
-    let store = SyncDataStore(database: try SQLiteDatabase(path: databaseURL.path))
+    let database = try SQLiteDatabase(path: databaseURL.path)
+    let store = SyncDataStore(database: database)
+    let dates = ISO8601DateFormatter()
     let now = Date(timeIntervalSince1970: 1_777_300_000)
+    let tombstoneAt = Date(timeIntervalSince1970: 1_777_300_500)
 
     try store.markDirty(entityType: "paper", entityID: "paper-a", localRevision: 2, deleted: false, at: now)
+    try store.markDirty(entityType: "paper", entityID: "paper-a", localRevision: 5, deleted: true, at: tombstoneAt)
+    try store.markDirty(entityType: "paper", entityID: "paper-a", localRevision: 3, deleted: false, at: now)
     try store.enqueue(
         id: "change-a",
         entityType: "paper",
@@ -603,13 +608,54 @@ func runSyncDataStoreChecks() throws {
         baseRemoteRevision: nil,
         createdAt: now
     )
+    try store.enqueue(
+        id: "change-a",
+        entityType: "paper",
+        entityID: "paper-a",
+        operation: "upsert",
+        payloadJSON: #"{"id":"paper-a"}"#,
+        baseRemoteRevision: nil,
+        createdAt: now
+    )
+    var conflictingDuplicateError: String?
+    do {
+        try store.enqueue(
+            id: "change-a",
+            entityType: "paper",
+            entityID: "paper-a",
+            operation: "delete",
+            payloadJSON: #"{"id":"paper-a","deleted":true}"#,
+            baseRemoteRevision: 4,
+            createdAt: now
+        )
+    } catch {
+        conflictingDuplicateError = String(describing: error)
+    }
     try store.setCursor(scope: "library", cursor: "cursor-1", updatedAt: now)
 
     let dirtyEntityIDs = try store.fetchDirtyEntityIDs(entityType: "paper")
     let pendingOutboxIDs = try store.fetchPendingOutboxIDs()
     let cursor = try store.fetchCursor(scope: "library")
+    let syncEntityRows = try database.query("""
+    SELECT local_revision, deleted, local_updated_at
+    FROM sync_entities
+    WHERE entity_type = ? AND entity_id = ?;
+    """, bindings: [.text("paper"), .text("paper-a")]) { row in
+        "\(row.int(0))|\(row.int(1))|\(try row.text(2))"
+    }
+    let outboxCount = try database.query("""
+    SELECT COUNT(*)
+    FROM sync_outbox
+    WHERE id = ?;
+    """, bindings: [.text("change-a")]) { row in
+        row.int(0)
+    }.first
+
     try check(dirtyEntityIDs == ["paper-a"], "SyncDataStore should track dirty entities")
+    try check(syncEntityRows == ["5|1|\(dates.string(from: tombstoneAt))"], "SyncDataStore should preserve max dirty revision, tombstone, and update timestamp")
     try check(pendingOutboxIDs == ["change-a"], "SyncDataStore should track pending outbox changes")
+    try check(outboxCount == 1, "SyncDataStore should treat exact duplicate outbox IDs as idempotent")
+    try check(conflictingDuplicateError?.contains("change-a") == true, "SyncDataStore should reject conflicting duplicate outbox IDs")
     try check(cursor == "cursor-1", "SyncDataStore should persist cursors")
 }
 
