@@ -386,27 +386,55 @@ func runLibraryDataStoreChecks() throws {
     let database = try SQLiteDatabase(path: tempRoot.appendingPathComponent("store.sqlite").path)
     let store = LibraryDataStore(database: database)
     let now = Date(timeIntervalSince1970: 1_777_300_000)
+    let deletedAt = Date(timeIntervalSince1970: 1_777_300_100)
+    let reassignedAt = Date(timeIntervalSince1970: 1_777_300_200)
 
     let folder = LibraryFolder(id: "folder-root", parentID: nil, name: "Root", sortOrder: 0, deletedAt: nil, syncRevision: 1)
+    let deletedFolder = LibraryFolder(id: "folder-deleted", parentID: nil, name: "Deleted", sortOrder: 1, deletedAt: deletedAt, syncRevision: 2)
     let tag = HierarchicalPaperTag(id: "tag-ai", parentID: nil, name: "AI", color: "#0A84FF", sortOrder: 0, deletedAt: nil, syncRevision: 1)
+    let deletedTag = HierarchicalPaperTag(id: "tag-deleted", parentID: nil, name: "Deleted", color: "#FF3B30", sortOrder: 1, deletedAt: deletedAt, syncRevision: 2)
     let note = PaperNote(id: "note-a", paperID: "paper-a", anchorID: nil, title: "Idea", bodyMarkdown: "Use in intro.", createdAt: now, updatedAt: now, deletedAt: nil, syncRevision: 1)
     try store.upsertFolder(folder)
+    try store.upsertFolder(deletedFolder)
     try store.upsertTag(tag)
+    try store.upsertTag(deletedTag)
     try repository.upsertPaper(Paper(id: "paper-a", filePath: "/tmp/a.pdf", fileHash: "hash-a", title: "A", authors: [], year: nil, sourceURL: nil, importedAt: now, updatedAt: now))
     try store.assignPaper("paper-a", toFolder: "folder-root", at: now)
+    try store.assignPaper("paper-a", toFolder: "folder-deleted", at: now)
     try store.assignPaper("paper-a", toTag: "tag-ai", at: now)
+    try store.assignPaper("paper-a", toTag: "tag-deleted", at: now)
     try store.upsertNote(note)
+
+    try database.run("""
+    UPDATE paper_folders SET deleted_at = ? WHERE paper_id = ? AND folder_id = ?;
+    """, bindings: [
+        .text(ISO8601DateFormatter().string(from: deletedAt)),
+        .text("paper-a"),
+        .text("folder-root")
+    ])
+    let folderIDsAfterSoftDelete = try store.fetchFolderIDs(forPaperID: "paper-a")
+    try check(folderIDsAfterSoftDelete.isEmpty, "LibraryDataStore should hide soft-deleted folder memberships")
+    try store.assignPaper("paper-a", toFolder: "folder-root", at: reassignedAt)
+
+    let tagMembershipCreatedAt = try database.query("""
+    SELECT created_at FROM paper_tag_memberships WHERE paper_id = ? AND tag_id = ?;
+    """, bindings: [.text("paper-a"), .text("tag-ai")]) { row in
+        try row.text(0)
+    }.first
 
     let fetchedFolders = try store.fetchFolders()
     let fetchedTags = try store.fetchTags()
     let fetchedFolderIDs = try store.fetchFolderIDs(forPaperID: "paper-a")
     let fetchedTagIDs = try store.fetchTagIDs(forPaperID: "paper-a")
     let fetchedNotes = try store.fetchNotes(paperID: "paper-a")
+    let legacyFetchedTags = try repository.fetchTags(forPaperID: "paper-a")
     try check(fetchedFolders == [folder], "LibraryDataStore should round-trip folders")
     try check(fetchedTags == [tag], "LibraryDataStore should round-trip hierarchical tags")
     try check(fetchedFolderIDs == ["folder-root"], "LibraryDataStore should round-trip folder memberships")
     try check(fetchedTagIDs == ["tag-ai"], "LibraryDataStore should round-trip tag memberships")
     try check(fetchedNotes == [note], "LibraryDataStore should round-trip paper notes")
+    try check(tagMembershipCreatedAt.flatMap { ISO8601DateFormatter().date(from: $0) } == now, "LibraryDataStore should persist tag membership creation dates")
+    try check(legacyFetchedTags.contains(PaperTag(id: "tag-ai", name: "AI")), "LibraryDataStore tag assignments should remain visible to legacy repository tag fetches")
 }
 
 func runSQLiteHelperChecks() throws {

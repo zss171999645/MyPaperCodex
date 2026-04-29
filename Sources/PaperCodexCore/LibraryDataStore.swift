@@ -31,7 +31,9 @@ public final class LibraryDataStore {
     public func fetchFolders() throws -> [LibraryFolder] {
         try database.query("""
         SELECT id, parent_id, name, sort_order, deleted_at, sync_revision
-        FROM folders ORDER BY sort_order, name, id;
+        FROM folders
+        WHERE deleted_at IS NULL
+        ORDER BY sort_order, name, id;
         """) { row in
             LibraryFolder(
                 id: try row.text(0),
@@ -69,7 +71,9 @@ public final class LibraryDataStore {
     public func fetchTags() throws -> [HierarchicalPaperTag] {
         try database.query("""
         SELECT id, parent_id, name, color, sort_order, deleted_at, sync_revision
-        FROM tags ORDER BY sort_order, name, id;
+        FROM tags
+        WHERE deleted_at IS NULL
+        ORDER BY sort_order, name, id;
         """) { row in
             HierarchicalPaperTag(
                 id: try row.text(0),
@@ -96,29 +100,58 @@ public final class LibraryDataStore {
     }
 
     public func assignPaper(_ paperID: String, toTag tagID: String, at date: Date) throws {
-        try database.run("""
-        INSERT INTO paper_tags (paper_id, tag_id) VALUES (?, ?)
-        ON CONFLICT(paper_id, tag_id) DO NOTHING;
-        """, bindings: [
-            .text(paperID),
-            .text(tagID)
-        ])
-        _ = date
+        try ensureTagMembershipStorage()
+        try database.transaction {
+            try database.run("""
+            INSERT INTO paper_tags (paper_id, tag_id) VALUES (?, ?)
+            ON CONFLICT(paper_id, tag_id) DO NOTHING;
+            """, bindings: [
+                .text(paperID),
+                .text(tagID)
+            ])
+            try database.run("""
+            INSERT INTO paper_tag_memberships (paper_id, tag_id, created_at, deleted_at)
+            VALUES (?, ?, ?, NULL)
+            ON CONFLICT(paper_id, tag_id) DO UPDATE SET
+              created_at = CASE
+                WHEN paper_tag_memberships.created_at = '' THEN excluded.created_at
+                ELSE paper_tag_memberships.created_at
+              END,
+              deleted_at = NULL;
+            """, bindings: [
+                .text(paperID),
+                .text(tagID),
+                .text(dates.string(from: date))
+            ])
+        }
     }
 
     public func fetchFolderIDs(forPaperID paperID: String) throws -> [String] {
         try database.query("""
-        SELECT folder_id FROM paper_folders
-        WHERE paper_id = ? AND deleted_at IS NULL
-        ORDER BY folder_id;
+        SELECT paper_folders.folder_id
+        FROM paper_folders
+        JOIN folders ON folders.id = paper_folders.folder_id
+        WHERE paper_folders.paper_id = ?
+          AND paper_folders.deleted_at IS NULL
+          AND folders.deleted_at IS NULL
+        ORDER BY paper_folders.folder_id;
         """, bindings: [.text(paperID)]) { row in
             try row.text(0)
         }
     }
 
     public func fetchTagIDs(forPaperID paperID: String) throws -> [String] {
-        try database.query("""
-        SELECT tag_id FROM paper_tags WHERE paper_id = ? ORDER BY tag_id;
+        try ensureTagMembershipStorage()
+        return try database.query("""
+        SELECT paper_tag_memberships.tag_id
+        FROM paper_tag_memberships
+        JOIN paper_tags ON paper_tags.paper_id = paper_tag_memberships.paper_id
+          AND paper_tags.tag_id = paper_tag_memberships.tag_id
+        JOIN tags ON tags.id = paper_tag_memberships.tag_id
+        WHERE paper_tag_memberships.paper_id = ?
+          AND paper_tag_memberships.deleted_at IS NULL
+          AND tags.deleted_at IS NULL
+        ORDER BY paper_tag_memberships.tag_id;
         """, bindings: [.text(paperID)]) { row in
             try row.text(0)
         }
@@ -174,5 +207,23 @@ public final class LibraryDataStore {
             throw PaperRepositoryError.decodingFailed("Invalid ISO8601 date: \(string)")
         }
         return date
+    }
+
+    private func ensureTagMembershipStorage() throws {
+        try database.execute("""
+        CREATE TABLE IF NOT EXISTS paper_tag_memberships (
+          paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+          tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+          created_at TEXT NOT NULL,
+          deleted_at TEXT,
+          PRIMARY KEY (paper_id, tag_id)
+        );
+        """)
+        try database.run("""
+        INSERT OR IGNORE INTO paper_tag_memberships (paper_id, tag_id, created_at, deleted_at)
+        SELECT paper_tags.paper_id, paper_tags.tag_id, papers.imported_at, NULL
+        FROM paper_tags
+        JOIN papers ON papers.id = paper_tags.paper_id;
+        """)
     }
 }
