@@ -84,6 +84,7 @@ private let codexReasoningEffortDefaultsKey = "PaperCodexCodexReasoningEffort"
 private let arxivFeedBaseURLDefaultsKey = "PaperCodexArxivFeedBaseURL"
 private let arxivFeedTokenDefaultsKey = "PaperCodexArxivFeedToken"
 private let arxivFeedUsernameDefaultsKey = "PaperCodexArxivFeedUsername"
+private let localDiscoverPreferencesDefaultsKey = "PaperCodexLocalDiscoverPreferences"
 private let arxivSaveOrganizationDefaultsKey = "PaperCodexArxivSaveOrganization"
 private let quickPromptsDefaultsKey = "PaperCodexQuickPrompts"
 private let librarySidebarWidthDefaultsKey = "PaperCodexLibrarySidebarWidth"
@@ -104,6 +105,20 @@ private func loadQuickPromptsFromDefaults() -> [QuickPrompt] {
 private func saveQuickPromptsToDefaults(_ prompts: [QuickPrompt]) {
     if let data = try? JSONEncoder().encode(prompts) {
         UserDefaults.standard.set(data, forKey: quickPromptsDefaultsKey)
+    }
+}
+
+private func loadLocalDiscoverPreferencesFromDefaults() -> LocalDiscoverPreferences {
+    guard let data = UserDefaults.standard.data(forKey: localDiscoverPreferencesDefaultsKey),
+          let preferences = try? JSONDecoder().decode(LocalDiscoverPreferences.self, from: data) else {
+        return LocalDiscoverPreferences()
+    }
+    return preferences.normalized
+}
+
+private func saveLocalDiscoverPreferencesToDefaults(_ preferences: LocalDiscoverPreferences) {
+    if let data = try? JSONEncoder().encode(preferences.normalized) {
+        UserDefaults.standard.set(data, forKey: localDiscoverPreferencesDefaultsKey)
     }
 }
 
@@ -147,6 +162,7 @@ final class AppModel: ObservableObject {
     @Published var arxivFeedBaseURL: String = UserDefaults.standard.string(forKey: arxivFeedBaseURLDefaultsKey) ?? "http://nas.pucao.cn:20003"
     @Published var arxivFeedToken: String = UserDefaults.standard.string(forKey: arxivFeedTokenDefaultsKey) ?? ""
     @Published var arxivFeedUsername: String = UserDefaults.standard.string(forKey: arxivFeedUsernameDefaultsKey) ?? "caopu"
+    @Published var localDiscoverPreferences: LocalDiscoverPreferences = loadLocalDiscoverPreferencesFromDefaults()
     @Published var arxivSaveOrganization: ArxivSaveOrganization = {
         let stored = UserDefaults.standard.string(forKey: arxivSaveOrganizationDefaultsKey)
         return stored.flatMap(ArxivSaveOrganization.init(rawValue:)) ?? .primaryCategory
@@ -355,6 +371,38 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(arxivFeedUsername, forKey: arxivFeedUsernameDefaultsKey)
     }
 
+    func setLocalArxivCategories(_ categories: [String]) {
+        var preferences = localDiscoverPreferences
+        preferences.categories = categories
+        localDiscoverPreferences = preferences.normalized
+        saveLocalDiscoverPreferencesToDefaults(localDiscoverPreferences)
+    }
+
+    func setLocalTagFilters(whitelist: [String], blacklist: [String]) {
+        var preferences = localDiscoverPreferences
+        preferences.whitelistTags = whitelist
+        preferences.blacklistTags = blacklist
+        localDiscoverPreferences = preferences.normalized
+        saveLocalDiscoverPreferencesToDefaults(localDiscoverPreferences)
+        if let feed = arxivFeed {
+            arxivFeed = applyLocalDiscoverPreferences(to: feed)
+        }
+    }
+
+    func setLocalEnrichmentPreferences(autoOpen: Bool, autoSave: Bool) {
+        var preferences = localDiscoverPreferences
+        preferences.enrichment = LocalEnrichmentPreferences(autoEnrichOnOpen: autoOpen, autoEnrichOnSave: autoSave)
+        localDiscoverPreferences = preferences.normalized
+        saveLocalDiscoverPreferencesToDefaults(localDiscoverPreferences)
+    }
+
+    func setEmbeddingProviderSettings(enabled: Bool, baseURL: String, model: String) {
+        var preferences = localDiscoverPreferences
+        preferences.embedding = EmbeddingProviderSettings(enabled: enabled, baseURL: baseURL, model: model)
+        localDiscoverPreferences = preferences.normalized
+        saveLocalDiscoverPreferencesToDefaults(localDiscoverPreferences)
+    }
+
     func setArxivSaveOrganization(_ organization: ArxivSaveOrganization) {
         arxivSaveOrganization = organization
         UserDefaults.standard.set(organization.rawValue, forKey: arxivSaveOrganizationDefaultsKey)
@@ -402,14 +450,10 @@ final class AppModel: ObservableObject {
                 isLoadingArxivFeed = false
                 isRefreshingArxivDates = false
             }
-            let client = try makeArxivFeedClient()
-            let dates = try await fetchAndCacheArxivDates(client: client)
-            let date = selectedArxivDate ?? dates.latest ?? dates.dates.last
-            selectedArxivDate = date
-            if let date {
-                try await loadArxivFeed(date: date, client: client)
-            }
-            try await refreshCodeArxivUserState(client: client)
+            let client = makeLocalArxivClient()
+            let feed = try await client.fetchLatestFeed()
+            try cacheAndDisplayArxivFeed(feed, title: "Metadata cached")
+            try await preloadArxivAssets(includeLarge: false, feed: feed)
         } catch {
             if let date = selectedArxivDate,
                (try? loadCachedArxivFeed(date: date)) == true {
@@ -426,10 +470,11 @@ final class AppModel: ObservableObject {
             defer {
                 isRefreshingArxivDates = false
             }
-            let client = try makeArxivFeedClient()
-            let dates = try await fetchAndCacheArxivDates(client: client)
+            let client = makeLocalArxivClient()
+            let feed = try await client.fetchLatestFeed()
+            try cacheAndDisplayArxivFeed(feed, title: "Latest arXiv date cached")
             if selectedArxivDate == nil {
-                selectedArxivDate = dates.latest ?? dates.dates.last
+                selectedArxivDate = feed.date
             }
         } catch {
             errorMessage = String(describing: error)
@@ -437,12 +482,7 @@ final class AppModel: ObservableObject {
     }
 
     func refreshCodeArxivUserState() async {
-        do {
-            let client = try makeArxivFeedClient()
-            try await refreshCodeArxivUserState(client: client)
-        } catch {
-            errorMessage = String(describing: error)
-        }
+        codeArxivUserState = nil
     }
 
     func updateCodeArxivPreferences(
@@ -451,25 +491,14 @@ final class AppModel: ObservableObject {
         blacklistTags: [String],
         simFavoriteIDs: [Int]
     ) async {
-        do {
-            isSavingCodeArxivPreferences = true
-            defer {
-                isSavingCodeArxivPreferences = false
-            }
-            let client = try makeArxivFeedClient()
-            codeArxivUserState = try await client.updateUserFilters(
-                username: arxivFeedUsername,
-                categories: categories,
-                whitelistTags: whitelistTags,
-                blacklistTags: blacklistTags,
-                simFavoriteIDs: simFavoriteIDs,
-                languagePreference: codeArxivUserState?.user.languagePreference
-            )
-            if let selectedArxivDate {
-                try await loadArxivFeed(date: selectedArxivDate, client: client)
-            }
-        } catch {
-            errorMessage = String(describing: error)
+        isSavingCodeArxivPreferences = true
+        defer {
+            isSavingCodeArxivPreferences = false
+        }
+        setLocalArxivCategories(categories)
+        setLocalTagFilters(whitelist: whitelistTags, blacklist: blacklistTags)
+        if let selectedArxivDate {
+            await loadArxivFeed(date: selectedArxivDate)
         }
     }
 
@@ -488,8 +517,15 @@ final class AppModel: ObservableObject {
                 completed: 0,
                 total: 0
             )
-            let client = try makeArxivFeedClient()
-            try await loadArxivFeed(date: date, client: client)
+            let latestCachedDate = arxivDates.sorted().last
+            if latestCachedDate != date,
+               (try? loadCachedArxivFeed(date: date)) == true {
+                return
+            }
+            let client = makeLocalArxivClient()
+            let feed = try await client.fetchFeed(date: date)
+            try cacheAndDisplayArxivFeed(feed, title: "Metadata cached")
+            try await preloadArxivAssets(includeLarge: false, feed: feed)
         } catch {
             if (try? loadCachedArxivFeed(date: date)) == true {
                 errorMessage = "Using cached arXiv feed for \(date). Refresh failed: \(error)"
@@ -504,8 +540,7 @@ final class AppModel: ObservableObject {
             guard let arxivFeed else {
                 return
             }
-            let client = try makeArxivFeedClient()
-            try await preloadArxivAssets(includeLarge: includeLarge, feed: arxivFeed, client: client)
+            try await preloadArxivAssets(includeLarge: includeLarge, feed: arxivFeed)
         } catch {
             if isCancellationError(error) {
                 return
@@ -523,8 +558,7 @@ final class AppModel: ObservableObject {
                 arxivAssetURLs[asset.path] = url
                 return
             }
-            let client = try makeArxivFeedClient()
-            let data = try await client.fetchAsset(asset)
+            let data = try await fetchArxivAsset(asset)
             arxivAssetURLs[asset.path] = try arxivCache.saveAsset(data, path: asset.path)
         } catch {
             if isCancellationError(error) {
@@ -666,52 +700,10 @@ final class AppModel: ObservableObject {
     }
 
     func syncCodeArxivFavorites() async {
-        do {
-            guard let repository else {
-                throw AppModelError.repositoryUnavailable
-            }
-            isSyncingCodeArxivFavorites = true
-            codeArxivFavoriteSyncStatus = "Loading CodeArXiv favorites"
-            defer {
-                isSyncingCodeArxivFavorites = false
-                codeArxivFavoriteSyncStatus = nil
-            }
-            let client = try makeArxivFeedClient()
-            let state = try await client.fetchUserState(username: arxivFeedUsername, includePapers: true)
-            codeArxivUserState = state
-            var sortOrder = categories.count + 1
-            for (favoriteIndex, favorite) in state.favorites.enumerated() {
-                let category = PaperCodexCore.Category(
-                    id: codeArxivCategoryID(for: favorite),
-                    parentID: nil,
-                    name: favorite.name,
-                    sortOrder: sortOrder
-                )
-                sortOrder += 1
-                try repository.upsertCategory(category)
-                let remotePapers = try await resolvedFavoritePapers(favorite, client: client)
-                var assignedLocalPaperIDs: Set<String> = []
-                for (paperIndex, remotePaper) in remotePapers.enumerated() {
-                    codeArxivFavoriteSyncStatus = "Syncing \(favorite.name) \(paperIndex + 1)/\(remotePapers.count) · folder \(favoriteIndex + 1)/\(state.favorites.count)"
-                    let localPaper: Paper
-                    if let existing = try repositoryPaper(for: remotePaper, repository: repository) {
-                        localPaper = existing
-                    } else {
-                        localPaper = try await importArxivPaper(remotePaper, isSaved: true)
-                    }
-                    assignedLocalPaperIDs.insert(localPaper.id)
-                    try repository.assignPaper(localPaper.id, toCategory: category.id)
-                    for tagName in remotePaper.tags {
-                        let tag = try ensureTag(named: tagName, repository: repository)
-                        try repository.assignPaper(localPaper.id, toTag: tag.id)
-                    }
-                }
-                try pruneCategory(category.id, keepingPaperIDs: assignedLocalPaperIDs, repository: repository)
-            }
-            try reloadLibrary()
-        } catch {
-            errorMessage = String(describing: error)
-        }
+        isSyncingCodeArxivFavorites = false
+        codeArxivFavoriteSyncStatus = nil
+        codeArxivUserState = nil
+        errorMessage = "CodeArXiv favorite sync is retired in local-first mode. Use local folders and tags in Library."
     }
 
     func createCategory(name: String, parentID: String?) {
@@ -1245,34 +1237,27 @@ final class AppModel: ObservableObject {
         return result
     }
 
-    private func fetchAndCacheArxivDates(client: ArxivFeedClient) async throws -> ArxivFeedDateIndex {
-        let dates = try await client.fetchDates()
-        try arxivCache.saveDates(dates)
-        arxivDates = dates.dates
-        return dates
+    private func mergeAndSaveArxivDate(_ date: String) throws {
+        let merged = Array(Set(arxivDates + [date])).sorted()
+        arxivDates = merged
+        try arxivCache.saveDates(ArxivFeedDateIndex(dates: merged, latest: merged.last))
     }
 
-    private func loadArxivFeed(date: String, client: ArxivFeedClient) async throws {
-        let feed = try await client.fetchFeed(date: date, username: arxivFeedUsername)
+    private func cacheAndDisplayArxivFeed(_ liveFeed: ArxivFeedResponse, title: String) throws {
+        let feed = applyLocalDiscoverPreferences(to: liveFeed)
         try arxivCache.saveFeed(feed)
+        try mergeAndSaveArxivDate(feed.date)
+        selectedArxivDate = feed.date
         arxivFeed = feed
         let summary = try arxivCache.assetCacheSummary(for: feed, includeLarge: false)
         arxivCacheProgress = ArxivCacheProgress(
-            date: date,
-            title: "Metadata cached",
+            date: feed.date,
+            title: title,
             detail: "Preview images \(summary.cached)/\(summary.total)",
             completed: summary.cached,
             total: summary.total
         )
-        if let user = feed.user,
-           let filters = feed.filters {
-            codeArxivUserState = CodeArxivUserState(
-                user: user,
-                filters: filters,
-                favorites: feed.favorites ?? [],
-                tagOptions: feed.tagOptions ?? []
-            )
-        }
+        codeArxivUserState = nil
         if let selected = selectedArxivPaper,
            feed.papers.contains(where: { $0.id == selected.id }) {
             selectedArxivPaper = selected
@@ -1280,7 +1265,6 @@ final class AppModel: ObservableObject {
             selectedArxivPaper = feed.papers.first
         }
         reloadCachedArxivAssets()
-        try await preloadArxivAssets(includeLarge: false, feed: feed, client: client)
     }
 
     @discardableResult
@@ -1289,15 +1273,16 @@ final class AppModel: ObservableObject {
             return false
         }
         selectedArxivDate = date
-        arxivFeed = cachedFeed
+        let feed = applyLocalDiscoverPreferences(to: cachedFeed)
+        arxivFeed = feed
         if let selected = selectedArxivPaper,
-           cachedFeed.papers.contains(where: { $0.id == selected.id }) {
+           feed.papers.contains(where: { $0.id == selected.id }) {
             selectedArxivPaper = selected
         } else {
-            selectedArxivPaper = cachedFeed.papers.first
+            selectedArxivPaper = feed.papers.first
         }
         reloadCachedArxivAssets()
-        let summary = try arxivCache.assetCacheSummary(for: cachedFeed, includeLarge: false)
+        let summary = try arxivCache.assetCacheSummary(for: feed, includeLarge: false)
         arxivCacheProgress = ArxivCacheProgress(
             date: date,
             title: "Offline cache",
@@ -1308,7 +1293,7 @@ final class AppModel: ObservableObject {
         return true
     }
 
-    private func preloadArxivAssets(includeLarge: Bool, feed: ArxivFeedResponse, client: ArxivFeedClient) async throws {
+    private func preloadArxivAssets(includeLarge: Bool, feed: ArxivFeedResponse) async throws {
         let assets = feed.uniqueAssets(includeLarge: includeLarge)
         guard !assets.isEmpty else {
             arxivCacheProgress = ArxivCacheProgress(
@@ -1343,7 +1328,7 @@ final class AppModel: ObservableObject {
             if cachedPaths.contains(asset.path) {
                 continue
             }
-            let data = try await client.fetchAsset(asset)
+            let data = try await fetchArxivAsset(asset)
             arxivAssetURLs[asset.path] = try arxivCache.saveAsset(data, path: asset.path)
             completed += 1
             arxivCacheProgress = ArxivCacheProgress(
@@ -1363,13 +1348,6 @@ final class AppModel: ObservableObject {
             completed: completed,
             total: assets.count
         )
-    }
-
-    private func refreshCodeArxivUserState(client: ArxivFeedClient) async throws {
-        guard !arxivFeedUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return
-        }
-        codeArxivUserState = try await client.fetchUserState(username: arxivFeedUsername)
     }
 
     private func loadCachedArxivState() {
@@ -1410,7 +1388,7 @@ final class AppModel: ObservableObject {
             arxivDownloadProgressByID.removeValue(forKey: arxivPaper.id)
         }
 
-        let client = try makeArxivFeedClient()
+        let client = makeLocalArxivClient()
         let pdfData = try await client.fetchPDF(for: arxivPaper)
         arxivDownloadProgressByID[arxivPaper.id] = 0.65
         guard pdfData.starts(with: Data("%PDF-".utf8)) else {
@@ -1576,6 +1554,59 @@ final class AppModel: ObservableObject {
         if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
         }
+    }
+
+    private func applyLocalDiscoverPreferences(to feed: ArxivFeedResponse) -> ArxivFeedResponse {
+        let preferences = localDiscoverPreferences.normalized
+        let rankedPapers = SimilarityRanker.rank(
+            papers: feed.papers,
+            whitelistTags: preferences.whitelistTags,
+            blacklistTags: preferences.blacklistTags,
+            interestVectors: []
+        )
+        return ArxivFeedResponse(
+            date: feed.date,
+            count: rankedPapers.count,
+            papers: rankedPapers,
+            groups: [
+                ArxivFeedGroup(key: "white", count: rankedPapers.filter { $0.filterGroup == "white" }.count),
+                ArxivFeedGroup(key: "neutral", count: rankedPapers.filter { $0.filterGroup == "neutral" }.count),
+                ArxivFeedGroup(key: "black", count: rankedPapers.filter { $0.filterGroup == "black" }.count)
+            ],
+            filters: nil,
+            favorites: nil,
+            tagOptions: Array(Set(rankedPapers.flatMap(\.tags))).sorted(),
+            user: nil
+        )
+    }
+
+    private func fetchArxivAsset(_ asset: ArxivFeedAsset) async throws -> Data {
+        guard let url = URL(string: asset.url), url.scheme != nil else {
+            throw LocalArxivClientError.invalidURL(asset.url)
+        }
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 12
+        configuration.timeoutIntervalForResource = 30
+        var request = URLRequest(url: url)
+        request.setValue("PaperCodex/0.1 (+https://arxiv.org)", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await URLSession(configuration: configuration).data(for: request)
+        if let http = response as? HTTPURLResponse,
+           !(200..<300).contains(http.statusCode) {
+            throw LocalArxivClientError.badStatus(http.statusCode, url.absoluteString)
+        }
+        return data
+    }
+
+    private func makeLocalArxivClient() -> LocalArxivClient {
+        let preferences = localDiscoverPreferences.normalized
+        let categories = preferences.categories.isEmpty ? LocalArxivClient.defaultCategories : preferences.categories
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 18
+        configuration.timeoutIntervalForResource = 60
+        return LocalArxivClient(
+            configuration: LocalArxivClientConfiguration(categories: categories),
+            session: URLSession(configuration: configuration)
+        )
     }
 
     private func makeArxivFeedClient() throws -> ArxivFeedClient {
