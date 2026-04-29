@@ -1569,6 +1569,107 @@ func runLocalArxivClientChecks() throws {
     try check(paper.listCategories == ["cs.CL"], "local arXiv mapper should preserve list categories")
 }
 
+func runLocalDiscoverPreferenceChecks() throws {
+    let preferences = LocalDiscoverPreferences(
+        categories: ["cs.CV", "cs.CL", "cs.CV"],
+        whitelistTags: ["agent", "code", "agent"],
+        blacklistTags: ["survey"],
+        similaritySourceTagIDs: ["tag-agent", "tag-agent"],
+        enrichment: LocalEnrichmentPreferences(autoEnrichOnOpen: true, autoEnrichOnSave: true),
+        embedding: EmbeddingProviderSettings(enabled: true, baseURL: "https://dashscope.aliyuncs.com", model: "text-embedding-v4")
+    )
+    let normalized = preferences.normalized
+    try check(normalized.categories == ["cs.CV", "cs.CL"], "local discover preferences should dedupe categories")
+    try check(normalized.whitelistTags == ["agent", "code"], "local discover preferences should dedupe whitelist tags")
+    try check(normalized.similaritySourceTagIDs == ["tag-agent"], "local discover preferences should dedupe similarity sources")
+    try check(normalized.embedding.model == "text-embedding-v4", "embedding settings should preserve model")
+
+    let encoder = JSONEncoder()
+    let decoder = JSONDecoder()
+    let decoded = try decoder.decode(LocalDiscoverPreferences.self, from: encoder.encode(normalized))
+    try check(decoded == normalized, "local discover preferences should JSON round-trip")
+}
+
+func runSimilarityRankerChecks() throws {
+    let papers = [
+        ArxivFeedPaper(
+            id: "a",
+            arxivID: "a",
+            arxivIDVersioned: nil,
+            title: ArxivLocalizedText(en: "A", zh: ""),
+            abstract: ArxivLocalizedText(en: "A", zh: ""),
+            summary: ArxivLocalizedText(en: "", zh: ""),
+            authors: [],
+            categories: ["cs.CL"],
+            primaryCategory: "cs.CL",
+            listCategories: ["cs.CL"],
+            tags: ["agent"],
+            comment: "",
+            published: "2026-04-29T00:00:00Z",
+            updated: nil,
+            listDate: "2026-04-29",
+            thumbnailVersion: nil,
+            embedding: [1, 0],
+            links: ArxivFeedLinks(abs: nil, pdf: nil),
+            assets: ArxivFeedAssets(small: nil, large: nil)
+        ),
+        ArxivFeedPaper(
+            id: "b",
+            arxivID: "b",
+            arxivIDVersioned: nil,
+            title: ArxivLocalizedText(en: "B", zh: ""),
+            abstract: ArxivLocalizedText(en: "B", zh: ""),
+            summary: ArxivLocalizedText(en: "", zh: ""),
+            authors: [],
+            categories: ["cs.CL"],
+            primaryCategory: "cs.CL",
+            listCategories: ["cs.CL"],
+            tags: ["survey"],
+            comment: "",
+            published: "2026-04-29T00:00:00Z",
+            updated: nil,
+            listDate: "2026-04-29",
+            thumbnailVersion: nil,
+            embedding: [0, 1],
+            links: ArxivFeedLinks(abs: nil, pdf: nil),
+            assets: ArxivFeedAssets(small: nil, large: nil)
+        ),
+        ArxivFeedPaper(
+            id: "c",
+            arxivID: "c",
+            arxivIDVersioned: nil,
+            title: ArxivLocalizedText(en: "C", zh: ""),
+            abstract: ArxivLocalizedText(en: "C", zh: ""),
+            summary: ArxivLocalizedText(en: "", zh: ""),
+            authors: [],
+            categories: ["cs.CL"],
+            primaryCategory: "cs.CL",
+            listCategories: ["cs.CL"],
+            tags: [],
+            comment: "",
+            published: "2026-04-29T00:00:00Z",
+            updated: nil,
+            listDate: "2026-04-29",
+            thumbnailVersion: nil,
+            embedding: [0.9, 0.1],
+            links: ArxivFeedLinks(abs: nil, pdf: nil),
+            assets: ArxivFeedAssets(small: nil, large: nil)
+        )
+    ]
+    let ranked = SimilarityRanker.rank(
+        papers: papers,
+        whitelistTags: ["agent"],
+        blacklistTags: ["survey"],
+        interestVectors: [[1, 0]]
+    )
+    try check(ranked.map(\.id) == ["a", "c", "b"], "similarity ranker should order white, neutral, black groups")
+    try check(ranked[0].filterGroup == "white", "similarity ranker should mark whitelist group")
+    try check(ranked[2].filterGroup == "black", "similarity ranker should mark blacklist group")
+    try check((ranked[0].similarity ?? 0) > (ranked[1].similarity ?? 0), "similarity ranker should attach cosine scores")
+    try check(SimilarityRanker.meanVector([[1, 0], [0, 1]]) == [0.5, 0.5], "similarity ranker should compute collection mean vectors")
+    try check(SimilarityRanker.cosine([1, 0], [0, 1]) == 0, "similarity ranker should return zero for orthogonal vectors")
+}
+
 func runArxivLiveFeedChecks() async throws {
     let environment = ProcessInfo.processInfo.environment
     guard let baseURLValue = environment["PAPER_CODEX_ARXIV_FEED_BASE_URL"],
@@ -1891,6 +1992,14 @@ do {
     if selectedChecks.isEmpty || selectedChecks.contains("local-arxiv-client") {
         try runLocalArxivClientChecks()
         print("local-arxiv-client: pass")
+    }
+    if selectedChecks.isEmpty || selectedChecks.contains("local-discover-preferences") {
+        try runLocalDiscoverPreferenceChecks()
+        print("local-discover-preferences: pass")
+    }
+    if selectedChecks.isEmpty || selectedChecks.contains("similarity-ranker") {
+        try runSimilarityRankerChecks()
+        print("similarity-ranker: pass")
     }
     if selectedChecks.contains("arxiv-live") {
         try await runArxivLiveFeedChecks()
