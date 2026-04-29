@@ -95,6 +95,55 @@ func runModelsChecks() throws {
     try check(decodedSession == session, "session should JSON round-trip")
 }
 
+func runLocalStoreV2ModelChecks() throws {
+    let now = Date(timeIntervalSince1970: 1_777_300_000)
+    let file = PaperFileRecord(
+        id: "file-a",
+        paperID: "paper-a",
+        storageState: .savedLocal,
+        localPath: "/tmp/paper-a/original.pdf",
+        contentHash: "hash-a",
+        byteCount: 42,
+        mimeType: "application/pdf",
+        remoteFileID: nil,
+        encryptionState: .none,
+        createdAt: now,
+        updatedAt: now
+    )
+    let source = PaperSourceRecord(
+        id: "source-a",
+        paperID: "paper-a",
+        sourceType: .arxiv,
+        sourceID: "2604.18586",
+        url: "https://arxiv.org/abs/2604.18586",
+        version: "v1",
+        metadataJSON: #"{"primary_category":"cs.CV"}"#,
+        createdAt: now
+    )
+    let note = PaperNote(
+        id: "note-a",
+        paperID: "paper-a",
+        anchorID: nil,
+        title: "Reading note",
+        bodyMarkdown: "Important limitation.",
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: nil,
+        syncRevision: 1
+    )
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let decodedFile = try decoder.decode(PaperFileRecord.self, from: encoder.encode(file))
+    let decodedSource = try decoder.decode(PaperSourceRecord.self, from: encoder.encode(source))
+    let decodedNote = try decoder.decode(PaperNote.self, from: encoder.encode(note))
+    try check(decodedFile == file, "paper file record should JSON round-trip")
+    try check(decodedSource == source, "paper source record should JSON round-trip")
+    try check(decodedNote == note, "paper note should JSON round-trip")
+    try check(PaperStorageState.feedPDFCache.rawValue == "feed_pdf_cache", "feed PDF cache state should be stable")
+}
+
 func runRepositoryChecks() throws {
     let tempRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("paper-codex-repository-\(UUID().uuidString)", isDirectory: true)
@@ -1269,6 +1318,10 @@ do {
     if selectedChecks.isEmpty || selectedChecks.contains("models") {
         try runModelsChecks()
         print("models: pass")
+    }
+    if selectedChecks.isEmpty || selectedChecks.contains("local-store-v2-models") {
+        try runLocalStoreV2ModelChecks()
+        print("local-store-v2-models: pass")
     }
     if selectedChecks.isEmpty || selectedChecks.contains("repository") {
         try runRepositoryChecks()
