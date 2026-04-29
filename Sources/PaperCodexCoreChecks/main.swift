@@ -591,11 +591,14 @@ func runSyncDataStoreChecks() throws {
     let repository = try PaperRepository(databasePath: databaseURL.path)
     try repository.migrate()
     let database = try SQLiteDatabase(path: databaseURL.path)
+    let syncEntityColumns = try database.tableColumns("sync_entities")
     let store = SyncDataStore(database: database)
     let dates = ISO8601DateFormatter()
     let now = Date(timeIntervalSince1970: 1_777_300_000)
+    let retryAt = Date(timeIntervalSince1970: 1_777_300_060)
     let tombstoneAt = Date(timeIntervalSince1970: 1_777_300_500)
 
+    try check(syncEntityColumns.contains("local_updated_at"), "V2 migration should create sync entity local update timestamps")
     try store.markDirty(entityType: "paper", entityID: "paper-a", localRevision: 2, deleted: false, at: now)
     try store.markDirty(entityType: "paper", entityID: "paper-a", localRevision: 5, deleted: true, at: tombstoneAt)
     try store.markDirty(entityType: "paper", entityID: "paper-a", localRevision: 3, deleted: false, at: now)
@@ -615,7 +618,7 @@ func runSyncDataStoreChecks() throws {
         operation: "upsert",
         payloadJSON: #"{"id":"paper-a"}"#,
         baseRemoteRevision: nil,
-        createdAt: now
+        createdAt: retryAt
     )
     var conflictingDuplicateError: String?
     do {
@@ -630,6 +633,20 @@ func runSyncDataStoreChecks() throws {
         )
     } catch {
         conflictingDuplicateError = String(describing: error)
+    }
+    var conflictingEntityError: String?
+    do {
+        try store.enqueue(
+            id: "change-a",
+            entityType: "paper",
+            entityID: "paper-b",
+            operation: "upsert",
+            payloadJSON: #"{"id":"paper-a"}"#,
+            baseRemoteRevision: nil,
+            createdAt: now
+        )
+    } catch {
+        conflictingEntityError = String(describing: error)
     }
     try store.setCursor(scope: "library", cursor: "cursor-1", updatedAt: now)
 
@@ -650,12 +667,21 @@ func runSyncDataStoreChecks() throws {
     """, bindings: [.text("change-a")]) { row in
         row.int(0)
     }.first
+    let outboxCreatedAt = try database.query("""
+    SELECT created_at
+    FROM sync_outbox
+    WHERE id = ?;
+    """, bindings: [.text("change-a")]) { row in
+        try row.text(0)
+    }.first
 
     try check(dirtyEntityIDs == ["paper-a"], "SyncDataStore should track dirty entities")
     try check(syncEntityRows == ["5|1|\(dates.string(from: tombstoneAt))"], "SyncDataStore should preserve max dirty revision, tombstone, and update timestamp")
     try check(pendingOutboxIDs == ["change-a"], "SyncDataStore should track pending outbox changes")
     try check(outboxCount == 1, "SyncDataStore should treat exact duplicate outbox IDs as idempotent")
+    try check(outboxCreatedAt == dates.string(from: now), "SyncDataStore should keep the original outbox creation date")
     try check(conflictingDuplicateError?.contains("change-a") == true, "SyncDataStore should reject conflicting duplicate outbox IDs")
+    try check(conflictingEntityError?.contains("change-a") == true, "SyncDataStore should reject duplicate outbox IDs with different entities")
     try check(cursor == "cursor-1", "SyncDataStore should persist cursors")
 }
 

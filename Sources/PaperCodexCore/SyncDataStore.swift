@@ -17,7 +17,6 @@ private struct SyncOutboxIdentity: Equatable {
     var operation: String
     var payloadJSON: String
     var baseRemoteRevision: Int?
-    var createdAt: String
 }
 
 public final class SyncDataStore {
@@ -69,13 +68,13 @@ public final class SyncDataStore {
         baseRemoteRevision: Int?,
         createdAt: Date
     ) throws {
+        let createdAtString = dates.string(from: createdAt)
         let identity = SyncOutboxIdentity(
             entityType: entityType,
             entityID: entityID,
             operation: operation,
             payloadJSON: payloadJSON,
-            baseRemoteRevision: baseRemoteRevision,
-            createdAt: dates.string(from: createdAt)
+            baseRemoteRevision: baseRemoteRevision
         )
         let existingIdentity = try fetchOutboxIdentity(id: id)
         if let existingIdentity {
@@ -95,7 +94,7 @@ public final class SyncDataStore {
             .text(identity.operation),
             .text(identity.payloadJSON),
             identity.baseRemoteRevision.map(SQLiteValue.int) ?? .null,
-            .text(identity.createdAt)
+            .text(createdAtString)
         ])
     }
 
@@ -153,7 +152,7 @@ public final class SyncDataStore {
 
     private func fetchOutboxIdentity(id: String) throws -> SyncOutboxIdentity? {
         try database.query("""
-        SELECT entity_type, entity_id, operation, payload_json, base_remote_revision, created_at
+        SELECT entity_type, entity_id, operation, payload_json, base_remote_revision
         FROM sync_outbox
         WHERE id = ?
         LIMIT 1;
@@ -163,8 +162,7 @@ public final class SyncDataStore {
                 entityID: try row.text(1),
                 operation: try row.text(2),
                 payloadJSON: try row.text(3),
-                baseRemoteRevision: row.optionalInt(4),
-                createdAt: try row.text(5)
+                baseRemoteRevision: row.optionalInt(4)
             )
         }.first
     }

@@ -26,6 +26,7 @@ public enum LocalStoreV2Migrator {
     public static func migrate(database: SQLiteDatabase) throws {
         try database.transaction {
             try createTables(database: database)
+            try addSyncEntityColumns(database: database)
             try addPaperColumns(database: database)
             try addTagColumns(database: database)
             try backfillFolders(database: database)
@@ -247,6 +248,7 @@ public enum LocalStoreV2Migrator {
           dirty INTEGER NOT NULL DEFAULT 0,
           deleted INTEGER NOT NULL DEFAULT 0,
           last_synced_at TEXT,
+          local_updated_at TEXT,
           PRIMARY KEY (entity_type, entity_id)
         );
 
@@ -268,6 +270,13 @@ public enum LocalStoreV2Migrator {
           updated_at TEXT NOT NULL
         );
         """)
+    }
+
+    private static func addSyncEntityColumns(database: SQLiteDatabase) throws {
+        let columns = try database.tableColumns("sync_entities")
+        if !columns.contains("local_updated_at") {
+            try database.execute("ALTER TABLE sync_entities ADD COLUMN local_updated_at TEXT;")
+        }
     }
 
     private static func addPaperColumns(database: SQLiteDatabase) throws {
