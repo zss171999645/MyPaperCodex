@@ -14,7 +14,7 @@ struct ReaderView: View {
                 pdfPane
                     .frame(minWidth: 560)
                 ChatView()
-                    .frame(minWidth: 330, idealWidth: 380, maxWidth: 460)
+                    .frame(minWidth: 330, idealWidth: 420, maxWidth: .infinity)
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
