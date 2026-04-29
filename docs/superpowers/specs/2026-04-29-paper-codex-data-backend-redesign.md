@@ -1,13 +1,25 @@
 # Paper Codex Data Backend Redesign
 
 Date: 2026-04-29
-Status: proposed design for user review
+Status: productized design for user review
 
 ## Goal
 
-Redesign Paper Codex's data layer so the app is useful offline, syncs a user's library online, supports real user login, and keeps paper PDFs, arXiv feed caches, tags, notes, anchors, and Codex reading sessions under clear security and ownership rules.
+Redesign Paper Codex's data layer and backend as a standard, general-purpose product that can support public registration, paid plans, long-term operations, and local-first research workflows without compromising private paper files.
 
-The product remains local-first: the macOS app must continue to open saved PDFs, cached arXiv feeds, notes, tags, source anchors, and recent Codex session context without a network connection. Online services add login, sync, feed enrichment, recommendations, and optional backup; they must not become required for normal reading of already-local papers.
+The product remains local-first: the macOS app must continue to open saved PDFs, cached arXiv feeds, notes, tags, source anchors, and recent Codex session context without a network connection. Online services add account login, metadata sync, feed enrichment, recommendations, entitlements, and operational controls; they must not become required for normal reading of already-local papers.
+
+Paper Codex should be designed as a commercial product from the first backend release. Even if the first deployment is for one owner, the architecture must avoid personal usernames, hardcoded CodeArXiv tokens, single-user assumptions, or one-off admin scripts that cannot evolve into a public service.
+
+## Commercial Product Principles
+
+- Multi-tenant by default: all user-owned backend rows are scoped by `user_id`, and future team/workspace support is enabled through `workspace_id` without requiring a schema rewrite.
+- Public registration capable: the account system supports email/password signup, email verification, login, refresh-token rotation, password reset, and device revocation.
+- Payment-ready without forcing day-one billing: plans, subscriptions, entitlements, usage counters, and billing customer IDs are first-class tables even if the first release has only a free/internal plan.
+- Privacy is a product feature: Paper Codex does not sync private PDFs. For non-arXiv papers, the backend syncs only the user-provided display title and organization data, not file bytes, extracted text, abstracts, local file paths, or content hashes.
+- Product API is the only public app API. CodeArXiv becomes an internal feed/recommendation dependency behind the product API.
+- Operations are part of the product: migrations, backups, audit logs, rate limits, support tooling, account deletion, and export must be designed with the backend, not added as emergency scripts later.
+- The owner setup process must be guided step by step. The implementation plan should explicitly list when the user needs to provide a domain, email sender, database, object storage/CDN choice, and payment provider credentials.
 
 ## Current State
 
@@ -30,20 +42,33 @@ The product remains local-first: the macOS app must continue to open saved PDFs,
 
 ### User Login And Sync
 
-- Users can sign in from the app.
+- Users can register with email and password from the app.
+- Signup requires email verification before enabling sync.
+- Users can log in with email and password.
+- Users can request a password reset by email.
 - A signed-in user gets online sync for library metadata, folders, hierarchical tags, notes, source anchors, reading annotations, and CodeArXiv preferences.
 - The app supports multiple local devices for one user.
 - The app can continue in local-only mode without login.
 - Tokens and refresh credentials are stored in Keychain, not in `UserDefaults`.
+- A user can revoke individual devices from the account/security settings.
+
+### Commercial Accounts And Plans
+
+- The backend stores users, devices, plans, subscriptions, entitlements, and usage counters separately.
+- A plan can limit features such as synced library item count, active devices, daily arXiv prefetch volume, feed history retention, recommendation jobs, and future AI usage.
+- Plan checks are enforced server-side through entitlements, not hidden UI switches.
+- The first release can ship with `internal`, `free`, and `pro_placeholder` plans. Only `internal` needs to be active until billing is wired.
+- Payment integration is not required for metadata sync Phase 1, but the schema must support Stripe or a domestic payment provider later.
 
 ### Library Data
 
 - Papers have stable identities independent of local file path.
 - arXiv papers are deduplicated by normalized arXiv ID, versioned arXiv ID, canonical abs URL, PDF URL, and file hash.
-- Non-arXiv papers are deduplicated by file hash, DOI, URL, and optional user-confirmed metadata.
+- Non-arXiv papers are local-private by default. The backend stores only the user's display title and user-owned organization data for them. Local file hashes, extracted text, abstracts, absolute paths, and PDF bytes stay local.
 - Tags are hierarchical and can be attached to papers.
 - Categories/folders remain hierarchical and represent organization, while tags represent facets.
 - Notes are first-class data, not hidden inside chat messages.
+- Each user-paper relationship has two explicit user-owned text fields: `user_summary` and `user_notes`. They are empty at creation and can be edited later without changing shared paper catalog metadata.
 - User-created anchors, PDF highlights, and notes are synced as independent entities.
 
 ### Security
@@ -89,16 +114,25 @@ Responsibilities:
 - Device registration and revocation.
 - Library metadata sync.
 - CodeArXiv feed access and preferences.
-- Optional encrypted file backup metadata.
+- Public feed asset metadata and cache coordination.
 - Per-user rate limits, audit logs, and ownership checks.
 
 Recommended runtime:
 
 - API service behind HTTPS.
-- PostgreSQL for user, sync, and metadata tables.
-- Object storage for optional uploaded encrypted PDFs and cached public arXiv assets.
+- PostgreSQL for user, billing, sync, and metadata tables.
+- Object storage or CDN cache only for public/product assets such as arXiv thumbnails, generated feed assets, and static resources. Private user PDFs are not uploaded by the baseline product.
 - Background workers for feed ingestion, thumbnail generation, recommendation vectors, and bulk prefetch jobs.
 - EdgeOne or another edge/proxy layer in front of the API for TLS termination, WAF, DDoS mitigation, caching public assets, and hiding origins.
+
+Commercial backend responsibilities:
+
+- Email/password signup, email verification, login, password reset, and refresh-token rotation.
+- Device registration, device naming, device revocation, and session invalidation.
+- Plan and entitlement lookup for every feature that consumes shared backend resources.
+- Usage accounting for sync writes, feed requests, background prefetch jobs, and future AI features.
+- Audit events for security-sensitive and billing-sensitive actions.
+- Admin/support tooling that can inspect account state without exposing private paper content.
 
 ### 3. CodeArXiv Feed Service
 
@@ -123,7 +157,6 @@ File states:
 - `cache_preview`: opened from Discover but not saved, disposable.
 - `feed_pdf_cache`: bulk cached PDF for a daily arXiv feed, disposable by policy but reusable if the user saves that paper.
 - `remote_public`: public arXiv PDF known by URL or arXiv ID, not stored locally.
-- `remote_private_encrypted`: optional user-uploaded PDF backup encrypted before or during upload.
 - `missing_local`: metadata exists but local PDF is unavailable.
 
 Cache policy:
@@ -146,7 +179,9 @@ The current schema should evolve rather than be patched with ad hoc columns.
 - `remote_user_id`
 - `display_name`
 - `email`
+- `email_verified`
 - `sync_enabled`
+- `plan_code`
 - `last_login_at`
 - `created_at`
 - `updated_at`
@@ -159,6 +194,8 @@ The current schema should evolve rather than be patched with ad hoc columns.
 - `public_key`
 - `created_at`
 - `revoked_at`
+
+The app stores access and refresh tokens in Keychain. `UserDefaults` can store only non-secret UI preferences such as the selected product API environment.
 
 ### Papers And Files
 
@@ -180,6 +217,8 @@ The current schema should evolve rather than be patched with ad hoc columns.
 - `updated_at`
 - `deleted_at`
 - `sync_revision`
+
+For non-arXiv local-private papers, synced server payloads must not include `file_path`, `content_hash`, extracted `abstract`, page text, or spans. The local row can keep those fields for local search and reader context.
 
 `paper_files`
 
@@ -205,6 +244,26 @@ The current schema should evolve rather than be patched with ad hoc columns.
 - `version`
 - `metadata_json`
 - `created_at`
+
+`user_papers`
+
+- `id`
+- `local_account_id`
+- `paper_id`
+- `remote_user_paper_id`
+- `display_title`
+- `source_kind`
+- `arxiv_id`
+- `is_saved`
+- `user_summary`
+- `user_notes`
+- `last_read_at`
+- `created_at`
+- `updated_at`
+- `deleted_at`
+- `sync_revision`
+
+`user_summary` and `user_notes` are initialized empty. They are user-owned fields and must not be merged into shared paper catalog metadata.
 
 ### Organization
 
@@ -355,9 +414,32 @@ The sync protocol should be simple, idempotent, and conflict-aware.
 
 ### Login
 
-Use a browser-based OAuth/PKCE flow or a device-code flow. The app receives an access token and refresh token from the product API. Access tokens are short-lived. Refresh tokens are rotatable and stored in Keychain.
+Use email/password signup and login for the first public-ready backend.
+
+Signup flow:
+
+- The user submits email and password.
+- The server creates an unverified user, stores only a password hash, and sends an email verification link or code.
+- Sync is disabled until the email is verified.
+- Verification marks `email_verified = true`, creates the first device, and issues short-lived access and rotatable refresh tokens.
+
+Login flow:
+
+- The user submits email and password.
+- The server applies rate limits and verifies the password hash.
+- The app registers or reuses a named device.
+- The app receives an access token and refresh token from the product API.
+- Access tokens are short-lived. Refresh tokens are rotatable and stored in Keychain.
+
+Password reset flow:
+
+- The user requests a reset by email.
+- The server sends a short-lived reset token or code.
+- After reset, existing refresh tokens for that user are revoked unless the user explicitly keeps trusted devices.
 
 Local-only users can skip login. If the user signs in after building a local library, the app links the existing local database to the remote account only after explicit confirmation.
+
+Future OAuth providers such as Apple, GitHub, or institutional SSO can be added after the email/password flow is stable. They must link into the same `users`, `user_identities`, `devices`, and entitlement model.
 
 ### Push
 
@@ -389,7 +471,7 @@ The app applies changes in a local transaction and updates `sync_cursors` only a
 
 ### Conflict Rules
 
-- Paper identity merges by canonical keys: arXiv ID, DOI, source URL, and file hash.
+- Paper identity merges by canonical keys. arXiv papers use arXiv ID, DOI, and canonical URL. Local non-arXiv file hashes can be used inside one device, but private file hashes are not sent to the product API.
 - Folders and tags use entity-level revisions. Rename conflicts use last-write-wins with preserved history in audit logs.
 - Paper-tag and paper-folder membership use add/remove tombstones so concurrent adds and removes are deterministic.
 - Notes are independent entities; edits conflict only on the same note.
@@ -403,11 +485,19 @@ The product API should store syncable metadata in relational tables.
 Core tables:
 
 - `users`
+- `user_identities`
 - `devices`
 - `refresh_tokens`
-- `papers`
+- `email_verification_tokens`
+- `password_reset_tokens`
+- `plans`
+- `subscriptions`
+- `entitlements`
+- `usage_counters`
+- `paper_catalog`
 - `paper_sources`
 - `library_items`
+- `user_papers`
 - `folders`
 - `tags`
 - `paper_folders`
@@ -421,24 +511,150 @@ Core tables:
 - `arxiv_favorites`
 - `file_objects`
 - `audit_events`
+- `admin_audit_events`
 
-The backend should not store raw local absolute paths. It stores file object IDs and metadata. Each row has `user_id`, `created_at`, `updated_at`, `deleted_at`, and a revision field.
+The backend should not store raw local absolute paths. In the baseline product, it does not store private user PDF file objects at all. Each user-owned row has `user_id`, `workspace_id` where applicable, `created_at`, `updated_at`, `deleted_at`, and a revision field.
+
+### Product Account Tables
+
+`users`
+
+- `id`
+- `email`
+- `normalized_email`
+- `password_hash`
+- `email_verified`
+- `display_name`
+- `created_at`
+- `updated_at`
+- `disabled_at`
+
+`user_identities`
+
+- `id`
+- `user_id`
+- `provider`
+- `provider_subject`
+- `email`
+- `created_at`
+
+The first provider is `password`. OAuth providers can be added later without changing the user table.
+
+`devices`
+
+- `id`
+- `user_id`
+- `device_name`
+- `device_public_key`
+- `platform`
+- `app_version`
+- `created_at`
+- `last_seen_at`
+- `revoked_at`
+
+`refresh_tokens`
+
+- `id`
+- `user_id`
+- `device_id`
+- `token_hash`
+- `rotated_from_id`
+- `created_at`
+- `expires_at`
+- `revoked_at`
+
+`plans`
+
+- `code`
+- `name`
+- `status`
+- `price_provider`
+- `price_id`
+- `created_at`
+- `updated_at`
+
+`subscriptions`
+
+- `id`
+- `user_id`
+- `plan_code`
+- `status`
+- `billing_provider`
+- `billing_customer_id`
+- `billing_subscription_id`
+- `current_period_start`
+- `current_period_end`
+- `created_at`
+- `updated_at`
+
+`entitlements`
+
+- `plan_code`
+- `feature`
+- `limit_value`
+- `limit_unit`
+
+`usage_counters`
+
+- `user_id`
+- `feature`
+- `period_start`
+- `period_end`
+- `used_value`
+- `updated_at`
+
+### Product Library Tables
+
+`paper_catalog`
+
+- `id`
+- `source_kind`
+- `arxiv_id`
+- `doi`
+- `canonical_url`
+- `title`
+- `authors_json`
+- `year`
+- `created_at`
+- `updated_at`
+
+Only public/shareable metadata belongs in `paper_catalog`. arXiv papers can use this table. Non-arXiv private papers should not be promoted into the shared catalog unless the user explicitly enters a public DOI or URL.
+
+`user_papers`
+
+- `id`
+- `user_id`
+- `workspace_id`
+- `catalog_paper_id`
+- `source_kind`
+- `arxiv_id`
+- `display_title`
+- `is_saved`
+- `user_summary`
+- `user_notes`
+- `missing_local`
+- `last_read_at`
+- `created_at`
+- `updated_at`
+- `deleted_at`
+- `revision`
+
+For arXiv papers, `catalog_paper_id` points to shared metadata and `arxiv_id` is set. For non-arXiv local-private papers, `catalog_paper_id` is null, `source_kind = manual`, and `display_title` is the only synced paper descriptor.
+
+`user_summary` and `user_notes` are nullable or empty at creation. They are private user fields and are included in metadata sync.
 
 ## PDF Sync Strategy
 
 Default behavior:
 
-- Public arXiv PDFs are not uploaded by the app. The backend stores arXiv ID and canonical URL. Other devices can redownload the public PDF and verify hash when needed.
-- User-imported private PDFs stay local by default.
-- Metadata, tags, notes, anchors, and sessions sync online.
+- Public arXiv PDFs are not uploaded by the app. The backend stores arXiv ID and canonical URL. Other devices can redownload the public PDF when needed.
+- User-imported private PDFs never upload in the baseline product.
+- Non-arXiv private papers sync only `display_title`, folders, tags, `user_summary`, `user_notes`, and sync bookkeeping.
+- Local file paths, private file hashes, PDF bytes, extracted text, page spans, and private abstracts stay local.
+- If a synced non-arXiv paper appears on a second device, it is shown as a metadata-only library item with `missing_local = true` until the user imports the PDF on that device.
+- Metadata, tags, notes, anchors, and sessions sync online only when they do not require uploading private PDF contents.
 
-Optional backup behavior:
-
-- A user can enable encrypted PDF backup.
-- Each file is encrypted with a per-file data key.
-- File data keys are wrapped for the user's active devices.
-- The server stores ciphertext and wrapped keys, not plaintext private PDFs.
-- The first synced release ships metadata sync only. Encrypted private PDF backup belongs to Phase 5 after metadata sync is stable.
+Encrypted private PDF backup is not part of this product baseline. If it is ever added, it must be a separate opt-in paid feature with its own design review, consent copy, encryption model, and deletion/export policy.
 
 ## Daily arXiv Offline Behavior
 
@@ -487,13 +703,46 @@ It does not by itself ensure data safety. Data safety still requires application
 - Object-level authorization tests for every sync entity.
 - Request-size and file-size limits.
 - Per-user and per-device rate limits.
-- Audit log for login, device registration, sync writes, file backup, and destructive operations.
+- Audit log for login, device registration, sync writes, entitlement changes, account export, account deletion, and destructive operations.
 - Sensitive fields excluded from analytics and logs.
 - Auth headers attached only to first-party API origin.
 - Vendored MathJax or local renderer for offline/private builds.
 - Development endpoints and ATS exceptions excluded from release configuration.
 
 The design should be checked against OWASP API Security Top 10 2023 risks, especially object-level authorization, authentication, authorization for property-level writes, unrestricted resource consumption, unsafe third-party API consumption, and security misconfiguration.
+
+## Product Operations
+
+A commercial-ready backend needs product operations surfaces from the first release.
+
+Required operational capabilities:
+
+- Database migrations are versioned, reversible where practical, and tested against a snapshot-like fixture.
+- Production data is backed up automatically with restore drills.
+- Every request has a request ID. Security-sensitive failures are logged without passwords, tokens, private notes, or private paper content.
+- Audit logs cover signup, email verification, login, password reset, device registration, token refresh, device revocation, sync writes, entitlement changes, admin actions, account deletion, and data export.
+- Rate limits exist for signup, login, password reset, feed refresh, sync writes, and background jobs.
+- Admin/support tools can view account status, plan, devices, recent errors, and usage counters without exposing private notes or private paper content by default.
+- Account deletion creates a queued deletion job that removes user-owned backend rows and invalidates tokens. Local files on user devices remain under the user's control.
+- Data export returns account metadata, library metadata, tags/folders, notes, and arXiv IDs. It does not include PDFs because PDFs are not uploaded.
+- Metrics track API latency, sync failures, feed job failures, email delivery failures, signup/login conversion, active devices, and entitlement denials.
+
+## User Setup Responsibilities
+
+The implementation process should guide the product owner one step at a time. The user should not need to know the backend stack in advance.
+
+The agent should ask for or help create these resources only when each phase needs them:
+
+- Product domain or subdomain for the API.
+- Production email sender for verification and password reset.
+- PostgreSQL database.
+- HTTPS deployment target.
+- Edge/CDN or reverse proxy choice, such as EdgeOne, once the origin exists.
+- Secret storage mechanism for production environment variables.
+- Optional billing provider account when paid plans are ready to activate.
+- Error monitoring destination and basic admin contact email.
+
+Do not ask the user to choose every service up front. Each implementation phase must say exactly what the user needs to do, why it is needed, and how to verify it worked.
 
 ## Migration Plan
 
@@ -513,24 +762,33 @@ The design should be checked against OWASP API Security Top 10 2023 risks, espec
 - Add a product API environment profile: development, staging, production.
 - Restrict Authorization headers to the product API origin.
 
-### Phase 3: arXiv Import And Offline Cache
+### Phase 3: Product Account Foundation
+
+- Implement backend email/password signup, email verification, login, refresh-token rotation, password reset, and device registration.
+- Add plan, subscription, entitlement, and usage-counter tables with internal/free/pro-placeholder seed data.
+- Add app login/settings UI backed by Keychain credentials.
+- Keep local-only mode available.
+- Add account deletion and data export API placeholders before public launch, even if the UI is minimal.
+
+### Phase 4: arXiv Import And Offline Cache
 
 - Add robust arXiv ID/link extraction in the local app.
 - Add daily metadata/thumb/full-image/PDF cache policies.
 - Add per-date cache status and background prefetch jobs.
 - Promote cached PDFs into saved library paths without duplicate downloads.
 
-### Phase 4: User Login And Metadata Sync
+### Phase 5: Product Metadata Sync
 
-- Add login and device registration.
 - Implement sync outbox/pull cursor.
-- Sync papers, folders, tags, memberships, notes, anchors, annotations, and preferences.
+- Sync arXiv user papers, non-arXiv metadata-only placeholders, folders, tags, memberships, `user_summary`, `user_notes`, notes, anchors, annotations, and preferences.
+- Do not upload private PDFs, private file hashes, extracted full text, local absolute paths, or private abstracts.
 - Add conflict handling and a small Settings view for sync health/conflicts.
 
-### Phase 5: Optional Encrypted File Backup
+### Phase 6: Commercial Operations And Billing Activation
 
-- Add encrypted PDF backup only after metadata sync is stable.
-- Do not block core reading and library sync on private PDF upload.
+- Add production backup/restore runbooks, admin support view, audit review, usage dashboards, and entitlement-denial UX.
+- Activate a payment provider only after metadata sync and account deletion/export are stable.
+- Keep PDF backup out of scope unless a separate paid privacy-reviewed feature is approved.
 
 ## Verification
 
@@ -557,8 +815,13 @@ Backend checks:
 - Invalid, expired, and revoked tokens are rejected.
 - User A cannot read or modify User B objects by changing IDs.
 - Sync payloads cannot change protected fields such as `user_id`, `owner_id`, `remote_revision`, or server timestamps.
-- File upload/download is size-limited and ownership-checked.
+- Private PDF upload endpoints do not exist in the baseline product.
+- Public arXiv asset endpoints are size-limited and origin-checked.
 - Origin is not directly exposed as a public development server.
+- Email verification gates sync.
+- Password reset revokes old refresh tokens.
+- Entitlement checks reject over-limit device registration, sync writes, and prefetch jobs.
+- Admin views hide private notes and paper content unless an explicit break-glass policy is later designed.
 
 UI checks:
 
@@ -570,11 +833,12 @@ UI checks:
 
 ## Open Decisions
 
-1. Private PDF cloud backup should remain opt-in and encrypted. The first synced release can ship metadata sync only.
-2. CodeArXiv should become an internal feed/recommendation service behind the product API. The app should stop exposing raw CodeArXiv base URL/token to normal users.
-3. Library notes should be paper-level first; span/anchor-attached notes can build on the same table.
-4. Full-text extracted spans should remain local-only until there is a clear need and explicit user consent to sync them.
-5. Release builds should vendor or localize MathJax rather than relying on a public CDN.
+1. CodeArXiv should become an internal feed/recommendation service behind the product API. The app should stop exposing raw CodeArXiv base URL/token to normal users.
+2. Library notes should be paper-level first; span/anchor-attached notes can build on the same table.
+3. Full-text extracted spans should remain local-only until there is a clear need and explicit user consent to sync them.
+4. Release builds should vendor or localize MathJax rather than relying on a public CDN.
+5. Billing provider choice can wait until the internal/free/pro-placeholder entitlement model is working.
+6. Team/workspace collaboration is not in the first sync release, but `workspace_id` should be present where it prevents a future migration.
 
 ## External References
 
