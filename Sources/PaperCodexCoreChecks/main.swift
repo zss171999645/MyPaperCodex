@@ -1760,11 +1760,25 @@ func runLocalArxivClientChecks() throws {
     let apiRange = try DiscoverDateRange(start: "2026-04-27", end: "2026-04-29")
     let apiQuery = try LocalArxivClient.submittedDateSearchQuery(range: apiRange, categories: ["cs.AI", "cs.CL"])
     let apiURL = try LocalArxivClient.apiSearchURL(query: apiQuery, start: 2_000, maxResults: 1_000)
+    let defaultConfiguration = LocalArxivClientConfiguration(categories: ["cs.AI"])
+    let defaultAPIURL = try LocalArxivClient.apiSearchURL(
+        query: apiQuery,
+        start: 0,
+        maxResults: defaultConfiguration.apiPageSize
+    )
     try check(apiQuery == "(cat:cs.AI OR cat:cs.CL) AND submittedDate:[202604270000 TO 202604292359]", "local arXiv client should build submittedDate category range queries")
     try check(apiURL.absoluteString.contains("sortBy=submittedDate"), "local arXiv API URL should sort by submitted date")
     try check(apiURL.absoluteString.contains("sortOrder=descending"), "local arXiv API URL should sort newest papers first")
     try check(apiURL.absoluteString.contains("start=2000"), "local arXiv API URL should support paging start")
     try check(apiURL.absoluteString.contains("max_results=1000"), "local arXiv API URL should support paging size")
+    try check(defaultConfiguration.apiPageSize == 100, "local arXiv client should default to small API pages to avoid export API timeouts")
+    try check(defaultAPIURL.absoluteString.contains("max_results=100"), "local arXiv default API URL should avoid 1000-result search requests")
+
+    let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    let clientSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/LocalArxivClient.swift"))
+    try check(clientSource.contains("isRetriableNetworkError"), "local arXiv client should retry transient network failures")
+    try check(clientSource.contains("http.statusCode == 429"), "local arXiv client should handle export API rate limiting")
+    try check(clientSource.contains("arXivAPIRequestDelayNanoseconds"), "local arXiv metadata batches should be throttled")
 
     let multiDateHTML = """
     <html><body>

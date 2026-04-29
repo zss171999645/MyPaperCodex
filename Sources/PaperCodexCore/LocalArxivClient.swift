@@ -19,7 +19,7 @@ public struct LocalArxivClientConfiguration: Equatable, Sendable {
     public init(
         categories: [String],
         listShow: Int = 2_000,
-        apiPageSize: Int = 1_000,
+        apiPageSize: Int = 100,
         userAgent: String = "PaperCodex/0.1 (+https://arxiv.org)"
     ) {
         self.categories = LocalArxivClientConfiguration.normalized(categories)
@@ -178,7 +178,7 @@ public final class LocalArxivClient: Sendable {
             guard let totalResults, start < totalResults, !pagePapers.isEmpty else {
                 break
             }
-            try await Task.sleep(nanoseconds: 3_000_000_000)
+            try await Task.sleep(nanoseconds: arXivAPIRequestDelayNanoseconds)
         } while start < 30_000
 
         guard !papers.isEmpty else {
@@ -380,7 +380,11 @@ public final class LocalArxivClient: Sendable {
             return []
         }
         var papersByID: [String: ArxivFeedPaper] = [:]
-        for batch in ids.chunked(size: 50) {
+        let batches = ids.chunked(size: 50)
+        for (index, batch) in batches.enumerated() {
+            if index > 0 {
+                try await Task.sleep(nanoseconds: arXivAPIRequestDelayNanoseconds)
+            }
             let url = try atomURL(ids: batch)
             let xml = try await fetchText(url: url)
             for paper in try Self.parseAtomFeed(
@@ -425,18 +429,60 @@ public final class LocalArxivClient: Sendable {
     }
 
     private func fetchData(url: URL, accept: String) async throws -> Data {
-        var request = URLRequest(url: url)
-        request.setValue(configuration.userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue(accept, forHTTPHeaderField: "Accept")
-        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
-        let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse,
-           !(200..<300).contains(http.statusCode) {
-            throw LocalArxivClientError.badStatus(http.statusCode, url.absoluteString)
+        var lastError: Error?
+        for attempt in 0..<3 {
+            var request = URLRequest(url: url)
+            request.setValue(configuration.userAgent, forHTTPHeaderField: "User-Agent")
+            request.setValue(accept, forHTTPHeaderField: "Accept")
+            request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+            do {
+                let (data, response) = try await session.data(for: request)
+                if let http = response as? HTTPURLResponse,
+                   !(200..<300).contains(http.statusCode) {
+                    if (http.statusCode == 429 || (500..<600).contains(http.statusCode)), attempt < 2 {
+                        try await Task.sleep(nanoseconds: retryDelayNanoseconds(for: http, attempt: attempt))
+                        continue
+                    }
+                    throw LocalArxivClientError.badStatus(http.statusCode, url.absoluteString)
+                }
+                return data
+            } catch {
+                if Task.isCancelled {
+                    throw error
+                }
+                lastError = error
+                if isRetriableNetworkError(error), attempt < 2 {
+                    try await Task.sleep(nanoseconds: retryDelayNanoseconds(for: nil, attempt: attempt))
+                    continue
+                }
+                throw error
+            }
         }
-        return data
+        throw lastError ?? LocalArxivClientError.invalidURL(url.absoluteString)
+    }
+
+    private func retryDelayNanoseconds(for response: HTTPURLResponse?, attempt: Int) -> UInt64 {
+        if let retryAfter = response?.value(forHTTPHeaderField: "Retry-After"),
+           let seconds = UInt64(retryAfter.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return seconds * 1_000_000_000
+        }
+        return UInt64(attempt + 1) * arXivAPIRequestDelayNanoseconds
+    }
+
+    private func isRetriableNetworkError(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else {
+            return false
+        }
+        switch urlError.code {
+        case .timedOut, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed:
+            return true
+        default:
+            return false
+        }
     }
 }
+
+private let arXivAPIRequestDelayNanoseconds: UInt64 = 3_000_000_000
 
 private struct RegexMatch {
     var range: Range<String.Index>
