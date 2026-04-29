@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Paper Codex 本地优先方案</title>
+  <style>
+    :root {
+      --ink: #171717;
+      --muted: #62615d;
+      --bg: #f5f2ec;
+      --panel: #fffdfa;
+      --line: #ddd5c8;
+      --green: #1f8a5b;
+      --blue: #256fd6;
+      --red: #d04f43;
+      --gold: #b88128;
+      --shadow: 0 18px 42px rgba(36, 30, 20, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(0, 0, 0, 0.04) 1px, transparent 1px) 0 0 / 32px 32px,
+        linear-gradient(rgba(0, 0, 0, 0.035) 1px, transparent 1px) 0 0 / 32px 32px,
+        var(--bg);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+    }
+
+    .page {
+      width: min(1180px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 32px 0 54px;
+    }
+
+    .hero {
+      min-height: 340px;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(135deg, rgba(31, 138, 91, 0.14), transparent 38%),
+        linear-gradient(155deg, #fffdfa 0%, #f0e8dc 100%);
+      box-shadow: var(--shadow);
+      padding: 40px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+      gap: 32px;
+      align-items: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .hero:after {
+      content: "";
+      position: absolute;
+      right: -110px;
+      bottom: -130px;
+      width: 310px;
+      height: 310px;
+      border-radius: 50%;
+      border: 42px solid rgba(37, 111, 214, 0.13);
+    }
+
+    .kicker {
+      margin-bottom: 16px;
+      color: var(--green);
+      font: 800 13px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 760px;
+      font-size: clamp(42px, 5.8vw, 74px);
+      line-height: .94;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 690px;
+      margin: 20px 0 0;
+      color: var(--muted);
+      font-size: 19px;
+      line-height: 1.65;
+    }
+
+    .verdict {
+      position: relative;
+      z-index: 1;
+      border: 1px solid var(--line);
+      background: rgba(255, 253, 250, 0.84);
+      padding: 24px;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
+    }
+
+    .verdict strong {
+      display: block;
+      margin-bottom: 12px;
+      color: var(--blue);
+      font: 800 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: .1em;
+    }
+
+    .verdict p {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.55;
+      font-weight: 750;
+    }
+
+    .section {
+      margin-top: 24px;
+      border: 1px solid var(--line);
+      background: rgba(255, 253, 250, 0.92);
+      padding: 28px;
+      box-shadow: var(--shadow);
+    }
+
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: end;
+      margin-bottom: 18px;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.1;
+    }
+
+    .note {
+      margin: 0;
+      max-width: 560px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .card {
+      min-height: 170px;
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .card b {
+      font-size: 20px;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .tag {
+      width: fit-content;
+      padding: 5px 8px;
+      border-radius: 999px;
+      color: #fff;
+      font: 800 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .local { background: var(--green); }
+    .direct { background: var(--blue); }
+    .optional { background: var(--gold); }
+    .nope { background: var(--red); }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .step {
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 16px;
+      position: relative;
+      min-height: 138px;
+    }
+
+    .step:not(:last-child):after {
+      content: ">";
+      position: absolute;
+      right: -10px;
+      top: 46%;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--ink);
+      color: white;
+      font: 800 12px/18px ui-monospace, SFMono-Regular, Menlo, monospace;
+      text-align: center;
+      z-index: 2;
+    }
+
+    .num {
+      display: block;
+      color: var(--green);
+      font: 900 13px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      margin-bottom: 12px;
+    }
+
+    .step b {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 17px;
+    }
+
+    .step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 20px;
+    }
+
+    .panel h3 {
+      margin: 0 0 14px;
+      font-size: 20px;
+    }
+
+    .rows {
+      display: grid;
+      gap: 10px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 112px 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 10px 0;
+      border-top: 1px solid #eee7dc;
+    }
+
+    .row:first-child { border-top: 0; padding-top: 0; }
+
+    .row span {
+      color: var(--blue);
+      font: 800 12px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .row p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.45;
+      font-size: 14px;
+    }
+
+    .final {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 14px;
+    }
+
+    .final .card {
+      min-height: 132px;
+    }
+
+    @media (max-width: 980px) {
+      .hero,
+      .split,
+      .final {
+        grid-template-columns: 1fr;
+      }
+
+      .cards {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      .step:not(:last-child):after {
+        content: "v";
+        right: 16px;
+        top: auto;
+        bottom: -10px;
+      }
+    }
+
+    @media (max-width: 620px) {
+      .page { width: min(100vw - 24px, 1180px); }
+      .hero, .section { padding: 22px; }
+      .cards { grid-template-columns: 1fr; }
+      .section-head { display: block; }
+      .note { margin-top: 8px; }
+      .row { grid-template-columns: 1fr; }
+    }
+
+    @media print {
+      body { background: white; }
+      .page { width: 100%; padding: 0; }
+      .hero, .section { box-shadow: none; break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div>
+        <div class="kicker">Paper Codex / Local-First Briefing</div>
+        <h1>先做一个真正好用的本地读论文工具。</h1>
+        <p class="subtitle">arXiv 是入口，不是后端。CodeArXiv 是参考实现，不再是运行依赖。用户数据、PDF、标签、总结、笔记、缓存和 embedding 都放在本地。</p>
+      </div>
+      <div class="verdict">
+        <strong>FINAL VERDICT</strong>
+        <p>当前版本不要账号、不要同步、不要云后端。先把 Library + Reader + 本地 Codex 处理 + arXiv 直连做扎实。</p>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>产品边界</h2>
+        <p class="note">这次收窄后，产品复杂度明显下降，但读论文主体验会更清楚。</p>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <span class="tag local">LOCAL</span>
+          <b>所有用户数据本地</b>
+          <p>PDF、library、tag、folder、笔记、用户总结、Codex 结果、缩略图和缓存都在本机。</p>
+        </div>
+        <div class="card">
+          <span class="tag direct">ARXIV</span>
+          <b>Discover 直连 arXiv</b>
+          <p>从 arXiv 列表和 Atom API 拉 metadata，按日期和分类缓存，不再连 NAS feed。</p>
+        </div>
+        <div class="card">
+          <span class="tag optional">OPTIONAL</span>
+          <b>embedding 可选</b>
+          <p>Settings 填 base URL、key、model。没配置也能完整阅读，只是不做相似度排序。</p>
+        </div>
+        <div class="card">
+          <span class="tag nope">NO CLOUD</span>
+          <b>暂不做后端</b>
+          <p>账号、同步、收费、云解析都从当前实现主线移除，保留为未来可能性。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>核心流程</h2>
+        <p class="note">Discover 只负责找到论文；Library 和 Reader 才是主场。</p>
+      </div>
+      <div class="flow">
+        <div class="step">
+          <span class="num">01</span>
+          <b>拉 arXiv</b>
+          <p>按 category/date 获取 ID，再批量拉 Atom metadata。</p>
+        </div>
+        <div class="step">
+          <span class="num">02</span>
+          <b>本地缓存</b>
+          <p>保存 metadata、小图、可选 PDF，断网时可以继续浏览缓存日期。</p>
+        </div>
+        <div class="step">
+          <span class="num">03</span>
+          <b>Open</b>
+          <p>PDF 下载到可删缓存，显示进度，然后进入 reader/chat。</p>
+        </div>
+        <div class="step">
+          <span class="num">04</span>
+          <b>Codex 处理</b>
+          <p>本地生成总结、中文摘要和标签，结果写入本地数据库。</p>
+        </div>
+        <div class="step">
+          <span class="num">05</span>
+          <b>Save</b>
+          <p>用户选 tag，PDF 移到 library，之后离线可读可问。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>设置界面要变成这些</h2>
+        <p class="note">删除 CodeArXiv 连接设置，改成本地能力配置。</p>
+      </div>
+      <div class="split">
+        <div class="panel">
+          <h3>保留和强化</h3>
+          <div class="rows">
+            <div class="row"><span>Storage</span><p>library 路径、cache 路径、清理缓存、可选每日 PDF 预缓存。</p></div>
+            <div class="row"><span>arXiv</span><p>分类、日期刷新、缓存状态、直接 arXiv 网络错误提示。</p></div>
+            <div class="row"><span>Codex</span><p>自动总结、自动打 tag、重新生成、prompt 版本。</p></div>
+            <div class="row"><span>Prompts</span><p>快捷 prompt 的标题和内容，继续用于 reader chat 下拉。</p></div>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>新加和移除</h3>
+          <div class="rows">
+            <div class="row"><span>Embedding</span><p>base URL、API key、model、启用开关、测试 provider。</p></div>
+            <div class="row"><span>Ranking</span><p>白名单 tag、黑名单 tag、相似度来源 folder/tag。</p></div>
+            <div class="row"><span>Remove</span><p>CodeArXiv base URL、username、token、favorite sync。</p></div>
+            <div class="row"><span>Later</span><p>账号、同步、收费、云解析只作为未来可选模块。</p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>最终判断</h2>
+        <p class="note">这条路更贴近“读论文”本身，也更容易做成高质量桌面产品。</p>
+      </div>
+      <div class="final">
+        <div class="card">
+          <span class="tag local">FIRST</span>
+          <b>Library 优先</b>
+          <p>读、问、总结、做笔记，都围绕本地 library 走。</p>
+        </div>
+        <div class="card">
+          <span class="tag direct">SIMPLE</span>
+          <b>arXiv 只是入口</b>
+          <p>直接拉、直接缓存、直接下载，不维护自己的 feed 后端。</p>
+        </div>
+        <div class="card">
+          <span class="tag optional">ROBUST</span>
+          <b>离线也成立</b>
+          <p>没有网络、没有 embedding provider、没有云账号时，核心阅读功能仍然可用。</p>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

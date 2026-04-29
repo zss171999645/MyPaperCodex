@@ -1,7 +1,11 @@
 # Paper Codex Data Backend Redesign
 
+Status: superseded by `docs/superpowers/specs/2026-04-29-paper-codex-local-first-arxiv-design.md`.
+
+This document is retained as a future cloud/backend feasibility reference. It is not the current implementation direction. The active direction is a local-only first version: no required backend, no user accounts, direct arXiv fetching, local Codex processing, local tags/summaries/notes, and optional locally configured embeddings.
+
 Date: 2026-04-29
-Status: productized design for user review
+Previous status: productized design for user review
 
 ## Goal
 

@@ -1,5 +1,9 @@
 # CodeArXiv Discover And Library Design
 
+Status: superseded by `docs/superpowers/specs/2026-04-29-paper-codex-local-first-arxiv-design.md`.
+
+This document describes the previous CodeArXiv-server-backed direction. The current product direction is local-first: Paper Codex should query arXiv directly, store user data locally, and use CodeArXiv only as an implementation reference.
+
 ## Goal
 
 Paper Codex should treat CodeArXiv as the server-side arXiv feed and preference engine, while the macOS app remains the local reader, library, cache, and Codex chat surface.
