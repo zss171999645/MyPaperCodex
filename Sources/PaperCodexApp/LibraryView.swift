@@ -38,12 +38,12 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        SidebarSplitLayout(minContentWidth: 720) {
+        SidebarSplitLayout(minContentWidth: 840) {
             sidebar
         } content: {
             HSplitView {
                 paperList
-                    .frame(minWidth: 520)
+                    .frame(minWidth: 500)
                 inspector
                     .frame(minWidth: 300, idealWidth: 340, maxWidth: 420)
             }

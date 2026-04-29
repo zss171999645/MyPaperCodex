@@ -19,7 +19,7 @@ struct SettingsView: View {
     @State private var newPromptContent = ""
 
     var body: some View {
-        SidebarSplitLayout(minContentWidth: 720) {
+        SidebarSplitLayout(minContentWidth: 760) {
             sidebar
         } content: {
             ScrollView {
@@ -37,7 +37,7 @@ struct SettingsView: View {
                 .padding(28)
                 .frame(maxWidth: 820, alignment: .leading)
             }
-            .frame(minWidth: 720)
+            .frame(minWidth: 0)
         }
         .onAppear {
             syncLocalDrafts()

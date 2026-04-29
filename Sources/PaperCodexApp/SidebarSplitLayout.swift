@@ -28,6 +28,7 @@ struct SidebarSplitLayout<Sidebar: View, Content: View>: View {
                 totalWidth: proxy.size.width,
                 handleWidth: handleWidth
             )
+            let contentMinWidth = max(0, min(minContentWidth, proxy.size.width - sidebarWidth - handleWidth))
 
             HStack(alignment: .top, spacing: 0) {
                 sidebar()
@@ -58,7 +59,8 @@ struct SidebarSplitLayout<Sidebar: View, Content: View>: View {
                             }
                     )
                 content()
-                    .frame(minWidth: minContentWidth, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: contentMinWidth, maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
             }
         }
         .transaction { transaction in

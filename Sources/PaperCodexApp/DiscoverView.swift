@@ -125,11 +125,11 @@ struct DiscoverView: View {
     }
 
     private var mainLayout: some View {
-        SidebarSplitLayout(minContentWidth: 720) {
+        SidebarSplitLayout(minContentWidth: 760) {
             sidebar
         } content: {
             feed
-                .frame(minWidth: 760, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
         }
         .background(Color(nsColor: .windowBackgroundColor))
@@ -299,15 +299,15 @@ struct DiscoverView: View {
 
     private func gridColumns(for width: CGFloat) -> [GridItem] {
         let count: Int
-        if width >= 1280 {
+        if width >= 1120 {
             count = 3
-        } else if width >= 700 {
+        } else if width >= 760 {
             count = 2
         } else {
             count = 1
         }
         return Array(
-            repeating: GridItem(.flexible(minimum: 320), spacing: 16, alignment: .top),
+            repeating: GridItem(.flexible(minimum: 360), spacing: 16, alignment: .top),
             count: count
         )
     }
@@ -333,7 +333,7 @@ struct DiscoverView: View {
                         model.startDiscoverSearch()
                     }
 
-                HStack(alignment: .center, spacing: 8) {
+                FlowLayout(spacing: 8) {
                     ArxivSourceBadge()
 
                     DateRangeFields(start: $model.discoverStartDate, end: $model.discoverEndDate)
@@ -396,8 +396,8 @@ struct DiscoverView: View {
                         }
                     }
 
-                    Spacer()
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 if (model.isSearchingDiscover || model.isPreloadingArxivAssets),
                    let progress = model.arxivCacheProgress {
@@ -643,15 +643,35 @@ private struct QuickRangeButtons: View {
     var onSelect: (DiscoverQuickRange) -> Void
 
     var body: some View {
-        HStack(spacing: 5) {
-            ForEach([DiscoverQuickRange.thisWeek, .thisMonth, .last7Days, .last30Days]) { range in
-                Button(range.title) {
-                    onSelect(range)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help(range.title)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 5) {
+                quickButtons
             }
+            Menu {
+                ForEach([DiscoverQuickRange.thisWeek, .thisMonth, .last7Days, .last30Days]) { range in
+                    Button(range.title) {
+                        onSelect(range)
+                    }
+                }
+            } label: {
+                Label("Ranges", systemImage: "calendar.badge.clock")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .padding(.horizontal, 10)
+                    .frame(height: 28)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+    }
+
+    private var quickButtons: some View {
+        ForEach([DiscoverQuickRange.thisWeek, .thisMonth, .last7Days, .last30Days]) { range in
+            Button(range.title) {
+                onSelect(range)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help(range.title)
         }
     }
 }
@@ -934,21 +954,7 @@ private struct ArxivPaperCard: View {
 
                 FlowTags(tags: Array(displayTags.prefix(7)))
 
-                HStack(alignment: .bottom, spacing: 8) {
-                    ResourceLinkButtons(links: resourceLinks, compact: true)
-                        .layoutPriority(0)
-                    Spacer(minLength: 10)
-                    if isBusy {
-                        ProgressView(value: downloadProgress)
-                            .frame(width: 78)
-                    }
-                    if inLibrary {
-                        SavedActionBadge()
-                    } else {
-                        SaveActionButton(isBusy: isBusy, action: onSave)
-                    }
-                    StableOpenButton(isBusy: isBusy, action: onOpen)
-                }
+                cardFooter
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -971,26 +977,69 @@ private struct ArxivPaperCard: View {
         }
     }
 
-    private var metadataRow: some View {
-        HStack(alignment: .center, spacing: 8) {
-            HStack(alignment: .center, spacing: 6) {
-                MetadataPill(
-                    title: paper.primaryCategory ?? paper.categories.first ?? "arXiv",
-                    foreground: .teal,
-                    background: Color.teal.opacity(0.12)
-                )
-                ArxivIDPill(id: paper.id)
-                ProcessingStatePill(enrichment: enrichment)
+    private var cardFooter: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 8) {
+                ResourceLinkButtons(links: resourceLinks, compact: true)
+                Spacer(minLength: 10)
+                actionGroup
             }
-            .layoutPriority(1)
+            VStack(alignment: .leading, spacing: 8) {
+                ResourceLinkButtons(links: resourceLinks, compact: true)
+                HStack {
+                    Spacer(minLength: 0)
+                    actionGroup
+                }
+            }
+        }
+    }
 
-            Spacer(minLength: 8)
+    private var actionGroup: some View {
+        HStack(spacing: 8) {
+            if isBusy {
+                ProgressView(value: downloadProgress)
+                    .frame(width: 78)
+            }
+            if inLibrary {
+                SavedActionBadge()
+            } else {
+                SaveActionButton(isBusy: isBusy, action: onSave)
+            }
+            StableOpenButton(isBusy: isBusy, action: onOpen)
+        }
+        .fixedSize()
+    }
 
-            if let similarity = paper.similarity {
-                SimilarityMeter(value: similarity)
+    private var metadataRow: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 8) {
+                metadataPills
+                    .layoutPriority(1)
+                Spacer(minLength: 8)
+                if let similarity = paper.similarity {
+                    SimilarityMeter(value: similarity)
+                }
+            }
+            VStack(alignment: .leading, spacing: 7) {
+                metadataPills
+                if let similarity = paper.similarity {
+                    SimilarityMeter(value: similarity)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var metadataPills: some View {
+        HStack(alignment: .center, spacing: 6) {
+            MetadataPill(
+                title: paper.primaryCategory ?? paper.categories.first ?? "arXiv",
+                foreground: .teal,
+                background: Color.teal.opacity(0.12)
+            )
+            ArxivIDPill(id: paper.id)
+            ProcessingStatePill(enrichment: enrichment)
+        }
     }
 
     private var primaryTitle: String {
@@ -1259,21 +1308,32 @@ private struct DiscoverPDFThumbnailHero: View {
     var urls: [URL]
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(Array(urls.prefix(5).enumerated()), id: \.offset) { _, url in
-                if let image = NSImage(contentsOf: url) {
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipped()
-                        .overlay(alignment: .trailing) {
-                            Rectangle()
-                                .fill(Color.black.opacity(0.06))
-                                .frame(width: 1)
+        GeometryReader { proxy in
+            let visibleURLs = Array(urls.prefix(5))
+            let itemCount = max(visibleURLs.count, 1)
+            let itemWidth = max(proxy.size.width / CGFloat(itemCount), 1)
+
+            HStack(spacing: 0) {
+                ForEach(Array(visibleURLs.enumerated()), id: \.offset) { _, url in
+                    if let image = NSImage(contentsOf: url) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: itemWidth, height: proxy.size.height)
+                            .clipped()
+                            .overlay(alignment: .trailing) {
+                                Rectangle()
+                                    .fill(Color.black.opacity(0.06))
+                                    .frame(width: 1)
+                            }
+                    } else {
+                        Color(nsColor: .controlBackgroundColor)
+                            .frame(width: itemWidth, height: proxy.size.height)
                         }
                 }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
+            .clipped()
         }
         .frame(height: 154)
         .background(Color(nsColor: .controlBackgroundColor))
