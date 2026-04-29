@@ -12,6 +12,7 @@ struct DiscoverView: View {
     @State private var selectedSimilarityBucket: DiscoverSimilarityBucket = .all
     @State private var paperPendingSave: ArxivFeedPaper?
     @State private var previewPaper: ArxivFeedPaper?
+    @State private var discoverRowHeights: [Int: CGFloat] = [:]
 
     private var papers: [ArxivFeedPaper] {
         var result = model.arxivFeed?.papers ?? []
@@ -259,36 +260,34 @@ struct DiscoverView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 GeometryReader { proxy in
+                    let columnCount = gridColumnCount(for: proxy.size.width)
+                    let rows = paperRows(papers, columnCount: columnCount)
+                    let layoutSignature = rowLayoutSignature(papers: papers, columnCount: columnCount)
+
                     ScrollView {
-                        LazyVGrid(
-                            columns: gridColumns(for: proxy.size.width),
-                            alignment: .leading,
-                            spacing: 14
-                        ) {
-                            ForEach(papers) { paper in
-                                ArxivPaperCard(
-                                    paper: paper,
-                                    enrichment: model.discoverEnrichment(for: paper),
-                                    imageURL: model.cachedArxivAssetURL(for: paper.assets.small),
-                                    thumbnailURLs: model.cachedArxivPDFThumbnailURLs(for: paper),
-                                    inLibrary: model.libraryPaper(for: paper) != nil,
-                                    isBusy: model.isDownloadingArxivPaper(paper),
-                                    downloadProgress: model.arxivDownloadProgress(for: paper),
-                                    onPreview: {
-                                        previewPaper = paper
-                                    },
-                                    onSave: {
-                                        paperPendingSave = paper
-                                    },
-                                    onOpen: {
-                                        Task {
-                                            await model.openArxivPaper(paper)
-                                        }
+                        LazyVStack(alignment: .leading, spacing: 14) {
+                            ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, rowPapers in
+                                HStack(alignment: .top, spacing: 16) {
+                                    ForEach(rowPapers) { paper in
+                                        discoverCard(for: paper, rowIndex: rowIndex)
                                     }
-                                )
+                                    ForEach(0..<max(0, columnCount - rowPapers.count), id: \.self) { _ in
+                                        Color.clear
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
                         .padding(.vertical, 2)
+                        .onPreferenceChange(DiscoverRowHeightPreferenceKey.self) { values in
+                            if discoverRowHeights != values {
+                                discoverRowHeights = values
+                            }
+                        }
+                        .onChange(of: layoutSignature) { _, _ in
+                            discoverRowHeights = [:]
+                        }
                     }
                 }
             }
@@ -297,19 +296,50 @@ struct DiscoverView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private func gridColumns(for width: CGFloat) -> [GridItem] {
-        let count: Int
+    private func gridColumnCount(for width: CGFloat) -> Int {
         if width >= 1120 {
-            count = 3
-        } else if width >= 760 {
-            count = 2
-        } else {
-            count = 1
+            return 3
         }
-        return Array(
-            repeating: GridItem(.flexible(minimum: 360), spacing: 16, alignment: .top),
-            count: count
+        if width >= 760 {
+            return 2
+        }
+        return 1
+    }
+
+    private func paperRows(_ papers: [ArxivFeedPaper], columnCount: Int) -> [[ArxivFeedPaper]] {
+        let count = max(columnCount, 1)
+        return stride(from: 0, to: papers.count, by: count).map { start in
+            Array(papers[start..<min(start + count, papers.count)])
+        }
+    }
+
+    private func rowLayoutSignature(papers: [ArxivFeedPaper], columnCount: Int) -> String {
+        "\(columnCount):\(papers.map(\.id).joined(separator: ","))"
+    }
+
+    private func discoverCard(for paper: ArxivFeedPaper, rowIndex: Int) -> some View {
+        ArxivPaperCard(
+            paper: paper,
+            enrichment: model.discoverEnrichment(for: paper),
+            imageURL: model.cachedArxivAssetURL(for: paper.assets.small),
+            thumbnailURLs: model.cachedArxivPDFThumbnailURLs(for: paper),
+            inLibrary: model.libraryPaper(for: paper) != nil,
+            isBusy: model.isDownloadingArxivPaper(paper),
+            downloadProgress: model.arxivDownloadProgress(for: paper),
+            minimumHeight: discoverRowHeights[rowIndex] ?? 0,
+            onPreview: {
+                previewPaper = paper
+            },
+            onSave: {
+                paperPendingSave = paper
+            },
+            onOpen: {
+                Task {
+                    await model.openArxivPaper(paper)
+                }
+            }
         )
+        .background(DiscoverCardHeightReporter(rowIndex: rowIndex))
     }
 
     private var toolbar: some View {
@@ -892,6 +922,7 @@ private struct ArxivPaperCard: View {
     var inLibrary: Bool
     var isBusy: Bool
     var downloadProgress: Double?
+    var minimumHeight: CGFloat = 0
     var onPreview: () -> Void
     var onSave: () -> Void
     var onOpen: () -> Void
@@ -960,7 +991,7 @@ private struct ArxivPaperCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .contentShape(RoundedRectangle(cornerRadius: 8))
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: minimumHeight, alignment: .topLeading)
         .background(Color(nsColor: .textBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
@@ -1103,6 +1134,29 @@ private struct ArxivPaperCard: View {
         append(id: "project-enriched", title: "Project", systemImage: "globe", key: "project")
         append(id: "hf-enriched", title: "HF", systemImage: "shippingbox", key: "hugging_face")
         return result
+    }
+}
+
+private struct DiscoverCardHeightReporter: View {
+    var rowIndex: Int
+
+    var body: some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: DiscoverRowHeightPreferenceKey.self,
+                value: [rowIndex: proxy.size.height]
+            )
+        }
+    }
+}
+
+private struct DiscoverRowHeightPreferenceKey: PreferenceKey {
+    static let defaultValue: [Int: CGFloat] = [:]
+
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        for (rowIndex, height) in nextValue() {
+            value[rowIndex] = max(value[rowIndex] ?? 0, height)
+        }
     }
 }
 
