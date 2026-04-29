@@ -1,0 +1,750 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Paper Codex 云后端可行性报告</title>
+  <style>
+    :root {
+      --ink: #15130f;
+      --muted: #676157;
+      --paper: #f7f4ee;
+      --panel: #fffdf8;
+      --line: #ded7ca;
+      --blue: #1b6fe8;
+      --green: #1e8e63;
+      --red: #d84d3f;
+      --gold: #bc8522;
+      --shadow: 0 18px 45px rgba(36, 29, 18, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(21, 19, 15, 0.04) 1px, transparent 1px) 0 0 / 34px 34px,
+        linear-gradient(rgba(21, 19, 15, 0.035) 1px, transparent 1px) 0 0 / 34px 34px,
+        var(--paper);
+      font-family: ui-serif, Georgia, "Songti SC", "Noto Serif CJK SC", serif;
+    }
+
+    .page {
+      width: min(1180px, calc(100vw - 42px));
+      margin: 0 auto;
+      padding: 34px 0 56px;
+    }
+
+    .hero {
+      min-height: 360px;
+      border: 1px solid var(--line);
+      background:
+        radial-gradient(circle at 78% 22%, rgba(27, 111, 232, 0.18), transparent 28%),
+        linear-gradient(135deg, #fffdf8 0%, #f5efe2 100%);
+      box-shadow: var(--shadow);
+      padding: 42px;
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 34px;
+      align-items: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero:after {
+      content: "";
+      position: absolute;
+      inset: auto -120px -160px auto;
+      width: 360px;
+      height: 360px;
+      border: 44px solid rgba(188, 133, 34, 0.16);
+      border-radius: 50%;
+    }
+
+    .kicker {
+      font: 700 13px/1.1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--blue);
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(42px, 6vw, 76px);
+      line-height: 0.94;
+      max-width: 700px;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 22px 0 0;
+      color: var(--muted);
+      font-size: 20px;
+      line-height: 1.5;
+      max-width: 680px;
+    }
+
+    .verdict {
+      border: 1px solid #b9d2f8;
+      background: rgba(255, 255, 255, 0.78);
+      padding: 24px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .verdict strong {
+      display: block;
+      color: var(--blue);
+      font-size: 15px;
+      margin-bottom: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .verdict p {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.35;
+      font-weight: 700;
+    }
+
+    .section {
+      margin-top: 28px;
+      border: 1px solid var(--line);
+      background: rgba(255, 253, 248, 0.88);
+      box-shadow: 0 8px 28px rgba(36, 29, 18, 0.06);
+      padding: 26px;
+    }
+
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 20px;
+      margin-bottom: 18px;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.1;
+    }
+
+    .section-note {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      max-width: 520px;
+      text-align: right;
+      line-height: 1.45;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      padding: 18px;
+      min-height: 160px;
+      position: relative;
+    }
+
+    .card b {
+      display: block;
+      font-size: 19px;
+      margin-bottom: 10px;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      padding: 0 8px;
+      border: 1px solid currentColor;
+      font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+      margin-bottom: 12px;
+    }
+
+    .tag.good { color: var(--green); }
+    .tag.warn { color: var(--gold); }
+    .tag.stop { color: var(--red); }
+    .tag.info { color: var(--blue); }
+
+    .architecture {
+      display: grid;
+      grid-template-columns: 1fr 74px 1.3fr;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .app-box,
+    .cloud-box,
+    .internal-box {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      padding: 18px;
+    }
+
+    .box-title {
+      font: 800 18px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+      margin-bottom: 12px;
+    }
+
+    .pill-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      background: #fbf7ee;
+      padding: 7px 9px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .arrow {
+      height: 2px;
+      background: var(--blue);
+      position: relative;
+    }
+
+    .arrow:after {
+      content: "";
+      position: absolute;
+      right: -2px;
+      top: -5px;
+      border-left: 10px solid var(--blue);
+      border-top: 6px solid transparent;
+      border-bottom: 6px solid transparent;
+    }
+
+    .cloud-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .internal-box {
+      background: #f9fbff;
+      border-color: #bfd4f4;
+    }
+
+    .lane {
+      display: grid;
+      grid-template-columns: 210px 1fr 1fr;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      margin-top: 12px;
+    }
+
+    .lane > div {
+      padding: 16px;
+      border-right: 1px solid var(--line);
+      min-height: 112px;
+    }
+
+    .lane > div:last-child {
+      border-right: 0;
+    }
+
+    .lane-title {
+      font-weight: 800;
+      font-size: 18px;
+    }
+
+    .yes {
+      color: var(--green);
+      font-weight: 800;
+    }
+
+    .no {
+      color: var(--red);
+      font-weight: 800;
+    }
+
+    .muted {
+      color: var(--muted);
+      line-height: 1.45;
+      margin-top: 8px;
+      font-size: 14px;
+    }
+
+    .config {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 14px;
+    }
+
+    .config .card {
+      min-height: 210px;
+    }
+
+    .metric {
+      font: 900 32px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      margin: 4px 0 12px;
+    }
+
+    .roadmap {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 0;
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .step {
+      padding: 18px;
+      border-right: 1px solid var(--line);
+      min-height: 190px;
+    }
+
+    .step:last-child {
+      border-right: 0;
+    }
+
+    .step-num {
+      font: 800 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--blue);
+      margin-bottom: 18px;
+    }
+
+    .step b {
+      display: block;
+      font-size: 18px;
+      margin-bottom: 9px;
+    }
+
+    .step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13.5px;
+      line-height: 1.45;
+    }
+
+    .decision {
+      display: grid;
+      grid-template-columns: 0.9fr 1.1fr;
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .big-yes {
+      background: var(--ink);
+      color: #fffdf8;
+      padding: 30px;
+      min-height: 260px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .big-yes .metric {
+      color: #fffdf8;
+      font-size: 58px;
+    }
+
+    .checklist {
+      display: grid;
+      gap: 10px;
+    }
+
+    .check {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      padding: 14px 16px;
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .mark {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--green);
+      color: white;
+      display: grid;
+      place-items: center;
+      font: 900 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .check b {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .check span {
+      color: var(--muted);
+      font-size: 13.5px;
+      line-height: 1.4;
+    }
+
+    .footer {
+      margin-top: 28px;
+      padding: 20px 0;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+    }
+
+    @media (max-width: 980px) {
+      .hero,
+      .architecture,
+      .decision {
+        grid-template-columns: 1fr;
+      }
+
+      .cards,
+      .config,
+      .roadmap {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .lane {
+        grid-template-columns: 1fr;
+      }
+
+      .lane > div {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .lane > div:last-child {
+        border-bottom: 0;
+      }
+
+      .section-note {
+        text-align: left;
+      }
+
+      .section-head {
+        align-items: start;
+        flex-direction: column;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .page {
+        width: min(100vw - 22px, 1180px);
+        padding-top: 14px;
+      }
+
+      .hero,
+      .section {
+        padding: 20px;
+      }
+
+      .cards,
+      .config,
+      .roadmap {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media print {
+      body {
+        background: white;
+      }
+
+      .page {
+        width: 100%;
+        padding: 0;
+      }
+
+      .hero,
+      .section {
+        box-shadow: none;
+        break-inside: avoid;
+        margin-top: 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div>
+        <div class="kicker">Paper Codex / Cloud Backend Briefing</div>
+        <h1>云服务器可行，但要按产品后端来做。</h1>
+        <p class="subtitle">结论不是“买一台机器跑接口”，而是把账号、同步、arXiv 信息流、公共论文解析、缓存和运维拆成清楚的生产边界。</p>
+      </div>
+      <div class="verdict">
+        <strong>FINAL VERDICT</strong>
+        <p>可以买云服务器。第一台机器适合做生产起点；私有 PDF 不上云，公共 arXiv 解析可以上云但必须排队、限速、内网运行。</p>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>产品边界</h2>
+        <p class="section-note">商业化第一原则：云端同步的是用户元数据，不是用户的私有论文文件。</p>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <span class="tag good">SYNC</span>
+          <b>云端同步</b>
+          <p>账号、设备、arXiv ID、保存状态、tags、folders、用户总结、用户笔记、收藏夹、黑白名单。</p>
+        </div>
+        <div class="card">
+          <span class="tag stop">LOCAL</span>
+          <b>永远本地</b>
+          <p>用户私有 PDF、非 arXiv 全文、PDF 路径、页面文本、span、bbox、Codex workspace。</p>
+        </div>
+        <div class="card">
+          <span class="tag info">PUBLIC</span>
+          <b>可处理公共 arXiv</b>
+          <p>metadata、缩略图、标签、相似度、公开 PDF 的解析结果。App 仍优先链接回 arXiv 下载。</p>
+        </div>
+        <div class="card">
+          <span class="tag warn">BILLING</span>
+          <b>收费预留</b>
+          <p>从第一版就有 plan、subscription、entitlement、usage counter，先不开收费也不阻碍以后商业化。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>推荐架构</h2>
+        <p class="section-note">App 只连 Product API；CodeArXiv 和 parser 都退到内网服务。</p>
+      </div>
+      <div class="architecture">
+        <div class="app-box">
+          <div class="box-title">macOS App</div>
+          <div class="pill-list">
+            <span class="pill">本地 PDF 阅读</span>
+            <span class="pill">本地索引</span>
+            <span class="pill">Keychain token</span>
+            <span class="pill">离线缓存</span>
+            <span class="pill">同步 outbox</span>
+          </div>
+        </div>
+        <div class="arrow"></div>
+        <div class="cloud-box">
+          <div class="box-title">Cloud Product Backend</div>
+          <div class="cloud-grid">
+            <div class="internal-box">
+              <b>Product API</b>
+              <p class="muted">注册、登录、同步、权限、计划、用户数据。</p>
+            </div>
+            <div class="internal-box">
+              <b>PostgreSQL + Redis</b>
+              <p class="muted">产品数据、任务队列、限流、状态。</p>
+            </div>
+            <div class="internal-box">
+              <b>CodeArXiv Worker</b>
+              <p class="muted">每日 feed、相似度、黑白名单、收藏夹。</p>
+            </div>
+            <div class="internal-box">
+              <b>Parser Worker</b>
+              <p class="muted">只解析公共 arXiv；GROBID 内网，不公开。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>论文解析策略</h2>
+        <p class="section-note">解析不是一个开关。不同论文来源要走不同链路。</p>
+      </div>
+      <div class="lane">
+        <div>
+          <div class="lane-title">非 arXiv 私有 PDF</div>
+          <p class="muted">用户手动导入的文件。</p>
+        </div>
+        <div>
+          <div class="no">不上云</div>
+          <p class="muted">不上传文件、不传 hash、不传全文、不传本地路径。</p>
+        </div>
+        <div>
+          <div class="yes">本地解析</div>
+          <p class="muted">PDFKit / 本地 index / 本地 reader / 本地 Codex context。</p>
+        </div>
+      </div>
+      <div class="lane">
+        <div>
+          <div class="lane-title">公共 arXiv PDF</div>
+          <p class="muted">公开论文，有 arXiv ID。</p>
+        </div>
+        <div>
+          <div class="yes">可上云处理</div>
+          <p class="muted">metadata、缩略图、相似度、公开结构化信息。</p>
+        </div>
+        <div>
+          <div class="yes">队列解析</div>
+          <p class="muted">worker 拉任务，GROBID 内网解析，失败可重试。</p>
+        </div>
+      </div>
+      <div class="lane">
+        <div>
+          <div class="lane-title">PDF 分发</div>
+          <p class="muted">用户点 Open / Download。</p>
+        </div>
+        <div>
+          <div class="no">不做 PDF 中心</div>
+          <p class="muted">避免版权和带宽风险。</p>
+        </div>
+        <div>
+          <div class="yes">链接回 arXiv</div>
+          <p class="muted">App 根据 arXiv URL 下载，保存到本地或缓存。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>服务器规格</h2>
+        <p class="section-note">第一台服务器能跑起来，但要知道它的边界。</p>
+      </div>
+      <div class="config">
+        <div class="card">
+          <span class="tag warn">MINIMUM</span>
+          <div class="metric">2C / 4G</div>
+          <b>只适合轻量内测</b>
+          <p>API、PostgreSQL、Redis、少量 worker。不要在这里跑批量 PDF 解析。</p>
+        </div>
+        <div class="card">
+          <span class="tag good">RECOMMENDED</span>
+          <div class="metric">4C / 8G</div>
+          <b>生产起点</b>
+          <p>账号、同步、Discover、缩略图、轻量公共 arXiv 任务。适合早期真实用户。</p>
+        </div>
+        <div class="card">
+          <span class="tag info">PARSER</span>
+          <div class="metric">4C / 16G</div>
+          <b>带 GROBID 解析</b>
+          <p>公共 arXiv 全文结构化。解析服务内网部署，并发限制在 1-2 起步。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>生产演进路线</h2>
+        <p class="section-note">不是一步到位，但每一步都能平滑升级。</p>
+      </div>
+      <div class="roadmap">
+        <div class="step">
+          <div class="step-num">PHASE 1</div>
+          <b>单机生产起点</b>
+          <p>Docker Compose 跑 API、DB、Redis、worker、CodeArXiv、Caddy。</p>
+        </div>
+        <div class="step">
+          <div class="step-num">PHASE 2</div>
+          <b>账号和同步</b>
+          <p>邮箱注册、验证、登录、Keychain、metadata sync、设备管理。</p>
+        </div>
+        <div class="step">
+          <div class="step-num">PHASE 3</div>
+          <b>公共 arXiv 后台任务</b>
+          <p>feed、缩略图、相似度、标签、缓存状态、解析队列。</p>
+        </div>
+        <div class="step">
+          <div class="step-num">PHASE 4</div>
+          <b>拆服务</b>
+          <p>PostgreSQL/Redis 托管化，parser/worker 独立机器，CDN 缓存静态资产。</p>
+        </div>
+        <div class="step">
+          <div class="step-num">PHASE 5</div>
+          <b>商业化</b>
+          <p>entitlement 生效、付费计划、使用量统计、管理员支持、数据导出删除。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="decision">
+        <div class="big-yes">
+          <div>
+            <div class="kicker">Purchase Decision</div>
+            <div class="metric">可买</div>
+          </div>
+          <p>建议先买 4C / 8G / 100GB SSD / Ubuntu 24.04。若确定要在同机跑 GROBID，直接买 4C / 16G / 200GB SSD。</p>
+        </div>
+        <div class="checklist">
+          <div class="check">
+            <div class="mark">1</div>
+            <div>
+              <b>给 SSH，不给云厂商主账号</b>
+              <span>最好用 SSH key；临时密码也可以，但配置后会关掉密码登录。</span>
+            </div>
+          </div>
+          <div class="check">
+            <div class="mark">2</div>
+            <div>
+              <b>域名指向 API</b>
+              <span>例如 api.papercodex.xxx，Caddy 自动 HTTPS。</span>
+            </div>
+          </div>
+          <div class="check">
+            <div class="mark">3</div>
+            <div>
+              <b>邮件服务稍后配置</b>
+              <span>用于注册验证和找回密码；我会到那一步再告诉你填什么。</span>
+            </div>
+          </div>
+          <div class="check">
+            <div class="mark">4</div>
+            <div>
+              <b>不要把 parser 暴露公网</b>
+              <span>GROBID / Redis / PostgreSQL 全部内网，只让 Product API 对外。</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>最终判断</h2>
+        <p class="section-note">这是一条能从内测走到收费产品的路线。</p>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <span class="tag good">FEASIBLE</span>
+          <b>云服务器迁移可行</b>
+          <p>先单机跑产品 API 和后台 worker，成本低、控制强、能快速迭代。</p>
+        </div>
+        <div class="card">
+          <span class="tag good">PRIVATE</span>
+          <b>隐私边界清楚</b>
+          <p>私有 PDF 本地处理，云端只同步用户元数据，这是商业化卖点。</p>
+        </div>
+        <div class="card">
+          <span class="tag warn">CONTROL</span>
+          <b>解析要限速排队</b>
+          <p>公共 arXiv 可以解析，但不要同步阻塞用户操作，也不要无节制爬取。</p>
+        </div>
+        <div class="card">
+          <span class="tag info">SCALABLE</span>
+          <b>后续可拆分</b>
+          <p>DB、Redis、worker、parser、CDN 都能从单机平滑迁出。</p>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer">
+      Paper Codex Cloud Backend Feasibility Report · 本报告为本地离线 HTML，可直接打印成 PDF。
+    </div>
+  </main>
+</body>
+</html>
