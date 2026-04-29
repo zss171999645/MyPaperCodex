@@ -7,6 +7,7 @@ struct SidebarRowButton: View {
     var systemImage: String
     var selected: Bool
     var depth: Int = 0
+    var trailingReserve: CGFloat = 0
     var action: () -> Void
 
     var body: some View {
@@ -20,7 +21,7 @@ struct SidebarRowButton: View {
                 Spacer()
             }
             .padding(.leading, CGFloat(depth * 14) + 9)
-            .padding(.trailing, 9)
+            .padding(.trailing, 9 + trailingReserve)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())

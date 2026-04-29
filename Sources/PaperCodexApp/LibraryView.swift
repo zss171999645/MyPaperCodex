@@ -117,8 +117,7 @@ struct LibraryView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 sidebarHeader("Categories", systemImage: "folder") {
-                    newCategoryParentID = selectedCategoryID ?? ""
-                    isCreatingCategory = true
+                    startCreatingCategory(parentID: selectedCategoryID)
                 }
                 filterButton(
                     title: "All Papers",
@@ -132,15 +131,20 @@ struct LibraryView: View {
                     SidebarEmptyText("No categories")
                 } else {
                     ForEach(flattenedCategoryItems()) { item in
-                        filterButton(
+                        CategorySidebarRow(
                             title: item.category.name,
                             systemImage: selectedCategoryID == item.category.id ? "folder.fill" : "folder",
                             isSelected: selectedCategoryID == item.category.id,
-                            depth: item.depth
-                        ) {
-                            selectedCategoryID = item.category.id
-                            selectedTagID = nil
-                        }
+                            depth: item.depth,
+                            onSelect: {
+                                selectedCategoryID = item.category.id
+                                selectedTagID = nil
+                            },
+                            onCreateChild: {
+                                newCategoryParentID = item.category.id
+                                startCreatingCategory(parentID: item.category.id)
+                            }
+                        )
                     }
                 }
             }
@@ -378,6 +382,11 @@ struct LibraryView: View {
             depth: depth,
             action: action
         )
+    }
+
+    private func startCreatingCategory(parentID: String?) {
+        newCategoryParentID = parentID ?? ""
+        isCreatingCategory = true
     }
 
     private func categories(for paper: Paper) -> [PaperCodexCore.Category] {
@@ -678,12 +687,64 @@ private struct SidebarEmptyText: View {
     }
 }
 
+private struct CategorySidebarRow: View {
+    @State private var isHovering = false
+
+    var title: String
+    var systemImage: String
+    var isSelected: Bool
+    var depth: Int
+    var onSelect: () -> Void
+    var onCreateChild: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            SidebarRowButton(
+                title: title,
+                systemImage: systemImage,
+                selected: isSelected,
+                depth: depth,
+                trailingReserve: 30,
+                action: onSelect
+            )
+
+            if isHovering || isSelected {
+                Button(action: onCreateChild) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                        .foregroundStyle(Color.accentColor)
+                        .background(
+                            Circle()
+                                .fill(Color.accentColor.opacity(isHovering ? 0.16 : 0.10))
+                        )
+                        .overlay(
+                            Circle()
+                                .stroke(Color.accentColor.opacity(isHovering ? 0.40 : 0.24), lineWidth: 1)
+                        )
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 6)
+                .help("New subcategory under \(title)")
+                .transition(.opacity.combined(with: .scale(scale: 0.92)))
+            }
+        }
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isHovering = hovering
+            }
+        }
+    }
+}
+
 private struct CategoryEditorSheet: View {
     var categoryItems: [CategoryListItem]
     @Binding var name: String
     @Binding var parentID: String
     var onCreate: (String, String) -> Void
     var onCancel: () -> Void
+    @FocusState private var isNameFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -691,6 +752,7 @@ private struct CategoryEditorSheet: View {
                 .font(.title3.weight(.semibold))
             TextField("Name", text: $name)
                 .textFieldStyle(.roundedBorder)
+                .focused($isNameFocused)
             Picker("Parent", selection: $parentID) {
                 Text("Top Level").tag("")
                 ForEach(categoryItems) { item in
@@ -710,6 +772,9 @@ private struct CategoryEditorSheet: View {
         }
         .padding(22)
         .frame(width: 360)
+        .onAppear {
+            isNameFocused = true
+        }
     }
 }
 

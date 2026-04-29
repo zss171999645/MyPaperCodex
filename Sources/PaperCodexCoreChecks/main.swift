@@ -265,6 +265,22 @@ func runUILayoutSourceChecks() throws {
         librarySource.components(separatedBy: "LibraryLayout.splitPaneTopInset").count - 1 >= 2,
         "library list and inspector panes should share the same top inset constant"
     )
+    try check(
+        librarySource.contains("CategorySidebarRow"),
+        "library category rows should have a dedicated hoverable row component"
+    )
+    try check(
+        librarySource.contains("onCreateChild"),
+        "library category rows should expose a direct child-category creation action"
+    )
+    try check(
+        librarySource.contains("newCategoryParentID = item.category.id"),
+        "hover category add buttons should preselect the hovered category as parent"
+    )
+    try check(
+        librarySource.contains("@FocusState private var isNameFocused"),
+        "category creation sheet should focus the name field for fast child folder creation"
+    )
 
     let chatViewURL = root.appendingPathComponent("Sources/PaperCodexApp/ChatView.swift")
     let chatSource = try String(contentsOf: chatViewURL)
