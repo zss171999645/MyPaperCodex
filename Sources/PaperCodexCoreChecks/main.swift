@@ -703,6 +703,10 @@ func runUILayoutSourceChecks() throws {
         "chat should render generated local images as an explicit gallery"
     )
     try check(
+        chatSource.contains("hasMarkedText()"),
+        "chat composer should let IME marked text handle Return before submitting"
+    )
+    try check(
         appModelSource.contains("appendCodexCancellationMessage"),
         "cancelling Codex should leave a visible trace in the session"
     )

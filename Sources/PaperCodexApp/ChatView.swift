@@ -1002,6 +1002,10 @@ private struct ComposerTextView: NSViewRepresentable {
         override func keyDown(with event: NSEvent) {
             let isReturn = event.keyCode == 36 || event.keyCode == 76
             if isReturn, !event.modifierFlags.contains(.shift) {
+                if hasMarkedText() {
+                    super.keyDown(with: event)
+                    return
+                }
                 onSubmit?()
                 return
             }
