@@ -674,6 +674,22 @@ func runUILayoutSourceChecks() throws {
         "PDF reading-position saves should not trigger viewport restoration through updatedAt changes"
     )
     try check(
+        pdfKitSource.contains("CitationAwarePDFView"),
+        "PDFKit view should use a click-aware PDFView subclass for in-PDF citation previews"
+    )
+    try check(
+        pdfKitSource.contains("showCitationPreviewPopover"),
+        "PDFKit view should show a popup preview for in-text citations"
+    )
+    try check(
+        pdfKitSource.contains("ReferenceEntryCard"),
+        "PDFKit view should render clicked reference-list entries as a card"
+    )
+    try check(
+        pdfKitSource.contains("InTextCitationPreview"),
+        "PDFKit view should render non-reference citations as a lightweight preview popup"
+    )
+    try check(
         readerSource.contains("model.returnFromReader()"),
         "reader back navigation should return to the previous browsing surface instead of always resetting to Library"
     )
@@ -1701,6 +1717,43 @@ func runPDFChecks() throws {
     try check(abstractIndex.spans[0].text.contains("considerably advanced"), "merged citation span should join wrapped lines")
     try check(abstractIndex.spans[0].text.contains("validity is questioned."), "merged citation span should keep the paragraph ending")
     try check(abstractIndex.spans.allSatisfy { $0.text.count <= 420 }, "citation spans should not become oversized blocks")
+
+    let resolver = PDFReferenceResolver(pageTexts: [
+        1: """
+        Representation learning is widely used in sequence modeling [1, 2].
+        Another body citation uses an author year form (Vaswani et al., 2017).
+
+        References
+        [1] Vaswani, A., Shazeer, N., Parmar, N. Attention Is All You Need. NeurIPS 2017.
+        [2] Ho, J., Jain, A., Abbeel, P. Denoising Diffusion Probabilistic Models. NeurIPS 2020.
+        """
+    ])
+    let numericPreview = resolver.preview(forLine: "Representation learning is widely used in sequence modeling [1, 2].", page: 1)
+    try check(numericPreview?.citationText == "[1, 2]", "PDF resolver should extract the clicked numeric citation marker")
+    try check(numericPreview?.references.map(\.marker) == ["1", "2"], "PDF resolver should map numeric in-text citations to reference entries")
+    let clickedNumericPreview = resolver.preview(forLine: "Representation learning is widely used in sequence modeling [1, 2].", clickedText: "2", page: 1)
+    try check(clickedNumericPreview?.references.map(\.marker) == ["1", "2"], "PDF resolver should open a numeric preview when the clicked word is inside the citation")
+    let clickedBodyTextPreview = resolver.preview(forLine: "Representation learning is widely used in sequence modeling [1, 2].", clickedText: "Representation", page: 1)
+    try check(clickedBodyTextPreview == nil, "PDF resolver should not steal ordinary text clicks from citation-bearing lines")
+    let authorYearPreview = resolver.preview(forLine: "Another body citation uses an author year form (Vaswani et al., 2017).", page: 1)
+    try check(authorYearPreview?.references.first?.text.contains("Attention Is All You Need") == true, "PDF resolver should map author-year citations to matching reference text")
+    let clickedAuthorPreview = resolver.preview(forLine: "Vaswani et al. (2017) introduced a transformer architecture.", clickedText: "Vaswani", page: 1)
+    try check(clickedAuthorPreview?.references.first?.text.contains("Attention Is All You Need") == true, "PDF resolver should support narrative author-year citation clicks")
+    let referenceEntry = resolver.referenceEntry(containingLine: "[2] Ho, J., Jain, A., Abbeel, P. Denoising Diffusion Probabilistic Models. NeurIPS 2020.", page: 1)
+    try check(referenceEntry?.title == "Denoising Diffusion Probabilistic Models", "PDF resolver should parse reference-list entries into cards")
+    let referencePreview = resolver.preview(forLine: "[1] Vaswani, A., Shazeer, N., Parmar, N. Attention Is All You Need. NeurIPS 2017.", page: 1)
+    try check(referencePreview == nil, "reference-list lines should not be treated as ordinary in-text citation popups")
+    let unnumberedResolver = PDFReferenceResolver(pageTexts: [
+        3: """
+        References
+        Vaswani, A., Shazeer, N., Parmar, N. (2017). Attention Is All You Need. NeurIPS.
+        Ho, J., Jain, A., Abbeel, P. (2020). Denoising Diffusion Probabilistic Models. NeurIPS.
+        """
+    ])
+    let unnumberedPreview = unnumberedResolver.preview(forLine: "Transformer baselines remain common (Vaswani et al., 2017).", clickedText: "2017", page: 3)
+    try check(unnumberedPreview?.references.first?.title == "Attention Is All You Need", "PDF resolver should parse unnumbered author-year references")
+    let unnumberedReferenceEntry = unnumberedResolver.referenceEntry(containingLine: "Ho, J., Jain, A., Abbeel, P. (2020). Denoising Diffusion Probabilistic Models. NeurIPS.", page: 3)
+    try check(unnumberedReferenceEntry?.title == "Denoising Diffusion Probabilistic Models", "PDF resolver should render unnumbered references as cards")
 }
 
 func runCodexCLIChecks() throws {

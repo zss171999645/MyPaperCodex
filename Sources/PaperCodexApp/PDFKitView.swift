@@ -2,6 +2,17 @@ import PDFKit
 import PaperCodexCore
 import SwiftUI
 
+fileprivate final class CitationAwarePDFView: PDFView {
+    var onMouseDown: ((CitationAwarePDFView, NSEvent) -> Bool)?
+
+    override func mouseDown(with event: NSEvent) {
+        if onMouseDown?(self, event) == true {
+            return
+        }
+        super.mouseDown(with: event)
+    }
+}
+
 struct PDFViewportPosition: Equatable {
     var pageIndex: Int
     var pagePointX: Double
@@ -38,11 +49,15 @@ struct PDFKitView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> PDFView {
-        let view = PDFView()
+        let view = CitationAwarePDFView()
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical
         view.backgroundColor = .textBackgroundColor
+        let coordinator = context.coordinator
+        view.onMouseDown = { [weak coordinator] pdfView, event in
+            coordinator?.handlePDFMouseDown(in: pdfView, event: event) ?? false
+        }
         context.coordinator.pdfView = view
         NotificationCenter.default.addObserver(
             context.coordinator,
@@ -58,7 +73,6 @@ struct PDFKitView: NSViewRepresentable {
         )
         loadDocument(in: view)
         context.coordinator.documentDidLoad()
-        let coordinator = context.coordinator
         let readingContextID = readingContextID
         let readingPosition = readingPosition
         DispatchQueue.main.async {
@@ -106,6 +120,8 @@ struct PDFKitView: NSViewRepresentable {
         private weak var observedClipView: NSClipView?
         private var pendingViewportReport: DispatchWorkItem?
         private var isApplyingReadingPosition = false
+        private var referenceResolver = PDFReferenceResolver(pageTexts: [:])
+        private var citationPopover: NSPopover?
 
         init(
             onSelection: @escaping (PDFSelectionInfo?) -> Void,
@@ -129,6 +145,9 @@ struct PDFKitView: NSViewRepresentable {
             lastAppliedCommand = nil
             lastReportedStatus = nil
             lastReportedPosition = nil
+            referenceResolver = Self.makeReferenceResolver(from: pdfView?.document)
+            citationPopover?.close()
+            citationPopover = nil
             clearHighlights()
             detachScrollObservation()
         }
@@ -344,6 +363,93 @@ struct PDFKitView: NSViewRepresentable {
         }
 
         @MainActor
+        fileprivate func handlePDFMouseDown(in pdfView: CitationAwarePDFView, event: NSEvent) -> Bool {
+            guard event.clickCount == 1,
+                  event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty else {
+                return false
+            }
+            let viewPoint = pdfView.convert(event.locationInWindow, from: nil)
+            guard let page = pdfView.page(for: viewPoint, nearest: false) ?? pdfView.page(for: viewPoint, nearest: true),
+                  let document = pdfView.document else {
+                closeCitationPopover()
+                return false
+            }
+            let pageNumber = document.index(for: page) + 1
+            guard pageNumber > 0 else {
+                closeCitationPopover()
+                return false
+            }
+            let pagePoint = pdfView.convert(viewPoint, to: page)
+            let clickedLine = page.selectionForLine(at: pagePoint)?.string?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !clickedLine.isEmpty else {
+                closeCitationPopover()
+                return false
+            }
+
+            if let entry = referenceResolver.referenceEntry(containingLine: clickedLine, page: pageNumber) {
+                showReferenceCard(entry, at: viewPoint, in: pdfView)
+                return true
+            }
+            guard let clickedText = page.selectionForWord(at: pagePoint)?.string?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                !clickedText.isEmpty else {
+                closeCitationPopover()
+                return false
+            }
+            if let preview = referenceResolver.preview(forLine: clickedLine, clickedText: clickedText, page: pageNumber) {
+                showCitationPreviewPopover(preview, at: viewPoint, in: pdfView)
+                return true
+            }
+            closeCitationPopover()
+            return false
+        }
+
+        @MainActor
+        private func showCitationPreviewPopover(_ preview: PDFCitationPreview, at point: NSPoint, in pdfView: PDFView) {
+            showPopover(
+                at: point,
+                in: pdfView,
+                contentSize: NSSize(width: 380, height: preview.references.isEmpty ? 118 : 220),
+                rootView: InTextCitationPreview(preview: preview)
+            )
+        }
+
+        @MainActor
+        private func showReferenceCard(_ entry: PDFReferenceEntry, at point: NSPoint, in pdfView: PDFView) {
+            showPopover(
+                at: point,
+                in: pdfView,
+                contentSize: NSSize(width: 420, height: 230),
+                rootView: ReferenceEntryCard(entry: entry)
+            )
+        }
+
+        @MainActor
+        private func showPopover<Content: View>(
+            at point: NSPoint,
+            in pdfView: PDFView,
+            contentSize: NSSize,
+            rootView: Content
+        ) {
+            closeCitationPopover()
+            let popover = NSPopover()
+            popover.behavior = .transient
+            popover.animates = true
+            popover.contentSize = contentSize
+            popover.contentViewController = NSHostingController(rootView: rootView)
+            let anchor = NSRect(x: point.x - 1, y: point.y - 1, width: 2, height: 2)
+            popover.show(relativeTo: anchor, of: pdfView, preferredEdge: .maxX)
+            citationPopover = popover
+        }
+
+        @MainActor
+        private func closeCitationPopover() {
+            citationPopover?.close()
+            citationPopover = nil
+        }
+
+        @MainActor
         @objc func selectionChanged(_ notification: Notification) {
             guard let pdfView,
                   let selection = pdfView.currentSelection,
@@ -463,5 +569,88 @@ struct PDFKitView: NSViewRepresentable {
             }
             return nil
         }
+
+        private static func makeReferenceResolver(from document: PDFDocument?) -> PDFReferenceResolver {
+            guard let document else {
+                return PDFReferenceResolver(pageTexts: [:])
+            }
+            var pageTexts: [Int: String] = [:]
+            for index in 0..<document.pageCount {
+                guard let page = document.page(at: index),
+                      let text = page.string,
+                      !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    continue
+                }
+                pageTexts[index + 1] = text
+            }
+            return PDFReferenceResolver(pageTexts: pageTexts)
+        }
+    }
+}
+
+private struct InTextCitationPreview: View {
+    var preview: PDFCitationPreview
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "quote.bubble")
+                    .foregroundStyle(Color.accentColor)
+                Text(preview.citationText)
+                    .font(.headline)
+                Spacer()
+            }
+            if preview.references.isEmpty {
+                Text("No matching reference found in the paper's reference list.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(preview.references.prefix(3)) { reference in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(referenceTitle(reference))
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .lineLimit(2)
+                        Text(reference.text)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                    }
+                    if reference.id != preview.references.prefix(3).last?.id {
+                        Divider()
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: 380, alignment: .leading)
+    }
+
+    private func referenceTitle(_ reference: PDFReferenceEntry) -> String {
+        if let marker = reference.marker {
+            return "[\(marker)] \(reference.title)"
+        }
+        return reference.title
+    }
+}
+
+private struct ReferenceEntryCard: View {
+    var entry: PDFReferenceEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(entry.marker.map { "Reference \($0)" } ?? "Reference", systemImage: "text.book.closed")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+            Text(entry.title)
+                .font(.system(size: 15, weight: .semibold))
+                .lineLimit(3)
+            Text(entry.text)
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(8)
+                .textSelection(.enabled)
+        }
+        .padding(15)
+        .frame(width: 420, alignment: .leading)
     }
 }
