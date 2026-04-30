@@ -3500,7 +3500,12 @@ final class AppModel: ObservableObject {
             activeDiscoverCodexRunHandles.removeAll { $0 === runHandle }
         }
         _ = try await Task.detached(priority: .userInitiated) {
-            try cli.runStreaming(arguments: arguments, eventLogURL: eventLogURL, runHandle: runHandle) { _ in }
+            try cli.runStreaming(
+                arguments: arguments,
+                eventLogURL: eventLogURL,
+                currentDirectoryURL: workspaceURL,
+                runHandle: runHandle
+            ) { _ in }
         }.value
         let lastMessage = try String(contentsOf: outputURL, encoding: .utf8)
         return try DiscoverEnrichmentParser.parse(
@@ -3682,7 +3687,13 @@ final class AppModel: ObservableObject {
         let runHandle = CodexRunHandle()
         activeCodexRunHandle = runHandle
         let stdout = try await Task.detached(priority: .userInitiated) {
-            try cli.runStreaming(arguments: arguments, eventLogURL: eventLogURL, runHandle: runHandle, onEvent: eventSink)
+            try cli.runStreaming(
+                arguments: arguments,
+                eventLogURL: eventLogURL,
+                currentDirectoryURL: workspaceURL,
+                runHandle: runHandle,
+                onEvent: eventSink
+            )
         }.value
         let lastMessage = (try? String(contentsOf: outputURL, encoding: .utf8)) ?? ""
         let generatedImages = try GeneratedImageCollector.newImages(in: workspaceURL, excluding: imageSnapshot)

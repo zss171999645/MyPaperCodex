@@ -1704,6 +1704,25 @@ func runCodexCLIChecks() throws {
     try check(FileManager.default.isExecutableFile(atPath: codexPath), "codex executable should be runnable")
 
     let cli = CodexCLI(executablePath: codexPath)
+    let isolatedWorkingDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("paper-codex-codex-cli-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: isolatedWorkingDirectory, withIntermediateDirectories: true)
+    let sanitizedEnvironment = CodexCLI.sanitizedProcessEnvironment(
+        workingDirectoryURL: isolatedWorkingDirectory,
+        baseEnvironment: [
+            "HOME": "/Users/chunqiu",
+            "PWD": "/Users/chunqiu/Documents/New project 2",
+            "OLDPWD": "/Users/chunqiu/Documents"
+        ]
+    )
+    let isolatedWorkingDirectoryPath = isolatedWorkingDirectory.standardizedFileURL.path
+    try check(sanitizedEnvironment["PWD"] == isolatedWorkingDirectoryPath, "Codex subprocesses should advertise the explicit working directory")
+    try check(sanitizedEnvironment["OLDPWD"] == nil, "Codex subprocesses should not inherit protected-folder OLDPWD values")
+    try check(sanitizedEnvironment["HOME"] == "/Users/chunqiu", "Codex subprocess environment should preserve unrelated variables")
+    let pwdOutput = try CodexCLI(executablePath: "/bin/pwd")
+        .run(arguments: [], currentDirectoryURL: isolatedWorkingDirectory)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    try check(pwdOutput == isolatedWorkingDirectoryPath, "Codex subprocesses should run from the explicit working directory")
     let start = cli.startArguments(prompt: "hello", workspacePath: "/tmp/session-a")
     try check(start == ["exec", "--skip-git-repo-check", "--json", "--enable", "image_generation", "-C", "/tmp/session-a", "hello"], "start args should allow non-git session workspaces with image generation enabled")
     let startWithOutput = cli.startArguments(prompt: "hello", workspacePath: "/tmp/session-a", outputLastMessagePath: "/tmp/last.txt")

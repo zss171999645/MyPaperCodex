@@ -433,6 +433,16 @@ public struct CodexCLI: Sendable {
         self.executablePath = executablePath
     }
 
+    public static func sanitizedProcessEnvironment(
+        workingDirectoryURL: URL,
+        baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        var environment = baseEnvironment
+        environment["PWD"] = workingDirectoryURL.standardizedFileURL.path
+        environment.removeValue(forKey: "OLDPWD")
+        return environment
+    }
+
     public static func findCodexExecutable(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         preferWorkspaceImageOutput: Bool = false
@@ -765,10 +775,11 @@ public struct CodexCLI: Sendable {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    public func run(arguments: [String]) throws -> String {
+    public func run(arguments: [String], currentDirectoryURL: URL? = nil) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = arguments
+        configureProcessDirectory(process, currentDirectoryURL: currentDirectoryURL)
 
         let output = Pipe()
         let error = Pipe()
@@ -789,12 +800,14 @@ public struct CodexCLI: Sendable {
     public func runStreaming(
         arguments: [String],
         eventLogURL: URL? = nil,
+        currentDirectoryURL: URL? = nil,
         runHandle: CodexRunHandle? = nil,
         onEvent: @escaping @Sendable (CodexRunEvent) -> Void
     ) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = arguments
+        configureProcessDirectory(process, currentDirectoryURL: currentDirectoryURL)
 
         let output = Pipe()
         let error = Pipe()
@@ -848,6 +861,16 @@ public struct CodexCLI: Sendable {
             throw CodexCLIError.processFailed(status: process.terminationStatus, stderr: result.stderr)
         }
         return result.stdout
+    }
+
+    private func configureProcessDirectory(_ process: Process, currentDirectoryURL: URL?) {
+        let workingDirectoryURL = (currentDirectoryURL ?? Self.defaultProcessWorkingDirectory()).standardizedFileURL
+        process.currentDirectoryURL = workingDirectoryURL
+        process.environment = Self.sanitizedProcessEnvironment(workingDirectoryURL: workingDirectoryURL)
+    }
+
+    private static func defaultProcessWorkingDirectory() -> URL {
+        FileManager.default.temporaryDirectory.standardizedFileURL
     }
 
     public static func parseThreadID(from jsonl: String) -> String? {
