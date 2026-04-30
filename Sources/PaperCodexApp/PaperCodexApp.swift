@@ -9,8 +9,9 @@ struct PaperCodexApp: App {
             RootView()
                 .environmentObject(model)
                 .frame(minWidth: 1100, minHeight: 720)
+                .background(WindowChromeConfigurator())
         }
-        .windowStyle(.titleBar)
+        .windowStyle(.hiddenTitleBar)
         .commands {
             PaperCodexCommands(model: model)
         }

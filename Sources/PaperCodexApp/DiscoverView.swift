@@ -245,7 +245,7 @@ struct DiscoverView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(22)
+        .paperCodexSidebarChromePadding()
         .background(Color(nsColor: .controlBackgroundColor))
     }
 

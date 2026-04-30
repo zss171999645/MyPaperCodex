@@ -354,7 +354,7 @@ struct LibraryView: View {
 
             Spacer()
         }
-        .padding(22)
+        .paperCodexSidebarChromePadding()
         .background(Color(nsColor: .controlBackgroundColor))
     }
 

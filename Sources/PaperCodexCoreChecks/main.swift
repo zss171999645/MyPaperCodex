@@ -490,7 +490,29 @@ func runUILayoutSourceChecks() throws {
     )
     let rootViewSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/PaperCodexApp.swift"))
     let sidebarRowSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/SidebarRowButton.swift"))
+    let windowChromeSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/WindowChrome.swift"))
     let buildScriptSource = try String(contentsOf: root.appendingPathComponent("scripts/build-app-bundle.sh"))
+    try check(
+        rootViewSource.contains(".windowStyle(.hiddenTitleBar)"),
+        "app window should hide the standard title bar"
+    )
+    try check(
+        rootViewSource.contains("WindowChromeConfigurator()"),
+        "root view should install the native window chrome configurator"
+    )
+    try check(
+        windowChromeSource.contains(".fullSizeContentView")
+            && windowChromeSource.contains("titlebarAppearsTransparent = true")
+            && windowChromeSource.contains("titleVisibility = .hidden"),
+        "window chrome should embed traffic-light controls into full-size app content"
+    )
+    try check(
+        windowChromeSource.contains("paperCodexSidebarChromePadding")
+            && librarySource.contains("paperCodexSidebarChromePadding()")
+            && discoverSource.contains("paperCodexSidebarChromePadding()")
+            && settingsViewSource.contains("paperCodexSidebarChromePadding()"),
+        "main sidebars should reserve top space for embedded traffic-light controls"
+    )
     try check(
         rootViewSource.contains(".environment(\\.locale"),
         "root view should drive SwiftUI localization from the app language setting"
