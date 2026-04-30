@@ -338,7 +338,7 @@ func runUILayoutSourceChecks() throws {
         "library paper rows should expose selected paper IDs as an NSItemProvider drag payload"
     )
     try check(
-        librarySource.contains(".onDrop(of: [UTType.plainText]"),
+        librarySource.contains(".onDrop(of: LibraryLayout.categoryDropContentTypes"),
         "library category rows should accept dropped paper IDs as plain text payloads"
     )
     try check(
@@ -346,12 +346,48 @@ func runUILayoutSourceChecks() throws {
         "library category rows should visibly highlight valid drop targets"
     )
     try check(
-        librarySource.contains("DragGesture(minimumDistance: 8"),
-        "library paper rows should support in-app drag gestures for direct folder assignment"
+        librarySource.contains("selectedPaperIDs.count > 1"),
+        "library bulk actions should appear only for true multi-selection, not ordinary single selection"
     )
     try check(
-        librarySource.contains("CategoryDropFramePreferenceKey"),
-        "library categories should publish drop frames for in-app drag targeting"
+        librarySource.contains("seedSelectionForCommandToggle"),
+        "command-click should extend from the currently focused paper before toggling another row"
+    )
+    try check(
+        librarySource.contains("clearPaperMultiSelection()"),
+        "plain paper clicks should clear multi-selection like Finder"
+    )
+    try check(
+        !librarySource.contains(".highPriorityGesture(paperDragGesture"),
+        "library paper rows should not attach a competing high-priority drag gesture over native drag/drop"
+    )
+    try check(
+        librarySource.contains(".onDrag {") && librarySource.contains("NSItemProvider(object: paperDragPayload(for: paper) as NSString)"),
+        "library paper rows should use native drag payloads for folder assignment"
+    )
+    try check(
+        librarySource.contains("categoryDropContentTypes"),
+        "library category rows should accept native plain-text paper drag payloads"
+    )
+    try check(
+        librarySource.contains("bulkActionBarOverlayYOffset"),
+        "library bulk action overlay should sit lower over the list instead of hugging the top edge"
+    )
+    try check(
+        librarySource.contains("bulkActionBarOverlayOpacity"),
+        "library bulk action overlay should render with reduced opacity"
+    )
+    try check(
+        librarySource.contains("dragPreviewPaperIDs(for:"),
+        "native paper drag previews should reflect the seeded multi-selection set"
+    )
+    try check(
+        !librarySource.contains("DragGesture(minimumDistance: 8"),
+        "library paper dragging should not rely on a parallel custom drag gesture"
+    )
+    try check(
+        !librarySource.contains("ActiveLibraryPaperDrag"),
+        "library paper dragging should avoid stale custom drag state when native drag/drop is used"
     )
 
     let appModelURL = root.appendingPathComponent("Sources/PaperCodexApp/AppModel.swift")

@@ -12,8 +12,6 @@ struct LibraryView: View {
     @State private var newCategoryName = ""
     @State private var newCategoryParentID = ""
     @State private var newTagName = ""
-    @State private var activePaperDrag: ActiveLibraryPaperDrag?
-    @State private var categoryDropFrames: [String: CGRect] = [:]
     @State private var selectedPaperIDs: Set<String> = []
     @State private var lastSelectedPaperID: String?
     @State private var lastPaperRowClick: LibraryPaperRowClick?
@@ -105,13 +103,6 @@ struct LibraryView: View {
                     .padding(.top, LibraryLayout.splitPaneTopInset)
                     .frame(minWidth: 300, idealWidth: 340, maxWidth: 420)
             }
-        }
-        .coordinateSpace(name: LibraryDragCoordinateSpace.name)
-        .onPreferenceChange(CategoryDropFramePreferenceKey.self) { frames in
-            categoryDropFrames = frames
-        }
-        .overlay(alignment: .topLeading) {
-            activePaperDragPreview
         }
         .onChange(of: sortedPapers.map(\.id)) { _, _ in
             prunePaperSelection()
@@ -313,7 +304,6 @@ struct LibraryView: View {
                             depth: item.depth,
                             hasChildren: hasChildCategories(item.category.id),
                             isExpanded: !collapsedCategoryIDs.contains(item.category.id),
-                            isPaperDragTargeted: isPaperDragTargeting(item.category.id),
                             onToggle: {
                                 toggleCategoryCollapsed(item.category.id)
                             },
@@ -334,7 +324,6 @@ struct LibraryView: View {
                                 selectedTagID = nil
                             }
                         )
-                        .background(CategoryDropFrameReader(categoryID: item.category.id))
                     }
                 }
             }
@@ -460,13 +449,12 @@ struct LibraryView: View {
                             } preview: {
                                 PaperDragPreview(
                                     paper: paper,
-                                    selectedCount: paperIDsForDrag(startingWith: paper).count
+                                    selectedCount: dragPreviewPaperIDs(for: paper).count
                                 )
                             }
                             .onTapGesture {
                                 handlePaperRowClick(paper)
                             }
-                            .highPriorityGesture(paperDragGesture(for: paper))
                         }
                     }
                     .padding(.vertical, 4)
@@ -481,7 +469,7 @@ struct LibraryView: View {
 
     private var bulkActionBarOverlay: some View {
         Group {
-            if !selectedPaperIDs.isEmpty {
+            if selectedPaperIDs.count > 1 {
                 BulkLibraryActionBar(
                     selectedCount: selectedPaperIDs.count,
                     canMove: true,
@@ -501,12 +489,13 @@ struct LibraryView: View {
                     }
                 )
                 .padding(.horizontal, 10)
-                .padding(.top, 8)
+                .padding(.top, LibraryLayout.bulkActionBarOverlayYOffset)
+                .opacity(LibraryLayout.bulkActionBarOverlayOpacity)
                 .transition(.move(edge: .top).combined(with: .opacity))
-                .shadow(color: Color.black.opacity(0.16), radius: 14, y: 5)
+                .shadow(color: Color.black.opacity(0.12), radius: 14, y: 5)
             }
         }
-        .animation(.easeOut(duration: 0.16), value: selectedPaperIDs.isEmpty)
+        .animation(.easeOut(duration: 0.16), value: selectedPaperIDs.count > 1)
     }
 
     private var sortDirectionButton: some View {
@@ -773,27 +762,60 @@ struct LibraryView: View {
             selectPaperRange(through: paper)
         } else if modifiers.contains(.command) {
             togglePaperSelection(paper)
-        } else if selectedPaperIDs.isEmpty {
-            model.selectLibraryPaper(paper)
-            lastSelectedPaperID = paper.id
         } else {
-            selectedPaperIDs = [paper.id]
+            clearPaperMultiSelection()
             lastSelectedPaperID = paper.id
             model.selectLibraryPaper(paper)
         }
     }
 
     private func togglePaperSelection(_ paper: Paper) {
-        if selectedPaperIDs.contains(paper.id) {
-            selectedPaperIDs.remove(paper.id)
-            if lastSelectedPaperID == paper.id {
-                lastSelectedPaperID = selectedPaperIDsInOrder.last
-            }
+        var nextSelection = seedSelectionForCommandToggle(startingWith: paper)
+        if nextSelection.contains(paper.id) {
+            nextSelection.remove(paper.id)
         } else {
-            selectedPaperIDs.insert(paper.id)
-            lastSelectedPaperID = paper.id
-            model.selectLibraryPaper(paper)
+            nextSelection.insert(paper.id)
         }
+        applyPaperSelection(nextSelection, focusedPaper: paper)
+    }
+
+    private func seedSelectionForCommandToggle(startingWith paper: Paper) -> Set<String> {
+        guard selectedPaperIDs.isEmpty else {
+            return selectedPaperIDs
+        }
+        guard let focusedPaper = model.selectedLibraryPaper,
+              sortedPapers.contains(where: { $0.id == focusedPaper.id }) else {
+            return []
+        }
+        return [focusedPaper.id]
+    }
+
+    private func applyPaperSelection(_ paperIDs: Set<String>, focusedPaper: Paper) {
+        let visibleIDs = Set(sortedPapers.map(\.id))
+        let visibleSelection = paperIDs.intersection(visibleIDs)
+        if visibleSelection.count > 1 {
+            selectedPaperIDs = visibleSelection
+            lastSelectedPaperID = focusedPaper.id
+            model.selectLibraryPaper(focusedPaper)
+            return
+        }
+
+        clearPaperMultiSelection()
+        if let remainingID = visibleSelection.first,
+           let remainingPaper = sortedPapers.first(where: { $0.id == remainingID }) {
+            lastSelectedPaperID = remainingID
+            model.selectLibraryPaper(remainingPaper)
+        } else if visibleIDs.contains(focusedPaper.id) {
+            lastSelectedPaperID = focusedPaper.id
+            model.selectLibraryPaper(focusedPaper)
+        } else {
+            lastSelectedPaperID = nil
+            model.selectedLibraryPaper = nil
+        }
+    }
+
+    private func clearPaperMultiSelection() {
+        selectedPaperIDs.removeAll()
     }
 
     private func selectPaperRange(through paper: Paper) {
@@ -804,22 +826,21 @@ struct LibraryView: View {
         }
         let anchorID = lastSelectedPaperID ?? paper.id
         guard let anchorIndex = visibleIDs.firstIndex(of: anchorID) else {
-            selectedPaperIDs.insert(paper.id)
-            lastSelectedPaperID = paper.id
-            model.selectLibraryPaper(paper)
+            applyPaperSelection([paper.id], focusedPaper: paper)
             return
         }
         let lower = min(anchorIndex, currentIndex)
         let upper = max(anchorIndex, currentIndex)
-        selectedPaperIDs.formUnion(visibleIDs[lower...upper])
-        lastSelectedPaperID = paper.id
-        model.selectLibraryPaper(paper)
+        applyPaperSelection(Set(visibleIDs[lower...upper]), focusedPaper: paper)
     }
 
     private func prunePaperSelection() {
         let visibleIDs = Set(sortedPapers.map(\.id))
         selectedPaperIDs = selectedPaperIDs.intersection(visibleIDs)
-        if let lastSelectedPaperID, !selectedPaperIDs.contains(lastSelectedPaperID) {
+        if selectedPaperIDs.count < 2 {
+            clearPaperMultiSelection()
+        }
+        if let lastSelectedPaperID, !selectedPaperIDs.isEmpty, !selectedPaperIDs.contains(lastSelectedPaperID) {
             self.lastSelectedPaperID = selectedPaperIDsInOrder.last
         }
     }
@@ -890,69 +911,19 @@ struct LibraryView: View {
         return true
     }
 
-    private var activePaperDragPreview: some View {
-        Group {
-            if let activePaperDrag,
-               let paper = model.papers.first(where: { $0.id == activePaperDrag.paperID }) {
-                PaperDragPreview(paper: paper, selectedCount: activePaperDrag.paperIDs.count)
-                    .opacity(0.94)
-                    .offset(x: activePaperDrag.location.x + 14, y: activePaperDrag.location.y + 14)
-                    .allowsHitTesting(false)
-            }
-        }
-    }
-
-    private func paperDragGesture(for paper: Paper) -> some Gesture {
-        DragGesture(minimumDistance: 8, coordinateSpace: .named(LibraryDragCoordinateSpace.name))
-            .onChanged { value in
-                activePaperDrag = ActiveLibraryPaperDrag(
-                    paperID: paper.id,
-                    paperIDs: paperIDsForDrag(startingWith: paper),
-                    location: value.location
-                )
-            }
-            .onEnded { value in
-                completePaperDrag(paper.id, at: value.location)
-            }
-    }
-
     private func paperIDsForDrag(startingWith paper: Paper) -> [String] {
-        if selectedPaperIDs.contains(paper.id) {
+        if selectedPaperIDs.count > 1, selectedPaperIDs.contains(paper.id) {
             return selectedPaperIDsInOrder
         }
         return [paper.id]
     }
 
+    private func dragPreviewPaperIDs(for paper: Paper) -> [String] {
+        paperIDsForDrag(startingWith: paper)
+    }
+
     private func paperDragPayload(for paper: Paper) -> String {
         paperIDsForDrag(startingWith: paper).joined(separator: "\n")
-    }
-
-    private func completePaperDrag(_ paperID: String, at location: CGPoint) {
-        defer {
-            activePaperDrag = nil
-        }
-        guard let categoryID = categoryID(at: location) else {
-            return
-        }
-        let paperIDs = activePaperDrag?.paperIDs ?? [paperID]
-        model.assignPapers(paperIDs, toCategory: categoryID)
-        selectedCategoryID = categoryID
-        selectedTagID = nil
-    }
-
-    private func isPaperDragTargeting(_ categoryID: String) -> Bool {
-        guard let location = activePaperDrag?.location,
-              let frame = categoryDropFrames[categoryID] else {
-            return false
-        }
-        return frame.insetBy(dx: -6, dy: -3).contains(location)
-    }
-
-    private func categoryID(at location: CGPoint) -> String? {
-        categoryDropFrames
-            .filter { _, frame in frame.insetBy(dx: -6, dy: -3).contains(location) }
-            .min { left, right in left.value.midY < right.value.midY }?
-            .key
     }
 
     private func categories(for paper: Paper) -> [PaperCodexCore.Category] {
@@ -1177,44 +1148,16 @@ private struct CategoryListItem: Identifiable {
     var id: String { category.id }
 }
 
-private struct ActiveLibraryPaperDrag: Equatable {
-    var paperID: String
-    var paperIDs: [String]
-    var location: CGPoint
-}
-
 private struct LibraryPaperRowClick: Equatable {
     var paperID: String
     var clickedAt: Date
 }
 
-private enum LibraryDragCoordinateSpace {
-    static let name = "PaperCodexLibraryDragSpace"
-}
-
-private struct CategoryDropFramePreferenceKey: PreferenceKey {
-    static let defaultValue: [String: CGRect] = [:]
-
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
-    }
-}
-
-private struct CategoryDropFrameReader: View {
-    var categoryID: String
-
-    var body: some View {
-        GeometryReader { proxy in
-            Color.clear.preference(
-                key: CategoryDropFramePreferenceKey.self,
-                value: [categoryID: proxy.frame(in: .named(LibraryDragCoordinateSpace.name))]
-            )
-        }
-    }
-}
-
 private enum LibraryLayout {
     static let splitPaneTopInset: CGFloat = 24
+    static let bulkActionBarOverlayYOffset: CGFloat = 42
+    static let bulkActionBarOverlayOpacity = 0.84
+    static let categoryDropContentTypes: [UTType] = [.plainText]
 }
 
 private struct PaperRow: View {
@@ -1788,7 +1731,6 @@ private struct CategorySidebarRow: View {
     var depth: Int
     var hasChildren: Bool
     var isExpanded: Bool
-    var isPaperDragTargeted: Bool
     var onToggle: () -> Void
     var onSelect: () -> Void
     var onCreateChild: () -> Void
@@ -1872,7 +1814,7 @@ private struct CategorySidebarRow: View {
         .animation(.easeOut(duration: 0.12), value: isDropActive)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .onDrop(of: [UTType.plainText], isTargeted: $isDropTargeted) { providers in
+        .onDrop(of: LibraryLayout.categoryDropContentTypes, isTargeted: $isDropTargeted) { providers in
             loadDroppedPaperIDs(from: providers)
         }
         .help("Drop papers into \(title)")
@@ -1884,7 +1826,7 @@ private struct CategorySidebarRow: View {
     }
 
     private var isDropActive: Bool {
-        isDropTargeted || isPaperDragTargeted
+        isDropTargeted
     }
 
     private func loadDroppedPaperIDs(from providers: [NSItemProvider]) -> Bool {
