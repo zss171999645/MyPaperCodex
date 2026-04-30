@@ -12,9 +12,6 @@ struct LibraryView: View {
     @State private var newCategoryName = ""
     @State private var newCategoryParentID = ""
     @State private var newTagName = ""
-    @State private var searchText = ""
-    @State private var selectedCategoryID: String?
-    @State private var selectedTagID: String?
     @State private var activePaperDrag: ActiveLibraryPaperDrag?
     @State private var categoryDropFrames: [String: CGRect] = [:]
     @State private var selectedPaperIDs: Set<String> = []
@@ -33,6 +30,29 @@ struct LibraryView: View {
     @State private var noteBody = ""
     @State private var editingNoteID: String?
     @AppStorage("PaperCodexLibrarySortOption") private var librarySortRawValue = LibrarySortOption.addedNewest.rawValue
+    @AppStorage("PaperCodexLibrarySortAscending") private var librarySortAscending = false
+
+    private var searchText: String {
+        get { model.librarySearchText }
+        nonmutating set { model.librarySearchText = newValue }
+    }
+
+    private var searchTextBinding: Binding<String> {
+        Binding(
+            get: { model.librarySearchText },
+            set: { model.librarySearchText = $0 }
+        )
+    }
+
+    private var selectedCategoryID: String? {
+        get { model.librarySelectedCategoryID }
+        nonmutating set { model.librarySelectedCategoryID = newValue }
+    }
+
+    private var selectedTagID: String? {
+        get { model.librarySelectedTagID }
+        nonmutating set { model.librarySelectedTagID = newValue }
+    }
 
     private var filteredPapers: [Paper] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -65,7 +85,7 @@ struct LibraryView: View {
 
     private var sortedPapers: [Paper] {
         let option = LibrarySortOption(rawValue: librarySortRawValue) ?? .addedNewest
-        return option.sorted(filteredPapers)
+        return option.sorted(filteredPapers, ascending: librarySortAscending)
     }
 
     private var selectedPaperIDsInOrder: [String] {
@@ -380,6 +400,7 @@ struct LibraryView: View {
                 .pickerStyle(.menu)
                 .frame(width: 142)
                 .help("Sort Library")
+                sortDirectionButton
                 Button {
                     presentPDFImportPanel()
                 } label: {
@@ -389,7 +410,7 @@ struct LibraryView: View {
             }
 
             HStack(spacing: 8) {
-                TextField("Search title, author, tag, category, year, or source", text: $searchText)
+                TextField("Search title, author, tag, category, year, or source", text: searchTextBinding)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 15))
                 if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -440,7 +461,7 @@ struct LibraryView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 5) {
+                    LazyVStack(spacing: 1) {
                         ForEach(sortedPapers) { paper in
                             PaperRow(
                                 paper: paper,
@@ -475,6 +496,18 @@ struct LibraryView: View {
             }
         }
         .padding(24)
+    }
+
+    private var sortDirectionButton: some View {
+        Button {
+            librarySortAscending.toggle()
+        } label: {
+            Image(systemName: librarySortAscending ? "arrow.up" : "arrow.down")
+                .frame(width: 22, height: 22)
+        }
+        .buttonStyle(.bordered)
+        .help(librarySortAscending ? "Ascending" : "Descending")
+        .accessibilityLabel(librarySortAscending ? "Sort Ascending" : "Sort Descending")
     }
 
     private var inspector: some View {
@@ -1169,6 +1202,8 @@ private struct PaperRow: View {
     var onSelectionToggle: () -> Void
     var onRead: () -> Void
 
+    @State private var isHovering = false
+
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
             Button(action: onSelectionToggle) {
@@ -1181,6 +1216,9 @@ private struct PaperRow: View {
             }
             .buttonStyle(.plain)
             .help(isMultiSelected ? "Remove from selection" : "Add to selection")
+            .opacity(showSelectionToggle ? 1 : 0)
+            .allowsHitTesting(showSelectionToggle)
+            .animation(.easeOut(duration: 0.12), value: showSelectionToggle)
 
             ThumbnailStrip(urls: Array(thumbnailURLs.prefix(5)))
                 .frame(width: 132, height: 54)
@@ -1195,6 +1233,9 @@ private struct PaperRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 HStack(spacing: 6) {
+                    if let arxivDisplayID {
+                        SmallChip(title: arxivDisplayID, systemImage: "number")
+                    }
                     ForEach(categories.prefix(2)) { category in
                         SmallChip(title: category.name, systemImage: "folder")
                     }
@@ -1214,7 +1255,7 @@ private struct PaperRow: View {
             .help("Read")
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 18)
+        .padding(.vertical, 21)
         .background(rowBackground)
         .opacity(isImportPlaceholder ? 0.66 : 1)
         .overlay(
@@ -1222,6 +1263,19 @@ private struct PaperRow: View {
                 .stroke(rowBorderColor, lineWidth: isMultiSelected ? 1.5 : 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .shadow(color: isHovering ? Color.black.opacity(0.08) : .clear, radius: 4, y: 1)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+    }
+
+    private var showSelectionToggle: Bool {
+        isHovering || selectionModeActive || isMultiSelected
+    }
+
+    private var arxivDisplayID: String? {
+        paper.arxivImportPlaceholderCanonicalID
+            ?? paper.sourceURL.flatMap(ArxivIDExtractor.firstCanonicalID(in:))
     }
 
     private var rowBackground: Color {
@@ -1230,6 +1284,9 @@ private struct PaperRow: View {
         }
         if isSelected {
             return Color.accentColor.opacity(0.10)
+        }
+        if isHovering {
+            return Color(nsColor: .textBackgroundColor)
         }
         return Color(nsColor: .controlBackgroundColor)
     }
@@ -1240,6 +1297,9 @@ private struct PaperRow: View {
         }
         if isSelected {
             return Color.accentColor.opacity(0.38)
+        }
+        if isHovering {
+            return Color.primary.opacity(0.10)
         }
         return Color.clear
     }
@@ -1527,47 +1587,52 @@ private enum LibrarySortOption: String, CaseIterable, Identifiable {
         }
     }
 
-    func sorted(_ papers: [Paper]) -> [Paper] {
+    func sorted(_ papers: [Paper], ascending: Bool) -> [Paper] {
         papers.sorted { left, right in
             switch self {
             case .addedNewest:
                 if left.importedAt != right.importedAt {
-                    return left.importedAt > right.importedAt
+                    return ascending ? left.importedAt < right.importedAt : left.importedAt > right.importedAt
                 }
-                return titleComesBefore(left, right)
+                return titleComesBefore(left, right, ascending: true)
             case .title:
-                return titleComesBefore(left, right)
+                return titleComesBefore(left, right, ascending: ascending)
             case .arxivID:
-                return arxivIDComesBefore(left, right)
+                return arxivIDComesBefore(left, right, ascending: ascending)
             }
         }
     }
 
-    private func titleComesBefore(_ left: Paper, _ right: Paper) -> Bool {
+    private func titleComesBefore(_ left: Paper, _ right: Paper, ascending: Bool) -> Bool {
         let titleComparison = left.title.localizedStandardCompare(right.title)
         if titleComparison != .orderedSame {
-            return titleComparison == .orderedAscending
+            return ascending ? titleComparison == .orderedAscending : titleComparison == .orderedDescending
         }
         return left.id < right.id
     }
 
-    private func arxivIDComesBefore(_ left: Paper, _ right: Paper) -> Bool {
-        let leftID = left.sourceURL.flatMap(ArxivIDExtractor.firstCanonicalID(in:))
-        let rightID = right.sourceURL.flatMap(ArxivIDExtractor.firstCanonicalID(in:))
+    private func arxivIDComesBefore(_ left: Paper, _ right: Paper, ascending: Bool) -> Bool {
+        let leftID = arxivID(for: left)
+        let rightID = arxivID(for: right)
         switch (leftID, rightID) {
         case let (leftID?, rightID?):
             let comparison = leftID.localizedStandardCompare(rightID)
             if comparison != .orderedSame {
-                return comparison == .orderedDescending
+                return ascending ? comparison == .orderedAscending : comparison == .orderedDescending
             }
-            return titleComesBefore(left, right)
+            return titleComesBefore(left, right, ascending: true)
         case (.some, .none):
             return true
         case (.none, .some):
             return false
         case (.none, .none):
-            return titleComesBefore(left, right)
+            return titleComesBefore(left, right, ascending: true)
         }
+    }
+
+    private func arxivID(for paper: Paper) -> String? {
+        paper.arxivImportPlaceholderCanonicalID
+            ?? paper.sourceURL.flatMap(ArxivIDExtractor.firstCanonicalID(in:))
     }
 }
 

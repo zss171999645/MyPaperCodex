@@ -257,6 +257,11 @@ final class AppModel: ObservableObject {
     @Published var paperCategoryIDsByID: [String: [String]] = [:]
     @Published var paperTagsByID: [String: [PaperTag]] = [:]
     @Published var selectedLibraryPaper: Paper?
+    @Published var librarySearchText = ""
+    @Published var librarySelectedCategoryID: String?
+    @Published var librarySelectedTagID: String?
+    @Published var readerReturnRoute: AppRoute = .library
+    @Published var discoverReturnPaperID: String?
     @Published var selectedPaper: Paper?
     @Published var readerTabState = ReaderTabState()
     @Published var selectedSession: PaperSession?
@@ -676,24 +681,12 @@ final class AppModel: ObservableObject {
 
     func showDiscover() {
         route = .discover
-        selectedPaper = nil
-        selectedSession = nil
-        sessions = []
-        messages = []
-        currentSelection = nil
-        pdfJumpTarget = nil
-        readerPosition = nil
+        clearReaderContext()
     }
 
     func showSettings() {
         route = .settings
-        selectedPaper = nil
-        selectedSession = nil
-        sessions = []
-        messages = []
-        currentSelection = nil
-        pdfJumpTarget = nil
-        readerPosition = nil
+        clearReaderContext()
     }
 
     func setLocalArxivCategories(_ categories: [String]) {
@@ -1882,7 +1875,7 @@ final class AppModel: ObservableObject {
                 currentSelection = nil
                 pdfJumpTarget = nil
                 readerPosition = nil
-                activeCodexRun = nil
+                clearActiveCodexRunIfIdle()
                 if route == .reader {
                     route = .library
                 }
@@ -2076,7 +2069,7 @@ final class AppModel: ObservableObject {
             try createSession()
         }
         try loadReaderPositionForSelectedContext(repository: repository)
-        activeCodexRun = nil
+        clearActiveCodexRunIfIdle()
         route = .reader
     }
 
@@ -2093,6 +2086,11 @@ final class AppModel: ObservableObject {
 
     func openPaper(_ paper: Paper) {
         do {
+            if route == .discover {
+                readerReturnRoute = .discover
+            } else if route == .library {
+                readerReturnRoute = .library
+            }
             try focusPaperForReader(paper, opensReaderTab: true)
         } catch {
             errorMessage = String(describing: error)
@@ -2131,7 +2129,7 @@ final class AppModel: ObservableObject {
                 currentSelection = nil
                 pdfJumpTarget = nil
                 readerPosition = nil
-                activeCodexRun = nil
+                clearActiveCodexRunIfIdle()
                 route = .library
                 return
             }
@@ -2174,7 +2172,7 @@ final class AppModel: ObservableObject {
         selectedSession = session
         messages = []
         readerPosition = nil
-        activeCodexRun = nil
+        clearActiveCodexRunIfIdle()
     }
 
     func newSessionButtonTapped() {
@@ -2229,9 +2227,6 @@ final class AppModel: ObservableObject {
             selectedSession = session
             messages = try repository.fetchMessages(sessionID: session.id)
             try loadReaderPositionForSelectedContext(repository: repository)
-            if activeCodexRun?.sessionID != session.id {
-                activeCodexRun = nil
-            }
         } catch {
             errorMessage = String(describing: error)
         }
@@ -2371,7 +2366,7 @@ final class AppModel: ObservableObject {
         }
         isCancellingCodexRun = true
         activeCodexRunHandle?.cancel()
-        postNotice(kind: .info, title: "Stopping Codex", message: selectedSession?.title ?? "Current session")
+        postNotice(kind: .info, title: "Stopping Codex", message: activeCodexRun?.title ?? selectedSession?.title ?? "Current session")
     }
 
     func jumpToCitation(_ citationID: String) {
@@ -2473,6 +2468,7 @@ final class AppModel: ObservableObject {
             activeCodexRunHandle = nil
             isCancellingCodexRun = false
         }
+        var runSessionID: String?
 
         do {
             guard let repository else {
@@ -2484,6 +2480,7 @@ final class AppModel: ObservableObject {
             guard var session = selectedSession else {
                 throw AppModelError.noSelectedSession
             }
+            runSessionID = session.id
 
             let context = try loadSessionPaperContext(session: session, fallbackPaper: paper, repository: repository)
             let focusedSpans = context.spansByPaperID[paper.id] ?? []
@@ -2530,9 +2527,7 @@ final class AppModel: ObservableObject {
             try repository.appendMessage(message)
             session.updatedAt = Date()
             try repository.upsertSession(session)
-            selectedSession = session
-            sessions = try repository.fetchSessions(paperID: paper.id)
-            messages = try repository.fetchMessages(sessionID: session.id)
+            try refreshVisibleSessionState(session: session, paperID: paper.id, repository: repository)
 
             let updatedSession = try await runCodexTurn(
                 content: content,
@@ -2540,17 +2535,21 @@ final class AppModel: ObservableObject {
                 fallbackPaper: paper,
                 repository: repository
             )
-            selectedSession = updatedSession
-            sessions = try repository.fetchSessions(paperID: paper.id)
-            messages = try repository.fetchMessages(sessionID: session.id)
+            try refreshVisibleSessionState(session: updatedSession, paperID: paper.id, repository: repository)
         } catch AppModelError.anchorMatchFailed {
             errorMessage = AppModelError.anchorMatchFailed.description
         } catch {
             if isCancellingCodexRun {
-                await appendCodexCancellationMessage()
+                if let runSessionID {
+                    await appendCodexCancellationMessage(sessionID: runSessionID)
+                }
                 return
             }
-            await appendCodexFailureMessage(String(describing: error))
+            if let runSessionID {
+                await appendCodexFailureMessage(String(describing: error), sessionID: runSessionID)
+            } else {
+                errorMessage = String(describing: error)
+            }
         }
     }
 
@@ -2565,6 +2564,7 @@ final class AppModel: ObservableObject {
             activeCodexRunHandle = nil
             isCancellingCodexRun = false
         }
+        var runSessionID: String?
 
         do {
             guard let repository else {
@@ -2573,6 +2573,7 @@ final class AppModel: ObservableObject {
             guard let session = selectedSession else {
                 throw AppModelError.noSelectedSession
             }
+            runSessionID = session.id
             guard let failureIndex = messages.firstIndex(where: { $0.id == messageID }),
                   CodexFailureNotice.parse(messages[failureIndex].content) != nil else {
                 throw AppModelError.noRecoverableCodexTurn
@@ -2588,20 +2589,39 @@ final class AppModel: ObservableObject {
                 fallbackPaper: fallbackPaper,
                 repository: repository
             )
-            selectedSession = updatedSession
-            sessions = try repository.fetchSessions(paperID: fallbackPaper.id)
-            messages = try repository.fetchMessages(sessionID: session.id)
+            try refreshVisibleSessionState(session: updatedSession, paperID: fallbackPaper.id, repository: repository)
         } catch {
             if isCancellingCodexRun {
-                await appendCodexCancellationMessage()
+                if let runSessionID {
+                    await appendCodexCancellationMessage(sessionID: runSessionID)
+                }
                 return
             }
-            await appendCodexFailureMessage(String(describing: error))
+            if let runSessionID {
+                await appendCodexFailureMessage(String(describing: error), sessionID: runSessionID)
+            } else {
+                errorMessage = String(describing: error)
+            }
         }
     }
 
     func goToLibrary() {
         route = .library
+        clearReaderContext()
+    }
+
+    func returnFromReader() {
+        let destination = readerReturnRoute
+        clearReaderContext()
+        switch destination {
+        case .discover:
+            route = .discover
+        case .library, .settings, .reader:
+            route = .library
+        }
+    }
+
+    private func clearReaderContext() {
         selectedPaper = nil
         selectedSession = nil
         sessions = []
@@ -2609,6 +2629,30 @@ final class AppModel: ObservableObject {
         currentSelection = nil
         pdfJumpTarget = nil
         readerPosition = nil
+        citationReturnPoint = nil
+        pdfDocumentStatus = nil
+        clearActiveCodexRunIfIdle()
+    }
+
+    private func clearActiveCodexRunIfIdle() {
+        if !isSending {
+            activeCodexRun = nil
+        }
+    }
+
+    private func refreshVisibleSessionState(
+        session: PaperSession,
+        paperID: String,
+        repository: PaperRepository
+    ) throws {
+        if selectedPaper?.id == paperID {
+            sessions = try repository.fetchSessions(paperID: paperID)
+        }
+        guard selectedSession?.id == session.id else {
+            return
+        }
+        selectedSession = session
+        messages = try repository.fetchMessages(sessionID: session.id)
     }
 
     private func loadSessionPaperContext(
@@ -3786,41 +3830,46 @@ final class AppModel: ObservableObject {
         return paper
     }
 
-    private func appendCodexFailureMessage(_ failure: String) async {
-        guard let repository, let session = selectedSession else {
+    private func appendCodexFailureMessage(_ failure: String, sessionID: String) async {
+        guard let repository else {
             errorMessage = failure
             return
         }
         do {
             let message = ChatMessage(
                 id: UUID().uuidString.lowercased(),
-                sessionID: session.id,
+                sessionID: sessionID,
                 role: .codex,
                 content: CodexFailureNotice(detail: failure).messageContent,
                 createdAt: Date()
             )
             try repository.appendMessage(message)
-            messages = try repository.fetchMessages(sessionID: session.id)
+            if selectedSession?.id == sessionID {
+                messages = try repository.fetchMessages(sessionID: sessionID)
+            }
         } catch {
             errorMessage = "\(failure)\n\nAlso failed to store error message: \(error)"
         }
     }
 
-    private func appendCodexCancellationMessage() async {
-        guard let repository, let session = selectedSession else {
+    private func appendCodexCancellationMessage(sessionID: String) async {
+        guard let repository else {
             return
         }
         do {
             let message = ChatMessage(
                 id: UUID().uuidString.lowercased(),
-                sessionID: session.id,
+                sessionID: sessionID,
                 role: .codex,
                 content: "_Codex run stopped by the user._",
                 createdAt: Date()
             )
             try repository.appendMessage(message)
-            messages = try repository.fetchMessages(sessionID: session.id)
-            postNotice(kind: .info, title: "Codex Stopped", message: session.title)
+            if selectedSession?.id == sessionID {
+                messages = try repository.fetchMessages(sessionID: sessionID)
+            }
+            let sessionTitle = try repository.fetchSession(id: sessionID)?.title ?? "Session"
+            postNotice(kind: .info, title: "Codex Stopped", message: sessionTitle)
         } catch {
             errorMessage = "Codex stopped, but the cancellation note could not be saved: \(error)"
         }

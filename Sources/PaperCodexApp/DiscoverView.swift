@@ -266,42 +266,54 @@ struct DiscoverView: View {
                     let layoutSignature = rowLayoutSignature(papers: papers, columnCount: columnCount)
                     let imagePreloadURLs = discoverImagePreloadURLs(for: papers)
 
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 14) {
-                            ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, rowPapers in
-                                HStack(alignment: .top, spacing: 16) {
-                                    ForEach(rowPapers) { paper in
-                                        discoverCard(for: paper, rowIndex: rowIndex)
+                    ScrollViewReader { scrollProxy in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 14) {
+                                ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, rowPapers in
+                                    HStack(alignment: .top, spacing: 16) {
+                                        ForEach(rowPapers) { paper in
+                                            discoverCard(for: paper, rowIndex: rowIndex)
+                                                .id(paper.id)
+                                        }
+                                        ForEach(0..<max(0, columnCount - rowPapers.count), id: \.self) { _ in
+                                            Color.clear
+                                                .frame(maxWidth: .infinity)
+                                        }
                                     }
-                                    ForEach(0..<max(0, columnCount - rowPapers.count), id: \.self) { _ in
-                                        Color.clear
-                                            .frame(maxWidth: .infinity)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .onPreferenceChange(DiscoverRowHeightPreferenceKey.self) { values in
+                                var updated = discoverRowHeights
+                                var didChange = false
+                                for (rowIndex, height) in values where height > 0 {
+                                    let roundedHeight = (height * 2).rounded() / 2
+                                    if abs((updated[rowIndex] ?? 0) - roundedHeight) > 0.5 {
+                                        updated[rowIndex] = roundedHeight
+                                        didChange = true
                                     }
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                                if didChange {
+                                    discoverRowHeights = updated
+                                }
+                            }
+                            .onChange(of: layoutSignature) { _, _ in
+                                discoverRowHeights = [:]
+                            }
+                            .task(id: "\(layoutSignature):\(imagePreloadURLs.count)") {
+                                await warmDiscoverLocalImages(imagePreloadURLs)
                             }
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .onPreferenceChange(DiscoverRowHeightPreferenceKey.self) { values in
-                            var updated = discoverRowHeights
-                            var didChange = false
-                            for (rowIndex, height) in values where height > 0 {
-                                let roundedHeight = (height * 2).rounded() / 2
-                                if abs((updated[rowIndex] ?? 0) - roundedHeight) > 0.5 {
-                                    updated[rowIndex] = roundedHeight
-                                    didChange = true
-                                }
-                            }
-                            if didChange {
-                                discoverRowHeights = updated
-                            }
+                        .onAppear {
+                            restoreDiscoverScrollPosition(scrollProxy)
                         }
                         .onChange(of: layoutSignature) { _, _ in
-                            discoverRowHeights = [:]
+                            restoreDiscoverScrollPosition(scrollProxy)
                         }
-                        .task(id: "\(layoutSignature):\(imagePreloadURLs.count)") {
-                            await warmDiscoverLocalImages(imagePreloadURLs)
+                        .onChange(of: model.discoverReturnPaperID) { _, _ in
+                            restoreDiscoverScrollPosition(scrollProxy)
                         }
                     }
                 }
@@ -362,12 +374,25 @@ struct DiscoverView: View {
                 paperPendingSave = paper
             },
             onOpen: {
+                model.discoverReturnPaperID = paper.id
                 Task {
                     await model.openArxivPaper(paper)
                 }
             }
         )
         .background(DiscoverCardHeightReporter(rowIndex: rowIndex))
+    }
+
+    private func restoreDiscoverScrollPosition(_ proxy: ScrollViewProxy) {
+        guard let paperID = model.discoverReturnPaperID,
+              papers.contains(where: { $0.id == paperID }) else {
+            return
+        }
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.18)) {
+                proxy.scrollTo(paperID, anchor: .center)
+            }
+        }
     }
 
     private var toolbar: some View {

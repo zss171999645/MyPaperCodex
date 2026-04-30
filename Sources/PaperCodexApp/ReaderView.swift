@@ -184,7 +184,7 @@ private struct ReaderTabBar: View {
     var body: some View {
         HStack(spacing: 8) {
             Button {
-                model.goToLibrary()
+                model.returnFromReader()
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 12, weight: .semibold))
@@ -194,7 +194,7 @@ private struct ReaderTabBar: View {
             .buttonStyle(.plain)
             .background(Color(nsColor: .controlBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .help("Back to Library")
+            .help("Back")
 
             ScrollView(.horizontal) {
                 HStack(spacing: 8) {

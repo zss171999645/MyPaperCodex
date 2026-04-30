@@ -310,6 +310,14 @@ func runUILayoutSourceChecks() throws {
         "library should sort papers after filtering"
     )
     try check(
+        librarySource.contains("librarySortAscending"),
+        "library sorting should support ascending and descending directions"
+    )
+    try check(
+        librarySource.contains("sortDirectionButton"),
+        "library toolbar should expose a one-click sort direction toggle"
+    )
+    try check(
         librarySource.contains("systemImage: \"number\""),
         "library toolbar should show an arXiv import button next to PDF import"
     )
@@ -528,6 +536,22 @@ func runUILayoutSourceChecks() throws {
         "library paper rows should detect a second quick click from the immediate single-click handler"
     )
     try check(
+        librarySource.contains("@State private var isHovering = false"),
+        "library paper rows should track hover state for row feedback and selection affordances"
+    )
+    try check(
+        librarySource.contains("showSelectionToggle"),
+        "library paper row multi-select controls should appear only on hover or active selection"
+    )
+    try check(
+        librarySource.contains("arxivDisplayID"),
+        "library paper rows should show the arXiv ID in the visible card area when available"
+    )
+    try check(
+        librarySource.contains("LazyVStack(spacing: 1)"),
+        "library paper rows should reduce inter-card gaps and make the card hit area larger"
+    )
+    try check(
         librarySource.contains("categoryManagementSheet"),
         "library should provide category rename, move, and delete management"
     )
@@ -559,6 +583,18 @@ func runUILayoutSourceChecks() throws {
         appModelSource.contains("saveNote("),
         "AppModel should persist paper notes"
     )
+    try check(
+        appModelSource.contains("librarySelectedCategoryID"),
+        "AppModel should keep library category selection outside LibraryView local state"
+    )
+    try check(
+        appModelSource.contains("readerReturnRoute"),
+        "AppModel should remember whether the reader was opened from Library or Discover"
+    )
+    try check(
+        discoverSource.contains("restoreDiscoverScrollPosition"),
+        "Discover should restore the last visible paper when returning from the reader"
+    )
 
     let readerSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/ReaderView.swift"))
     try check(
@@ -581,10 +617,26 @@ func runUILayoutSourceChecks() throws {
         !pdfKitSource.contains("lastAppliedReadingPositionDate"),
         "PDF reading-position saves should not trigger viewport restoration through updatedAt changes"
     )
+    try check(
+        readerSource.contains("model.returnFromReader()"),
+        "reader back navigation should return to the previous browsing surface instead of always resetting to Library"
+    )
 
     try check(
         chatSource.contains("ScrollViewReader"),
         "chat should auto-scroll to the newest message and active run"
+    )
+    try check(
+        chatSource.contains("isCurrentSessionSending"),
+        "chat should distinguish the active session run from other sessions"
+    )
+    try check(
+        chatSource.contains("canEditComposer"),
+        "other session composers should remain editable while Codex runs elsewhere"
+    )
+    try check(
+        chatSource.contains("composerTopDivider"),
+        "chat input separator should be owned by the composer above the input area"
     )
     try check(
         chatSource.contains("renameSessionSheet"),

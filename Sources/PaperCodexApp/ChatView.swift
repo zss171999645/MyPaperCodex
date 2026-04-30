@@ -21,7 +21,7 @@ struct ChatView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        if model.messages.isEmpty && model.activeCodexRun == nil {
+                        if model.messages.isEmpty && visibleActiveCodexRun == nil {
                             ContentUnavailableView(
                                 "No Messages",
                                 systemImage: "text.bubble",
@@ -65,7 +65,6 @@ struct ChatView: View {
                     scrollToBottom(proxy)
                 }
             }
-            Divider()
             composer
         }
         .background(Color(nsColor: .controlBackgroundColor))
@@ -80,6 +79,32 @@ struct ChatView: View {
             return nil
         }
         return run
+    }
+
+    private var isCurrentSessionSending: Bool {
+        model.isSending && model.activeCodexRun?.sessionID == model.selectedSession?.id
+    }
+
+    private var isOtherSessionSending: Bool {
+        model.isSending && !isCurrentSessionSending
+    }
+
+    private var canEditComposer: Bool {
+        !isCurrentSessionSending
+    }
+
+    private var trimmedDraft: String {
+        draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canUseSendButton: Bool {
+        if isCurrentSessionSending {
+            return true
+        }
+        if isOtherSessionSending {
+            return false
+        }
+        return !trimmedDraft.isEmpty
     }
 
     private var sessionBar: some View {
@@ -152,86 +177,109 @@ struct ChatView: View {
     }
 
     private var composer: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let selection = model.currentSelection {
-                CurrentSelectionReplyCard(selection: selection) {
-                    model.clearCurrentSelection()
-                }
-            }
-
-            QuickPromptLine(
-                prompts: model.quickPrompts,
-                diagnostic: model.codexDiagnostic,
-                modelOverride: model.codexModelOverride,
-                reasoningEffort: model.codexReasoningEffort,
-                onPrompt: { model.sendQuickPrompt($0) },
-                onModelOverride: { model.setCodexModelOverride($0) },
-                onReasoningEffort: { model.setCodexReasoningEffort($0) }
-            ) {
-                Task {
-                    await model.refreshCodexDiagnostic()
-                }
-            }
-
-            ComposerResizeHandle()
-                .gesture(
-                    DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                        .onChanged { value in
-                            if composerResizeStartHeight == nil {
-                                composerResizeStartHeight = composerTextHeight
-                            }
-                            let nextHeight = (composerResizeStartHeight ?? composerTextHeight) - value.translation.height
-                            composerTextHeight = ChatComposerLayout.clampedTextHeight(nextHeight)
-                        }
-                        .onEnded { _ in
-                            composerTextHeight = ChatComposerLayout.clampedTextHeight(composerTextHeight)
-                            ChatComposerLayout.saveTextHeight(composerTextHeight)
-                            composerResizeStartHeight = nil
-                        }
-                )
-
-            HStack(alignment: .bottom, spacing: 8) {
-                ComposerTextView(
-                    text: $draft,
-                    isEnabled: !model.isSending,
-                    onSubmit: sendDraft
-                )
-                    .frame(height: composerTextHeight)
-                    .background(Color(nsColor: .textBackgroundColor))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                Button {
-                    if model.isSending {
-                        model.cancelActiveCodexRun()
-                    } else {
-                        sendDraft()
+        VStack(spacing: 0) {
+            composerTopDivider
+            VStack(alignment: .leading, spacing: 8) {
+                if let selection = model.currentSelection {
+                    CurrentSelectionReplyCard(selection: selection) {
+                        model.clearCurrentSelection()
                     }
-                } label: {
-                    Image(systemName: sendButtonIcon)
-                        .font(.system(size: 26))
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(sendButtonColor)
-                .disabled(!model.isSending && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .onHover { isSendButtonHovered = $0 }
-                .help(model.isSending ? "Stop Codex" : "Send")
+
+                QuickPromptLine(
+                    prompts: model.quickPrompts,
+                    diagnostic: model.codexDiagnostic,
+                    modelOverride: model.codexModelOverride,
+                    reasoningEffort: model.codexReasoningEffort,
+                    onPrompt: { model.sendQuickPrompt($0) },
+                    onModelOverride: { model.setCodexModelOverride($0) },
+                    onReasoningEffort: { model.setCodexReasoningEffort($0) }
+                ) {
+                    Task {
+                        await model.refreshCodexDiagnostic()
+                    }
+                }
+
+                ComposerResizeHandle()
+                    .gesture(
+                        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                            .onChanged { value in
+                                if composerResizeStartHeight == nil {
+                                    composerResizeStartHeight = composerTextHeight
+                                }
+                                let nextHeight = (composerResizeStartHeight ?? composerTextHeight) - value.translation.height
+                                composerTextHeight = ChatComposerLayout.clampedTextHeight(nextHeight)
+                            }
+                            .onEnded { _ in
+                                composerTextHeight = ChatComposerLayout.clampedTextHeight(composerTextHeight)
+                                ChatComposerLayout.saveTextHeight(composerTextHeight)
+                                composerResizeStartHeight = nil
+                            }
+                    )
+
+                HStack(alignment: .bottom, spacing: 8) {
+                    ComposerTextView(
+                        text: $draft,
+                        isEnabled: canEditComposer,
+                        onSubmit: sendDraft
+                    )
+                        .frame(height: composerTextHeight)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    Button {
+                        if isCurrentSessionSending {
+                            model.cancelActiveCodexRun()
+                        } else {
+                            sendDraft()
+                        }
+                    } label: {
+                        Image(systemName: sendButtonIcon)
+                            .font(.system(size: 26))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(sendButtonColor)
+                    .disabled(!canUseSendButton)
+                    .onHover { isSendButtonHovered = $0 }
+                    .help(sendButtonHelp)
+                }
             }
+            .padding(14)
         }
-        .padding(14)
+    }
+
+    private var composerTopDivider: some View {
+        Divider()
     }
 
     private var sendButtonIcon: String {
-        if model.isSending {
+        if isCurrentSessionSending {
             return isSendButtonHovered ? "xmark.circle.fill" : "hourglass.circle.fill"
+        }
+        if isOtherSessionSending {
+            return "hourglass.circle"
         }
         return "arrow.up.circle.fill"
     }
 
     private var sendButtonColor: Color {
-        model.isSending && isSendButtonHovered ? .red : .blue
+        if isCurrentSessionSending {
+            return isSendButtonHovered ? .red : .blue
+        }
+        return isOtherSessionSending ? .secondary : .blue
+    }
+
+    private var sendButtonHelp: String {
+        if isCurrentSessionSending {
+            return "Stop Codex"
+        }
+        if isOtherSessionSending {
+            return "Codex is running in another session"
+        }
+        return "Send"
     }
 
     private func sendDraft() {
-        let message = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = trimmedDraft
         guard !model.isSending, !message.isEmpty else {
             return
         }
