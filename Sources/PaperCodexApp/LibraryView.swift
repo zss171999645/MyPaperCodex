@@ -254,7 +254,7 @@ struct LibraryView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Paper Codex")
-                .font(.system(size: 24, weight: .semibold))
+                .font(.paperCodexSystem(size: 24, weight: .semibold))
 
             VStack(alignment: .leading, spacing: 8) {
                 filterButton(
@@ -362,7 +362,7 @@ struct LibraryView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
                 Text("Library")
-                    .font(.system(size: 28, weight: .semibold))
+                    .font(.paperCodexSystem(size: 28, weight: .semibold))
                 Spacer()
                 Button {
                     isShowingWatchedFolders = true
@@ -401,7 +401,7 @@ struct LibraryView: View {
             HStack(spacing: 8) {
                 TextField("Search title, author, tag, category, year, or source", text: searchTextBinding)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 15))
+                    .font(.paperCodexSystem(size: 15))
                 if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button {
                         searchText = ""
@@ -513,7 +513,7 @@ struct LibraryView: View {
     private var inspector: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Paper Details")
-                .font(.system(size: 20, weight: .semibold))
+                .font(.paperCodexSystem(size: 20, weight: .semibold))
 
             if let paper = model.selectedLibraryPaper {
                 ScrollView {
@@ -671,7 +671,7 @@ struct LibraryView: View {
             TextField("Note title", text: $noteTitle)
                 .textFieldStyle(.roundedBorder)
             TextEditor(text: $noteBody)
-                .font(.system(size: 12.5))
+                .font(.paperCodexSystem(size: 12.5))
                 .frame(minHeight: 72)
                 .scrollContentBackground(.hidden)
                 .background(Color(nsColor: .textBackgroundColor))
@@ -1104,7 +1104,7 @@ private struct WatchedFolderRow: View {
                 .foregroundStyle(folderExists ? Color.accentColor : Color.orange)
             VStack(alignment: .leading, spacing: 3) {
                 Text(URL(fileURLWithPath: folder.path).lastPathComponent)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.paperCodexSystem(size: 13, weight: .medium))
                 Text(folder.path)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1263,11 +1263,11 @@ private struct PaperDragPreview: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "doc.text")
-                .font(.system(size: 18, weight: .semibold))
+                .font(.paperCodexSystem(size: 18, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
             VStack(alignment: .leading, spacing: 3) {
                 Text(paper.title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.paperCodexSystem(size: 13, weight: .semibold))
                     .lineLimit(1)
                 Text(paper.authors.isEmpty ? "Authors not set" : paper.authors.joined(separator: ", "))
                     .font(.caption)
@@ -1333,7 +1333,7 @@ private struct SmallChip: View {
 
     var body: some View {
         Label(title, systemImage: systemImage)
-            .font(.system(size: 12.5, weight: .medium))
+            .font(.paperCodexSystem(size: 12.5, weight: .medium))
             .lineLimit(1)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
@@ -1384,7 +1384,7 @@ private struct BulkLibraryActionBar: View {
     var body: some View {
         HStack(spacing: 10) {
             Label("\(selectedCount) selected", systemImage: "checkmark.circle.fill")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.paperCodexSystem(size: 13, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
             Spacer()
             Button(action: onMove) {
@@ -1623,7 +1623,7 @@ private struct LibraryArxivImportSheet: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 TextEditor(text: $inputText)
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(.paperCodexSystem(size: 13, design: .monospaced))
                     .frame(minHeight: 110)
                     .focused($isInputFocused)
                     .overlay(
@@ -1744,7 +1744,7 @@ private struct CategorySidebarRow: View {
                 if hasChildren {
                     Button(action: onToggle) {
                         Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 9, weight: .bold))
+                            .font(.paperCodexSystem(size: 9, weight: .bold))
                             .frame(width: 16, height: 24)
                     }
                     .buttonStyle(.plain)
@@ -1765,7 +1765,7 @@ private struct CategorySidebarRow: View {
 
             if isDropActive {
                 Label("Drop", systemImage: "arrow.down.doc")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.paperCodexSystem(size: 11, weight: .semibold))
                     .padding(.horizontal, 7)
                     .padding(.vertical, 4)
                     .foregroundStyle(Color.accentColor)
@@ -1780,7 +1780,7 @@ private struct CategorySidebarRow: View {
                     if isHovering || isSelected {
                         Button(action: onCreateChild) {
                             Image(systemName: "plus")
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(.paperCodexSystem(size: 11, weight: .semibold))
                                 .frame(width: 22, height: 22)
                                 .foregroundStyle(Color.accentColor)
                                 .background(Circle().fill(Color.accentColor.opacity(isHovering ? 0.16 : 0.10)))
@@ -1791,7 +1791,7 @@ private struct CategorySidebarRow: View {
 
                         Button(action: onManage) {
                             Image(systemName: "ellipsis")
-                                .font(.system(size: 11, weight: .bold))
+                                .font(.paperCodexSystem(size: 11, weight: .bold))
                                 .frame(width: 22, height: 22)
                         }
                         .buttonStyle(.plain)
@@ -1896,7 +1896,7 @@ private struct TagSidebarRow: View {
                 if isHovering || isSelected {
                     Button(action: onManage) {
                         Image(systemName: "ellipsis")
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.paperCodexSystem(size: 11, weight: .bold))
                             .frame(width: 22, height: 22)
                     }
                     .buttonStyle(.plain)
@@ -2022,7 +2022,7 @@ private struct PaperNoteRow: View {
             Button(action: onEdit) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(note.title)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.paperCodexSystem(size: 13, weight: .semibold))
                         .lineLimit(1)
                     if !note.bodyMarkdown.isEmpty {
                         Text(note.bodyMarkdown)

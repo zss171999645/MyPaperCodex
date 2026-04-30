@@ -187,7 +187,7 @@ private struct ReaderTabBar: View {
                 model.returnFromReader()
             } label: {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.paperCodexSystem(size: 12, weight: .semibold))
                     .frame(width: 26, height: 26)
                     .contentShape(RoundedRectangle(cornerRadius: 6))
             }
@@ -215,7 +215,7 @@ private struct ReaderTabBar: View {
                     onShowSaveToLibrary()
                 } label: {
                     Image(systemName: "tray.and.arrow.down")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.paperCodexSystem(size: 13, weight: .semibold))
                         .frame(width: 28, height: 26)
                         .contentShape(RoundedRectangle(cornerRadius: 6))
                 }
@@ -244,11 +244,11 @@ private struct ReaderTabItem: View {
             } label: {
                 HStack(spacing: 7) {
                     Image(systemName: isActive ? "doc.text.fill" : "doc.text")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.paperCodexSystem(size: 13, weight: .semibold))
                         .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
 
                     Text(tab.title)
-                        .font(.system(size: 13, weight: isActive ? .semibold : .medium))
+                        .font(.paperCodexSystem(size: 13, weight: isActive ? .semibold : .medium))
                         .foregroundStyle(isActive ? Color.primary : Color.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -270,7 +270,7 @@ private struct ReaderTabItem: View {
                 model.closeReaderTab(tab)
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.paperCodexSystem(size: 10, weight: .bold))
                     .foregroundStyle(isActive ? Color.secondary : Color.secondary.opacity(0.58))
                     .frame(width: 18, height: 18)
                     .contentShape(Circle())

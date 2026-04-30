@@ -700,7 +700,7 @@ private struct InTextCitationPreview: View {
                 ForEach(preview.references.prefix(3)) { reference in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(referenceTitle(reference))
-                            .font(.system(size: 13.5, weight: .semibold))
+                            .font(.paperCodexSystem(size: 13.5, weight: .semibold))
                             .lineLimit(2)
                         Text(reference.text)
                             .font(.caption)
@@ -735,7 +735,7 @@ private struct PDFLinkPreviewCard: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Color.accentColor)
             Text(preview.target)
-                .font(.system(size: 13.5, weight: .semibold))
+                .font(.paperCodexSystem(size: 13.5, weight: .semibold))
                 .lineLimit(3)
                 .textSelection(.enabled)
             if let sourceText = preview.sourceText {
@@ -768,10 +768,10 @@ private struct ReferenceEntryCard: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Color.accentColor)
             Text(entry.title)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.paperCodexSystem(size: 15, weight: .semibold))
                 .lineLimit(3)
             Text(entry.text)
-                .font(.system(size: 12.5))
+                .font(.paperCodexSystem(size: 12.5))
                 .foregroundStyle(.secondary)
                 .lineLimit(8)
                 .textSelection(.enabled)

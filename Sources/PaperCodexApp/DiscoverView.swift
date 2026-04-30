@@ -170,7 +170,7 @@ struct DiscoverView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Paper Codex")
-                .font(.system(size: 24, weight: .semibold))
+                .font(.paperCodexSystem(size: 24, weight: .semibold))
 
             VStack(alignment: .leading, spacing: 8) {
                 navButton(title: "Library", systemImage: "books.vertical") {
@@ -441,7 +441,7 @@ struct DiscoverView: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Discover")
-                        .font(.system(size: 28, weight: .semibold))
+                        .font(.paperCodexSystem(size: 28, weight: .semibold))
                     Text("\(papers.count) visible · \(model.arxivFeed?.count ?? 0) found · \(model.selectedArxivDate ?? "\(model.discoverStartDate)...\(model.discoverEndDate)")")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -812,7 +812,7 @@ private struct ToolbarActionButton: View {
             } icon: {
                 Image(systemName: systemImage)
             }
-                .font(.system(size: 12.5, weight: .semibold))
+                .font(.paperCodexSystem(size: 12.5, weight: .semibold))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .foregroundStyle(disabled ? Color.secondary.opacity(0.55) : (isHovering ? tint : Color.primary.opacity(0.82)))
@@ -885,7 +885,7 @@ private struct CompactDiscoverDatePicker: View {
         DatePicker(LocalizedStringKey(title), selection: dateBinding, displayedComponents: .date)
             .datePickerStyle(.compact)
             .labelsHidden()
-            .font(.system(size: 12.5, weight: .medium).monospacedDigit())
+            .font(.paperCodexSystem(size: 12.5, weight: .medium).monospacedDigit())
             .frame(width: 118)
             .help(title)
     }
@@ -942,7 +942,7 @@ private struct QuickRangeButtons: View {
                 }
             } label: {
                 Label("Ranges", systemImage: "calendar.badge.clock")
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .font(.paperCodexSystem(size: 12.5, weight: .semibold))
                     .padding(.horizontal, 10)
                     .frame(height: 28)
             }
@@ -1013,7 +1013,7 @@ private struct DiscoverProcessSelectionSheet: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Select Results to Process")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.paperCodexSystem(size: 20, weight: .semibold))
                 Text("\(selectedOrderedPaperIDs.count) selected · \(candidatePapers.count) available")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1156,7 +1156,7 @@ private struct DiscoverProcessPaperRow: View {
             HStack(alignment: .top, spacing: 10) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(paper.displayTitle(language: languageMode.discoverLanguageCode))
-                        .font(.system(size: 13.5, weight: .medium))
+                        .font(.paperCodexSystem(size: 13.5, weight: .medium))
                         .lineLimit(2)
                     Text("\(paper.id) · \(paper.primaryCategory ?? paper.categories.first ?? "arXiv")")
                         .font(.caption.monospacedDigit())
@@ -1224,7 +1224,7 @@ private struct DiscoverCategoryMenu: View {
             }
         } label: {
             Label(selected, systemImage: "tray.full")
-                .font(.system(size: 12.5, weight: .semibold))
+                .font(.paperCodexSystem(size: 12.5, weight: .semibold))
                 .padding(.horizontal, 10)
                 .frame(height: 28)
         }
@@ -1295,7 +1295,7 @@ private struct SimilaritySourceMenu: View {
             }
         } label: {
             Label(selectedTitle, systemImage: "point.3.connected.trianglepath.dotted")
-                .font(.system(size: 12.5, weight: .semibold))
+                .font(.paperCodexSystem(size: 12.5, weight: .semibold))
                 .padding(.horizontal, 10)
                 .frame(height: 28)
         }
@@ -1338,10 +1338,10 @@ private struct DateMenuButton: View {
                 Text(model.selectedArxivDate ?? "Date")
                     .monospacedDigit()
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.paperCodexSystem(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
-            .font(.system(size: 12.5, weight: .semibold))
+            .font(.paperCodexSystem(size: 12.5, weight: .semibold))
             .foregroundStyle(isHovering ? Color.accentColor : Color.primary.opacity(0.84))
             .padding(.horizontal, 10)
             .frame(height: 28)
@@ -1387,7 +1387,7 @@ private struct ArxivCacheProgressStrip: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(progress.title)
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .font(.paperCodexSystem(size: 12.5, weight: .semibold))
                 Text(progress.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1462,23 +1462,23 @@ private struct ArxivPaperCard: View {
                 }
 
                 Text(primaryTitle)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.paperCodexSystem(size: 16, weight: .semibold))
                     .fixedSize(horizontal: false, vertical: true)
                 if !secondaryTitle.isEmpty, secondaryTitle != primaryTitle {
                     Text(secondaryTitle)
-                        .font(.system(size: 13))
+                        .font(.paperCodexSystem(size: 13))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Text(summaryText)
-                    .font(.system(size: 13.5))
+                    .font(.paperCodexSystem(size: 13.5))
                     .foregroundStyle(.secondary)
                     .lineLimit(5)
                     .fixedSize(horizontal: false, vertical: true)
                 if let contribution = enrichment?.contribution,
                    !contribution.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(contribution)
-                        .font(.system(size: 13.5, weight: .medium))
+                        .font(.paperCodexSystem(size: 13.5, weight: .medium))
                         .foregroundStyle(Color.accentColor)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1704,7 +1704,7 @@ private struct MetadataPill: View {
 
     var body: some View {
         Text(title)
-            .font(.system(size: 12, weight: .semibold))
+            .font(.paperCodexSystem(size: 12, weight: .semibold))
             .lineLimit(1)
             .padding(.horizontal, 7)
             .frame(height: 23)
@@ -1719,7 +1719,7 @@ private struct ArxivIDPill: View {
 
     var body: some View {
         Text(id)
-            .font(.system(size: 12, weight: .medium))
+            .font(.paperCodexSystem(size: 12, weight: .medium))
             .monospacedDigit()
             .lineLimit(1)
             .foregroundStyle(.secondary)
@@ -1734,7 +1734,7 @@ private struct ArxivIDPill: View {
 private struct SavedActionBadge: View {
     var body: some View {
         Label("Saved", systemImage: "checkmark.seal.fill")
-            .font(.system(size: 13, weight: .semibold))
+            .font(.paperCodexSystem(size: 13, weight: .semibold))
             .padding(.horizontal, 10)
             .frame(height: 26)
             .foregroundStyle(Color(nsColor: .systemGreen))
@@ -1761,7 +1761,7 @@ private struct SaveActionButton: View {
     var body: some View {
         Button(action: action) {
             Label("Add", systemImage: "tray.and.arrow.down")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.paperCodexSystem(size: 13, weight: .semibold))
                 .padding(.horizontal, 10)
                 .frame(height: 26)
                 .foregroundStyle(isBusy ? Color.secondary.opacity(0.6) : (isHovering ? Color(nsColor: .systemGreen) : Color.primary.opacity(0.86)))
@@ -1797,7 +1797,7 @@ private struct StableOpenButton: View {
     var body: some View {
         Button(action: action) {
             Label("Open", systemImage: "book")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.paperCodexSystem(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 11)
                 .frame(height: 26)
@@ -1848,7 +1848,7 @@ private struct SimilarityMeter: View {
             }
             .frame(width: 34, height: 5)
             Text("\(Int((clampedValue * 100).rounded()))%")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.paperCodexSystem(size: 12, weight: .semibold))
                 .foregroundStyle(color)
         }
         .padding(.horizontal, 7)
@@ -2088,7 +2088,7 @@ private struct ArxivPreviewImage: View {
                 ZStack {
                     Color(nsColor: .separatorColor).opacity(0.22)
                     Image(systemName: "doc.richtext")
-                        .font(.system(size: 24))
+                        .font(.paperCodexSystem(size: 24))
                         .foregroundStyle(.secondary)
                 }
                 .aspectRatio(4.7, contentMode: .fit)
@@ -2172,7 +2172,7 @@ private struct ResourceLinkButton: View {
         .overlay(alignment: .top) {
             if compact && isHovering {
                 Text(link.title)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.paperCodexSystem(size: 11, weight: .semibold))
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
@@ -2207,7 +2207,7 @@ private struct ResourceLinkButton: View {
                     .padding(.vertical, 6)
             }
         }
-        .font(.system(size: compact ? 11.5 : 13, weight: .semibold))
+        .font(.paperCodexSystem(size: compact ? 11.5 : 13, weight: .semibold))
         .foregroundStyle(isHovering ? Color.accentColor : Color.primary.opacity(0.82))
         .background(buttonBackground)
         .scaleEffect(isHovering ? 1.06 : 1)
@@ -2273,7 +2273,7 @@ private struct FlowTags: View {
         FlowLayout(spacing: 5) {
             ForEach(tags, id: \.self) { tag in
                 Text(tag)
-                    .font(.system(size: 12))
+                    .font(.paperCodexSystem(size: 12))
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
                     .background(Color.orange.opacity(0.12))

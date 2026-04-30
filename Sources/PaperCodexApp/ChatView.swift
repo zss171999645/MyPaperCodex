@@ -234,7 +234,7 @@ struct ChatView: View {
                         }
                     } label: {
                         Image(systemName: sendButtonIcon)
-                            .font(.system(size: 26))
+                            .font(.paperCodexSystem(size: 26))
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(sendButtonColor)
@@ -573,7 +573,7 @@ private struct CodexRunEventRow: View {
         if event.kind == .terminal {
             DisclosureGroup(isExpanded: $isExpanded) {
                 Text(event.detail)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.paperCodexSystem(size: 12, design: .monospaced))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)

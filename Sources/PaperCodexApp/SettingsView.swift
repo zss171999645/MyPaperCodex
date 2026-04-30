@@ -181,7 +181,7 @@ struct SettingsView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Paper Codex")
-                .font(.system(size: 24, weight: .semibold))
+                .font(.paperCodexSystem(size: 24, weight: .semibold))
 
             VStack(alignment: .leading, spacing: 8) {
                 navButton(title: "Library", systemImage: "books.vertical") {
@@ -217,7 +217,7 @@ struct SettingsView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Settings")
-                .font(.system(size: 30, weight: .semibold))
+                .font(.paperCodexSystem(size: 30, weight: .semibold))
             Text("Local arXiv, storage, ranking, and Codex preferences.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -394,7 +394,7 @@ struct SettingsView: View {
                 }
 
                 TextEditor(text: $draftCodexSystemPrompt)
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(.paperCodexSystem(size: 13, design: .monospaced))
                     .frame(height: 240)
                     .scrollContentBackground(.hidden)
                     .background(Color(nsColor: .controlBackgroundColor))
@@ -486,7 +486,7 @@ struct SettingsView: View {
                     HStack(alignment: .top, spacing: 10) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(prompt.title)
-                                .font(.system(size: 13, weight: .semibold))
+                                .font(.paperCodexSystem(size: 13, weight: .semibold))
                             Text(prompt.content)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -532,7 +532,7 @@ struct SettingsView: View {
                 TextField("Prompt title", text: $newPromptTitle)
                     .textFieldStyle(.roundedBorder)
                 TextEditor(text: $newPromptContent)
-                    .font(.system(size: 13))
+                    .font(.paperCodexSystem(size: 13))
                     .frame(minHeight: 78)
                     .scrollContentBackground(.hidden)
                     .background(Color(nsColor: .controlBackgroundColor))
@@ -631,7 +631,7 @@ struct SettingsView: View {
             TextField("Prompt title", text: $editingPromptTitle)
                 .textFieldStyle(.roundedBorder)
             TextEditor(text: $editingPromptContent)
-                .font(.system(size: 13))
+                .font(.paperCodexSystem(size: 13))
                 .frame(minHeight: 120)
                 .scrollContentBackground(.hidden)
                 .background(Color(nsColor: .controlBackgroundColor))

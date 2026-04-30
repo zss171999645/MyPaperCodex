@@ -46,7 +46,7 @@ struct SaveToLibrarySheet: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "tray.and.arrow.down")
-                .font(.system(size: 22, weight: .semibold))
+                .font(.paperCodexSystem(size: 22, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
                 .frame(width: 28, height: 28)
 
@@ -54,7 +54,7 @@ struct SaveToLibrarySheet: View {
                 Text("Save to Library")
                     .font(.title3.weight(.semibold))
                 Text(paperTitle)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.paperCodexSystem(size: 13, weight: .medium))
                     .lineLimit(2)
                 if let detail, !detail.isEmpty {
                     Text(detail)
@@ -84,7 +84,7 @@ struct SaveToLibrarySheet: View {
                                 Text(name)
                                     .lineLimit(1)
                                 Image(systemName: "xmark")
-                                    .font(.system(size: 9, weight: .bold))
+                                    .font(.paperCodexSystem(size: 9, weight: .bold))
                             }
                             .font(.caption)
                             .padding(.horizontal, 8)
@@ -138,7 +138,7 @@ struct SaveToLibrarySheet: View {
                                     .lineLimit(1)
                                 Spacer(minLength: 0)
                             }
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.paperCodexSystem(size: 12, weight: .medium))
                             .padding(.horizontal, 8)
                             .padding(.vertical, 6)
                             .frame(maxWidth: .infinity, alignment: .leading)

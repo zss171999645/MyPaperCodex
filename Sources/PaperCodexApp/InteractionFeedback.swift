@@ -139,7 +139,7 @@ private struct InteractionNoticeCard: View {
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 3) {
                 Text(notice.title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.paperCodexSystem(size: 13, weight: .semibold))
                     .lineLimit(1)
                 if !notice.message.isEmpty {
                     Text(notice.message)
@@ -152,7 +152,7 @@ private struct InteractionNoticeCard: View {
             Spacer(minLength: 8)
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.paperCodexSystem(size: 10, weight: .bold))
                     .frame(width: 18, height: 18)
             }
             .buttonStyle(.plain)

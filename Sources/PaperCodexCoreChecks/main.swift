@@ -493,9 +493,18 @@ func runUILayoutSourceChecks() throws {
         "Discover save sheet should use the configured global language"
     )
     let rootViewSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/PaperCodexApp.swift"))
+    let typographySource = (try? String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/Typography.swift"))) ?? ""
     let sidebarRowSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/SidebarRowButton.swift"))
     let windowChromeSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/WindowChrome.swift"))
     let buildScriptSource = try String(contentsOf: root.appendingPathComponent("scripts/build-app-bundle.sh"))
+    try check(
+        rootViewSource.contains("paperCodexTypographyScale()"),
+        "root view should apply the Paper Codex typography scale across the interface"
+    )
+    try check(
+        typographySource.contains("scaledFixedSize") && typographySource.contains("fixedFontNoBoostThreshold") && typographySource.contains("size + 2"),
+        "Paper Codex typography should raise ordinary fixed font sizes while leaving already-large fonts alone"
+    )
     try check(
         rootViewSource.contains(".windowStyle(.hiddenTitleBar)"),
         "app window should hide the standard title bar"
@@ -624,7 +633,7 @@ func runUILayoutSourceChecks() throws {
         "library paper rows should show the arXiv ID in the visible card area when available"
     )
     try check(
-        librarySource.contains(".font(.system(size: 12.5"),
+        librarySource.contains(".font(.paperCodexSystem(size: 12.5"),
         "library arXiv, folder, and tag chips should be slightly larger than caption text"
     )
     try check(

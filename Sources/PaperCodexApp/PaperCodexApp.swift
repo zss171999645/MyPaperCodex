@@ -35,6 +35,7 @@ struct RootView: View {
             }
         }
         .environment(\.locale, Locale(identifier: model.globalLanguageMode.appLocaleIdentifier))
+        .paperCodexTypographyScale()
         .overlay(alignment: .topTrailing) {
             InteractionNoticeStack(notices: model.notices) { noticeID in
                 model.dismissNotice(id: noticeID)
