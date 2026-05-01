@@ -9,6 +9,7 @@ struct ChatView: View {
     @EnvironmentObject private var model: AppModel
     @State private var draft = ""
     @State private var isSendButtonHovered = false
+    @State private var selectedPanelTab: SessionPanelTab = .chat
     @State private var composerTextHeight = ChatComposerLayout.loadTextHeight()
     @State private var composerResizeStartHeight: CGFloat?
     @State private var sessionPendingRename: PaperSession?
@@ -18,6 +19,41 @@ struct ChatView: View {
         VStack(spacing: 0) {
             sessionBar
             Divider()
+            selectedPanelContent
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+        .sheet(item: $sessionPendingRename) { session in
+            renameSessionSheet(session)
+        }
+        .task {
+            await model.refreshAvailableCodexModels()
+        }
+        .onChange(of: selectedPanelTab) { _, tab in
+            guard tab == .notes, let paper = model.selectedPaper else {
+                return
+            }
+            model.loadPaperNotes(for: paper)
+        }
+        .onChange(of: model.selectedPaper?.id) { _, _ in
+            guard selectedPanelTab == .notes, let paper = model.selectedPaper else {
+                return
+            }
+            model.loadPaperNotes(for: paper)
+        }
+    }
+
+    @ViewBuilder
+    private var selectedPanelContent: some View {
+        switch selectedPanelTab {
+        case .chat:
+            chatPanel
+        case .notes:
+            SessionNotesPanel()
+        }
+    }
+
+    private var chatPanel: some View {
+        VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
@@ -67,13 +103,6 @@ struct ChatView: View {
             }
             composer
         }
-        .background(Color(nsColor: .controlBackgroundColor))
-        .sheet(item: $sessionPendingRename) { session in
-            renameSessionSheet(session)
-        }
-        .task {
-            await model.refreshAvailableCodexModels()
-        }
     }
 
     private var visibleActiveCodexRun: ActiveCodexRun? {
@@ -111,34 +140,45 @@ struct ChatView: View {
     }
 
     private var sessionBar: some View {
-        HStack(spacing: 10) {
-            Picker("Session", selection: Binding(
-                get: { model.selectedSession?.id ?? "" },
-                set: { model.selectSession($0) }
-            )) {
-                ForEach(model.sessions) { session in
-                    Text(session.title).tag(session.id)
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                Picker("Session", selection: Binding(
+                    get: { model.selectedSession?.id ?? "" },
+                    set: { model.selectSession($0) }
+                )) {
+                    ForEach(model.sessions) { session in
+                        Text(session.title).tag(session.id)
+                    }
                 }
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
+
+                Button("New") {
+                    model.newSessionButtonTapped()
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button {
+                    if let session = model.selectedSession {
+                        renameSessionTitle = session.title
+                        sessionPendingRename = session
+                    }
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.selectedSession == nil)
+                .help("Rename Session")
             }
+
+            Picker("Session Panel", selection: $selectedPanelTab) {
+                Label("Chat", systemImage: "text.bubble").tag(SessionPanelTab.chat)
+                Label("Notes", systemImage: "note.text").tag(SessionPanelTab.notes)
+            }
+            .pickerStyle(.segmented)
             .labelsHidden()
             .frame(maxWidth: .infinity)
-
-            Button("New") {
-                model.newSessionButtonTapped()
-            }
-            .buttonStyle(.borderedProminent)
-
-            Button {
-                if let session = model.selectedSession {
-                    renameSessionTitle = session.title
-                    sessionPendingRename = session
-                }
-            } label: {
-                Label("Rename", systemImage: "pencil")
-            }
-            .buttonStyle(.bordered)
-            .disabled(model.selectedSession == nil)
-            .help("Rename Session")
+            .help("Session Panel")
         }
         .padding(14)
     }
@@ -201,24 +241,6 @@ struct ChatView: View {
                     }
                 }
 
-                WindowSafeComposerResizeHandle(
-                    onDragChanged: { translationY in
-                        if composerResizeStartHeight == nil {
-                            composerResizeStartHeight = composerTextHeight
-                        }
-                        let nextHeight = (composerResizeStartHeight ?? composerTextHeight) + translationY
-                        composerTextHeight = ChatComposerLayout.clampedTextHeight(nextHeight)
-                    },
-                    onDragEnded: {
-                        composerTextHeight = ChatComposerLayout.clampedTextHeight(composerTextHeight)
-                        ChatComposerLayout.saveTextHeight(composerTextHeight)
-                        composerResizeStartHeight = nil
-                    }
-                )
-                .frame(maxWidth: .infinity)
-                .frame(height: 10)
-                .help("Resize input")
-
                 HStack(alignment: .bottom, spacing: 8) {
                     ComposerTextView(
                         text: $draft,
@@ -250,7 +272,28 @@ struct ChatView: View {
     }
 
     private var composerTopDivider: some View {
-        Divider()
+        WindowSafeComposerResizeHandle(
+            onDragChanged: resizeComposerTextHeight,
+            onDragEnded: finishComposerResize
+        )
+        .frame(maxWidth: .infinity)
+        .frame(height: 10)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .help("Resize input")
+    }
+
+    private func resizeComposerTextHeight(translationY: CGFloat) {
+        if composerResizeStartHeight == nil {
+            composerResizeStartHeight = composerTextHeight
+        }
+        let nextHeight = (composerResizeStartHeight ?? composerTextHeight) + translationY
+        composerTextHeight = ChatComposerLayout.clampedTextHeight(nextHeight)
+    }
+
+    private func finishComposerResize() {
+        composerTextHeight = ChatComposerLayout.clampedTextHeight(composerTextHeight)
+        ChatComposerLayout.saveTextHeight(composerTextHeight)
+        composerResizeStartHeight = nil
     }
 
     private var sendButtonIcon: String {
@@ -289,6 +332,202 @@ struct ChatView: View {
         Task {
             await model.sendMessage(message)
         }
+    }
+}
+
+private enum SessionPanelTab: Hashable {
+    case chat
+    case notes
+}
+
+private struct SessionNotesPanel: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var noteTitle = ""
+    @State private var noteBody = ""
+    @State private var editingNoteID: String?
+
+    var body: some View {
+        Group {
+            if let paper = model.selectedPaper {
+                VStack(spacing: 0) {
+                    notesHeader(for: paper)
+                    Divider()
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            notesList(for: paper)
+                            noteEditor(for: paper)
+                        }
+                        .padding(16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .onAppear {
+                    model.loadPaperNotes(for: paper)
+                }
+            } else {
+                ContentUnavailableView("No Paper Selected", systemImage: "doc.text")
+            }
+        }
+        .onChange(of: model.selectedPaper?.id) { _, _ in
+            clearNoteDraft()
+            if let paper = model.selectedPaper {
+                model.loadPaperNotes(for: paper)
+            }
+        }
+    }
+
+    private func notesHeader(for paper: Paper) -> some View {
+        HStack(spacing: 10) {
+            Label("Paper Notes", systemImage: "note.text")
+                .font(.paperCodexSystem(size: 13.5, weight: .semibold))
+            Text(paper.title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer()
+            Button {
+                clearNoteDraft()
+            } label: {
+                Label("New Note", systemImage: "plus")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private func notesList(for paper: Paper) -> some View {
+        let notes = model.paperNotesByID[paper.id, default: []]
+        return VStack(alignment: .leading, spacing: 8) {
+            if notes.isEmpty {
+                ContentUnavailableView("No notes", systemImage: "note.text")
+                    .frame(maxWidth: .infinity, minHeight: 120)
+            } else {
+                ForEach(notes) { note in
+                    SessionNoteRow(note: note) {
+                        edit(note)
+                    } onDelete: {
+                        model.deleteNote(note)
+                        if editingNoteID == note.id {
+                            clearNoteDraft()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func noteEditor(for paper: Paper) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Label(editingNoteID == nil ? "New Note" : "Edit Note", systemImage: "square.and.pencil")
+                    .font(.paperCodexSystem(size: 13, weight: .semibold))
+                Spacer()
+                if editingNoteID != nil {
+                    Button("Cancel") {
+                        clearNoteDraft()
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                }
+            }
+
+            TextField("Note title", text: $noteTitle)
+                .textFieldStyle(.roundedBorder)
+
+            TextEditor(text: $noteBody)
+                .font(.paperCodexSystem(size: 13))
+                .frame(minHeight: 150)
+                .scrollContentBackground(.hidden)
+                .background(Color(nsColor: .textBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7)
+                        .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+
+            HStack {
+                Button {
+                    model.saveNote(paperID: paper.id, noteID: editingNoteID, title: noteTitle, bodyMarkdown: noteBody)
+                    clearNoteDraft()
+                } label: {
+                    Label(editingNoteID == nil ? "Add Note" : "Save Note", systemImage: "checkmark")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(noteTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && noteBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                Spacer()
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private func edit(_ note: PaperNote) {
+        editingNoteID = note.id
+        noteTitle = note.title
+        noteBody = note.bodyMarkdown
+    }
+
+    private func clearNoteDraft() {
+        editingNoteID = nil
+        noteTitle = ""
+        noteBody = ""
+    }
+}
+
+private struct SessionNoteRow: View {
+    var note: PaperNote
+    var onEdit: () -> Void
+    var onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(note.title)
+                    .font(.paperCodexSystem(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                Spacer()
+                Button(action: onEdit) {
+                    Image(systemName: "pencil")
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.borderless)
+                .help("Edit Note")
+
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.red)
+                .help("Delete Note")
+            }
+            if !note.bodyMarkdown.isEmpty {
+                Text(note.bodyMarkdown)
+                    .font(.paperCodexSystem(size: 12.5))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+        )
     }
 }
 

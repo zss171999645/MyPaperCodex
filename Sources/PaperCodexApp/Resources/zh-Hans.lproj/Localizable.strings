@@ -185,10 +185,18 @@
 
 "Select text in the PDF, then ask Codex in this session. The selected source appears as a quoted reply." = "在 PDF 中选择文本，然后在本会话中询问 Codex。选中的来源会作为引用回复出现。";
 "Session" = "会话";
+"Session Panel" = "会话面板";
+"Chat" = "对话";
 "Rename" = "重命名";
 "Rename Session" = "重命名会话";
 "Session Actions" = "会话操作";
 "Session title" = "会话标题";
+"Paper Notes" = "论文笔记";
+"New Note" = "新建笔记";
+"Edit Note" = "编辑笔记";
+"Add Note" = "添加笔记";
+"Save Note" = "保存笔记";
+"Delete Note" = "删除笔记";
 "Quick Prompt" = "快捷 Prompt";
 "Use gpt-5.4-mini" = "使用 gpt-5.4-mini";
 "Refresh Codex Status" = "刷新 Codex 状态";

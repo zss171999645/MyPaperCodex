@@ -593,12 +593,28 @@ func runUILayoutSourceChecks() throws {
         "chat composer should expose a visible resize handle"
     )
     try check(
+        chatSource.contains("SessionPanelTab") && chatSource.contains("SessionNotesPanel"),
+        "session conversation area should provide a tabbed paper-notes view"
+    )
+    try check(
+        chatSource.contains("model.loadPaperNotes(for: paper)")
+            && chatSource.contains("model.saveNote(")
+            && chatSource.contains("model.deleteNote("),
+        "session paper-notes tab should load, edit, and delete persisted paper notes"
+    )
+    try check(
         chatSource.contains("WindowSafeComposerResizeHandle") && chatSource.contains("mouseDownCanMoveWindow"),
         "chat composer resize handle should use an AppKit view that cannot initiate window dragging"
     )
     try check(
         !chatSource.contains("DragGesture(minimumDistance: 1, coordinateSpace: .global)"),
         "chat composer resize handle should not rely on a SwiftUI drag gesture inside the movable window background"
+    )
+    try check(
+        chatSource.contains("private var composerTopDivider: some View")
+            && chatSource.contains("WindowSafeComposerResizeHandle")
+            && !chatSource.contains("private var composerTopDivider: some View {\n        Divider()\n    }"),
+        "chat composer top divider should be the AppKit resize handle users actually drag"
     )
     try check(
         chatSource.contains("ChatComposerLayout.clampedTextHeight"),
@@ -790,6 +806,11 @@ func runUILayoutSourceChecks() throws {
     try check(
         pdfKitSource.contains("ResponsivePDFView") && pdfKitSource.contains("override func mouseDown"),
         "PDFKit view should use a click-aware PDFView subclass for in-PDF citation previews"
+    )
+    try check(
+        pdfKitSource.contains("override var mouseDownCanMoveWindow")
+            && pdfKitSource.contains("suppressWindowBackgroundDragging"),
+        "PDF drag interactions should not be treated as full-window background dragging"
     )
     try check(
         pdfKitSource.contains("showCitationPreviewPopover"),
