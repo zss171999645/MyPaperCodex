@@ -86,6 +86,10 @@ public enum ChatMarkdownRenderer {
           height: auto;
           border-radius: 6px;
         }
+        .math-display {
+          margin: 0 0 0.72em;
+          overflow-x: auto;
+        }
         </style>
         <script>
         window.MathJax = {
@@ -131,6 +135,9 @@ public enum ChatMarkdownRenderer {
         var orderedListItems: [String] = []
         var codeLines: [String] = []
         var inCode = false
+        var displayMathLines: [String] = []
+        var displayMathOpeningDelimiter: String?
+        var displayMathClosingDelimiter: String?
 
         func flushParagraph() {
             guard !paragraph.isEmpty else {
@@ -159,6 +166,22 @@ public enum ChatMarkdownRenderer {
             codeLines.removeAll()
         }
 
+        func resetDisplayMath() {
+            displayMathLines.removeAll()
+            displayMathOpeningDelimiter = nil
+            displayMathClosingDelimiter = nil
+        }
+
+        func flushDisplayMath(closedBy closing: String) {
+            guard let opening = displayMathOpeningDelimiter,
+                  displayMathClosingDelimiter != nil else {
+                return
+            }
+            let block = ([opening] + displayMathLines + [closing]).joined(separator: "\n")
+            html.append(#"<div class="math-display">\#(escapeText(block))</div>"#)
+            resetDisplayMath()
+        }
+
         var index = 0
         while index < lines.count {
             let line = lines[index]
@@ -179,6 +202,25 @@ public enum ChatMarkdownRenderer {
 
             if inCode {
                 codeLines.append(line)
+                index += 1
+                continue
+            }
+
+            if let closing = displayMathClosingDelimiter {
+                if trimmed == closing {
+                    flushDisplayMath(closedBy: closing)
+                } else {
+                    displayMathLines.append(line)
+                }
+                index += 1
+                continue
+            }
+
+            if let delimiter = displayMathDelimiter(for: trimmed) {
+                flushParagraph()
+                flushLists()
+                displayMathOpeningDelimiter = delimiter.opening
+                displayMathClosingDelimiter = delimiter.closing
                 index += 1
                 continue
             }
@@ -237,6 +279,11 @@ public enum ChatMarkdownRenderer {
 
         if inCode {
             flushCode()
+        }
+        if let opening = displayMathOpeningDelimiter {
+            paragraph.append(opening)
+            paragraph.append(contentsOf: displayMathLines)
+            resetDisplayMath()
         }
         flushParagraph()
         flushLists()
@@ -336,6 +383,17 @@ public enum ChatMarkdownRenderer {
             return nil
         }
         return String(line[line.index(after: afterDot)...])
+    }
+
+    private static func displayMathDelimiter(for line: String) -> (opening: String, closing: String)? {
+        switch line {
+        case "$$":
+            return ("$$", "$$")
+        case "\\[":
+            return ("\\[", "\\]")
+        default:
+            return nil
+        }
     }
 
     private static func isTableStart(lines: [String], index: Int) -> Bool {

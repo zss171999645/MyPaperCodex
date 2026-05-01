@@ -1467,6 +1467,20 @@ func runCitationChecks() throws {
     try check(rendered.contains("<h2>Result</h2>"), "markdown renderer should render markdown headings")
     try check(rendered.contains(#"<img alt="figure" src="file:///tmp/figure.png">"#), "markdown renderer should render absolute local images")
     try check(rendered.contains(#"href="papercodex-cite://open?id=paper%3Apaper-a%3Ap5%3Ab17""#), "markdown renderer should preserve clickable citation links")
+
+    let displayMath = """
+    $$
+    \\Delta
+    =
+    [1-\\alpha(x_t)](v_{old}-v^-)
+    =
+    \\alpha(x_t)(v^+-v_{old})
+    $$
+    """
+    let renderedDisplayMath = ChatMarkdownRenderer.renderFragment(markdown: displayMath)
+    try check(renderedDisplayMath.contains(#"class="math-display""#), "markdown renderer should keep display math as its own block")
+    try check(!renderedDisplayMath.contains("<a"), "markdown renderer should not parse links inside display math")
+    try check(renderedDisplayMath.contains(#"[1-\alpha(x_t)](v_{old}-v^-)"#), "markdown renderer should preserve TeX link-like syntax inside display math")
 }
 
 func runUserSourceAttachmentChecks() throws {
