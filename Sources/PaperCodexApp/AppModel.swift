@@ -1949,6 +1949,26 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func togglePaperStar(_ paper: Paper) {
+        setPaperStarred(!paper.isStarred, for: paper)
+    }
+
+    func setPaperStarred(_ isStarred: Bool, for paper: Paper) {
+        do {
+            guard let repository else {
+                throw AppModelError.repositoryUnavailable
+            }
+            try repository.setPaperStarred(isStarred, paperID: paper.id)
+            try reloadLibrary()
+            if selectedPaper?.id == paper.id {
+                selectedPaper = papers.first { $0.id == paper.id } ?? selectedPaper
+            }
+            postNotice(kind: .success, title: isStarred ? "Paper Starred" : "Paper Unstarred", message: paper.title)
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
     func loadPaperNotes(for paper: Paper) {
         do {
             guard let repository else {

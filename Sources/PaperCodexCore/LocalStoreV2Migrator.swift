@@ -288,6 +288,7 @@ public enum LocalStoreV2Migrator {
             ("arxiv_id", "TEXT"),
             ("arxiv_id_versioned", "TEXT"),
             ("doi", "TEXT"),
+            ("is_starred", "INTEGER NOT NULL DEFAULT 0"),
             ("deleted_at", "TEXT"),
             ("sync_revision", "INTEGER NOT NULL DEFAULT 0")
         ]

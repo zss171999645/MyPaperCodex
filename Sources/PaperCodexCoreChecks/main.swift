@@ -71,6 +71,7 @@ func runModelsChecks() throws {
         authors: ["Alice", "Bob"],
         year: 2026,
         sourceURL: "https://arxiv.org/abs/0000.00000",
+        isStarred: true,
         importedAt: Date(timeIntervalSince1970: 1_777_220_000),
         updatedAt: Date(timeIntervalSince1970: 1_777_220_010)
     )
@@ -92,7 +93,22 @@ func runModelsChecks() throws {
     let decodedPaper = try decoder.decode(Paper.self, from: encoder.encode(paper))
     let decodedSession = try decoder.decode(PaperSession.self, from: encoder.encode(session))
     try check(decodedPaper == paper, "paper should JSON round-trip")
+    try check(decodedPaper.isStarred, "paper JSON round-trip should preserve library star state")
     try check(decodedSession == session, "session should JSON round-trip")
+    let legacyPaperJSON = """
+    {
+      "id": "legacy-paper",
+      "filePath": "/tmp/legacy.pdf",
+      "fileHash": "legacy-sha256",
+      "title": "Legacy Paper",
+      "authors": [],
+      "sourceURL": null,
+      "importedAt": "2026-04-27T00:00:00Z",
+      "updatedAt": "2026-04-27T00:00:00Z"
+    }
+    """
+    let legacyPaper = try decoder.decode(Paper.self, from: Data(legacyPaperJSON.utf8))
+    try check(!legacyPaper.isStarred, "paper JSON decode should default missing star state to false")
 
     let placeholderID = Paper.makeArxivImportPlaceholderID(for: "2604.18586v2")
     let placeholder = Paper(
@@ -318,6 +334,18 @@ func runUILayoutSourceChecks() throws {
         "library toolbar should expose a one-click sort direction toggle"
     )
     try check(
+        librarySource.contains("onToggleStar"),
+        "library paper rows should expose a direct star toggle"
+    )
+    try check(
+        librarySource.contains("paper.isStarred") && librarySource.contains("star.fill"),
+        "library paper rows should render starred papers with a filled star icon"
+    )
+    try check(
+        librarySource.contains("if left.isStarred != right.isStarred"),
+        "library sorting should pin starred papers before applying the active sort option"
+    )
+    try check(
         librarySource.contains("systemImage: \"number\""),
         "library toolbar should show an arXiv import button next to PDF import"
     )
@@ -411,6 +439,10 @@ func runUILayoutSourceChecks() throws {
     try check(
         appModelSource.contains("deletePapers(_ paperIDs: [String])"),
         "AppModel should provide a batch library delete path"
+    )
+    try check(
+        appModelSource.contains("togglePaperStar("),
+        "AppModel should provide a library paper star toggle path"
     )
     try check(
         appModelSource.contains("pendingArxivLibraryImportIDs"),
@@ -949,6 +981,7 @@ func runRepositoryChecks() throws {
 
     try repository.upsertPaper(paper)
     try repository.upsertPaper(paperB)
+    try repository.setPaperStarred(true, paperID: "paper-b", updatedAt: now.addingTimeInterval(1))
     try repository.upsertCategory(category)
     try repository.upsertCategory(childCategory)
     try repository.upsertTag(tag)
@@ -977,8 +1010,11 @@ func runRepositoryChecks() throws {
     let fetchedSessions = try repository.fetchSessions(paperID: "paper-a")
     let fetchedMessages = try repository.fetchMessages(sessionID: "session-a")
 
-    try check(fetchedPapers == [paper, paperB], "papers should round-trip through SQLite")
-    try check(fetchedPapersByID == [paperB, paper], "papers should be fetchable by ID in requested order")
+    var starredPaperB = paperB
+    starredPaperB.isStarred = true
+    starredPaperB.updatedAt = now.addingTimeInterval(1)
+    try check(fetchedPapers == [starredPaperB, paper], "starred papers should round-trip through SQLite and be pinned first")
+    try check(fetchedPapersByID == [starredPaperB, paper], "papers should be fetchable by ID in requested order")
     try check(fetchedPaperByHash == paper, "paper should be fetchable by file hash for duplicate detection")
     try check(missingPaperByHash == nil, "missing file hash should not return a paper")
     try check(fetchedCategories == [category, childCategory], "categories should preserve hierarchy and sort order")
@@ -1016,7 +1052,7 @@ func runRepositoryChecks() throws {
     let deletedPaperCategoryIDs = try repository.fetchCategoryIDs(forPaperID: "paper-a")
     let deletedPaperTags = try repository.fetchTags(forPaperID: "paper-a")
     let sessionsAfterPaperDelete = try repository.fetchSessions(paperID: "paper-a")
-    try check(papersAfterDelete == [paperB], "repository should delete requested papers while preserving others")
+    try check(papersAfterDelete == [starredPaperB], "repository should delete requested papers while preserving others")
     try check(deletedPaperCategoryIDs.isEmpty, "repository should remove category links for deleted papers")
     try check(deletedPaperTags.isEmpty, "repository should remove tag links for deleted papers")
     try check(sessionsAfterPaperDelete.isEmpty, "repository should remove session paper links for deleted papers")
@@ -1080,6 +1116,7 @@ func runLocalStoreV2MigrationChecks() throws {
     }
 
     try check(paperColumns.contains("canonical_key"), "V2 migration should add canonical paper columns")
+    try check(paperColumns.contains("is_starred"), "repository migration should add library star state to papers")
     try check(
         paperMetadata == [
             "paper-a|arxiv:2604.18586|arxiv|2604.18586|2604.18586",

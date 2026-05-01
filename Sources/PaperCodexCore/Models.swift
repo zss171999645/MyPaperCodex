@@ -35,6 +35,7 @@ public struct Paper: Codable, Equatable, Identifiable, Sendable {
     public var year: Int?
     public var sourceURL: String?
     public var isSaved: Bool
+    public var isStarred: Bool
     public var importedAt: Date
     public var updatedAt: Date
 
@@ -47,6 +48,7 @@ public struct Paper: Codable, Equatable, Identifiable, Sendable {
         year: Int?,
         sourceURL: String?,
         isSaved: Bool = true,
+        isStarred: Bool = false,
         importedAt: Date,
         updatedAt: Date
     ) {
@@ -58,8 +60,53 @@ public struct Paper: Codable, Equatable, Identifiable, Sendable {
         self.year = year
         self.sourceURL = sourceURL
         self.isSaved = isSaved
+        self.isStarred = isStarred
         self.importedAt = importedAt
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case filePath
+        case fileHash
+        case title
+        case authors
+        case year
+        case sourceURL
+        case isSaved
+        case isStarred
+        case importedAt
+        case updatedAt
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        filePath = try container.decode(String.self, forKey: .filePath)
+        fileHash = try container.decode(String.self, forKey: .fileHash)
+        title = try container.decode(String.self, forKey: .title)
+        authors = try container.decode([String].self, forKey: .authors)
+        year = try container.decodeIfPresent(Int.self, forKey: .year)
+        sourceURL = try container.decodeIfPresent(String.self, forKey: .sourceURL)
+        isSaved = try container.decodeIfPresent(Bool.self, forKey: .isSaved) ?? true
+        isStarred = try container.decodeIfPresent(Bool.self, forKey: .isStarred) ?? false
+        importedAt = try container.decode(Date.self, forKey: .importedAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(filePath, forKey: .filePath)
+        try container.encode(fileHash, forKey: .fileHash)
+        try container.encode(title, forKey: .title)
+        try container.encode(authors, forKey: .authors)
+        try container.encodeIfPresent(year, forKey: .year)
+        try container.encodeIfPresent(sourceURL, forKey: .sourceURL)
+        try container.encode(isSaved, forKey: .isSaved)
+        try container.encode(isStarred, forKey: .isStarred)
+        try container.encode(importedAt, forKey: .importedAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
     }
 
     public var isArxivImportPlaceholder: Bool {

@@ -439,10 +439,14 @@ struct LibraryView: View {
                                 isImportPlaceholder: paper.isArxivImportPlaceholder,
                                 placeholderDetail: model.arxivImportPlaceholderDetail(for: paper),
                                 isSelected: model.selectedLibraryPaper?.id == paper.id,
-                                isMultiSelected: selectedPaperIDs.contains(paper.id)
-                            ) {
-                                model.openPaper(paper)
-                            }
+                                isMultiSelected: selectedPaperIDs.contains(paper.id),
+                                onToggleStar: {
+                                    model.togglePaperStar(paper)
+                                },
+                                onRead: {
+                                    model.openPaper(paper)
+                                }
+                            )
                             .contentShape(Rectangle())
                             .onDrag {
                                 NSItemProvider(object: paperDragPayload(for: paper) as NSString)
@@ -519,8 +523,21 @@ struct LibraryView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(paper.title)
-                                .font(.headline)
+                            HStack(alignment: .top, spacing: 8) {
+                                Text(paper.title)
+                                    .font(.headline)
+                                Spacer(minLength: 8)
+                                Button {
+                                    model.togglePaperStar(paper)
+                                } label: {
+                                    Image(systemName: paper.isStarred ? "star.fill" : "star")
+                                        .foregroundStyle(paper.isStarred ? Color.yellow : Color.secondary)
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(paper.isArxivImportPlaceholder)
+                                .help(paper.isStarred ? "Remove Star" : "Star Paper")
+                                .accessibilityLabel(paper.isStarred ? "Remove Star" : "Star Paper")
+                            }
                             Text(paper.isArxivImportPlaceholder ? model.arxivImportPlaceholderDetail(for: paper) : (paper.authors.isEmpty ? "Authors not set" : paper.authors.joined(separator: ", ")))
                                 .foregroundStyle(.secondary)
                             Text(paper.isArxivImportPlaceholder ? (paper.sourceURL ?? paper.title) : paper.filePath)
@@ -1169,6 +1186,7 @@ private struct PaperRow: View {
     var placeholderDetail: String
     var isSelected: Bool
     var isMultiSelected: Bool
+    var onToggleStar: () -> Void
     var onRead: () -> Void
 
     @State private var isHovering = false
@@ -1201,6 +1219,15 @@ private struct PaperRow: View {
             }
 
             Spacer()
+
+            Button(action: onToggleStar) {
+                Image(systemName: paper.isStarred ? "star.fill" : "star")
+                    .foregroundStyle(paper.isStarred ? Color.yellow : Color.secondary)
+            }
+            .buttonStyle(.borderless)
+            .disabled(isImportPlaceholder)
+            .help(paper.isStarred ? "Remove Star" : "Star Paper")
+            .accessibilityLabel(paper.isStarred ? "Remove Star" : "Star Paper")
 
             Button(action: onRead) {
                 Image(systemName: "book")
@@ -1546,6 +1573,9 @@ private enum LibrarySortOption: String, CaseIterable, Identifiable {
 
     func sorted(_ papers: [Paper], ascending: Bool) -> [Paper] {
         papers.sorted { left, right in
+            if left.isStarred != right.isStarred {
+                return left.isStarred
+            }
             switch self {
             case .addedNewest:
                 if left.importedAt != right.importedAt {

@@ -37,6 +37,7 @@ public final class PaperRepository {
           year INTEGER,
           source_url TEXT,
           is_saved INTEGER NOT NULL DEFAULT 1,
+          is_starred INTEGER NOT NULL DEFAULT 0,
           imported_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
@@ -146,14 +147,17 @@ public final class PaperRepository {
         if !paperColumns.contains("is_saved") {
             try database.execute("ALTER TABLE papers ADD COLUMN is_saved INTEGER NOT NULL DEFAULT 1;")
         }
+        if !paperColumns.contains("is_starred") {
+            try database.execute("ALTER TABLE papers ADD COLUMN is_starred INTEGER NOT NULL DEFAULT 0;")
+        }
         try LocalStoreV2Migrator.migrate(database: database)
     }
 
     public func upsertPaper(_ paper: Paper) throws {
         try database.transaction {
             try database.run("""
-            INSERT INTO papers (id, file_path, file_hash, title, authors_json, year, source_url, is_saved, imported_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO papers (id, file_path, file_hash, title, authors_json, year, source_url, is_saved, is_starred, imported_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               file_path = excluded.file_path,
               file_hash = excluded.file_hash,
@@ -162,6 +166,7 @@ public final class PaperRepository {
               year = excluded.year,
               source_url = excluded.source_url,
               is_saved = excluded.is_saved,
+              is_starred = excluded.is_starred,
               updated_at = excluded.updated_at;
             """, bindings: [
                 .text(paper.id),
@@ -172,6 +177,7 @@ public final class PaperRepository {
                 paper.year.map(SQLiteValue.int) ?? .null,
                 paper.sourceURL.map(SQLiteValue.text) ?? .null,
                 .int(paper.isSaved ? 1 : 0),
+                .int(paper.isStarred ? 1 : 0),
                 .text(dates.string(from: paper.importedAt)),
                 .text(dates.string(from: paper.updatedAt))
             ])
@@ -181,8 +187,8 @@ public final class PaperRepository {
 
     public func fetchPapers() throws -> [Paper] {
         try database.query("""
-        SELECT id, file_path, file_hash, title, authors_json, year, source_url, is_saved, imported_at, updated_at
-        FROM papers WHERE is_saved = 1 ORDER BY title, id;
+        SELECT id, file_path, file_hash, title, authors_json, year, source_url, is_saved, is_starred, imported_at, updated_at
+        FROM papers WHERE is_saved = 1 ORDER BY is_starred DESC, title, id;
         """) { row in
             try paper(from: row)
         }
@@ -194,7 +200,7 @@ public final class PaperRepository {
         }
         let placeholders = ids.map { _ in "?" }.joined(separator: ", ")
         let fetched = try database.query("""
-        SELECT id, file_path, file_hash, title, authors_json, year, source_url, is_saved, imported_at, updated_at
+        SELECT id, file_path, file_hash, title, authors_json, year, source_url, is_saved, is_starred, imported_at, updated_at
         FROM papers WHERE id IN (\(placeholders));
         """, bindings: ids.map(SQLiteValue.text)) { row in
             try paper(from: row)
@@ -205,11 +211,25 @@ public final class PaperRepository {
 
     public func fetchPaper(fileHash: String) throws -> Paper? {
         try database.query("""
-        SELECT id, file_path, file_hash, title, authors_json, year, source_url, is_saved, imported_at, updated_at
+        SELECT id, file_path, file_hash, title, authors_json, year, source_url, is_saved, is_starred, imported_at, updated_at
         FROM papers WHERE file_hash = ? LIMIT 1;
         """, bindings: [.text(fileHash)]) { row in
             try paper(from: row)
         }.first
+    }
+
+    public func setPaperStarred(_ isStarred: Bool, paperID: String, updatedAt: Date = Date()) throws {
+        try database.run("""
+        UPDATE papers
+        SET is_starred = ?,
+            updated_at = ?,
+            sync_revision = COALESCE(sync_revision, 0) + 1
+        WHERE id = ?;
+        """, bindings: [
+            .int(isStarred ? 1 : 0),
+            .text(dates.string(from: updatedAt)),
+            .text(paperID)
+        ])
     }
 
     public func deleteUnsavedPapers() throws {
@@ -811,8 +831,9 @@ public final class PaperRepository {
             year: row.optionalInt(5),
             sourceURL: row.optionalText(6),
             isSaved: row.int(7) != 0,
-            importedAt: try date(from: try row.text(8)),
-            updatedAt: try date(from: try row.text(9))
+            isStarred: row.int(8) != 0,
+            importedAt: try date(from: try row.text(9)),
+            updatedAt: try date(from: try row.text(10))
         )
     }
 
