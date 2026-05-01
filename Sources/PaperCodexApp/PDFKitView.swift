@@ -2,8 +2,9 @@ import PDFKit
 import PaperCodexCore
 import SwiftUI
 
-fileprivate final class CitationAwarePDFView: PDFView {
-    var onMouseDown: ((CitationAwarePDFView, NSEvent) -> Bool)?
+fileprivate final class ResponsivePDFView: PDFView {
+    var onMouseDown: ((ResponsivePDFView, NSEvent) -> Bool)?
+    var onBoundsChanged: (() -> Void)?
 
     override func mouseDown(with event: NSEvent) {
         if onMouseDown?(self, event) == true {
@@ -11,6 +12,15 @@ fileprivate final class CitationAwarePDFView: PDFView {
         }
         super.mouseDown(with: event)
     }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let oldSize = frame.size
+        super.setFrameSize(newSize)
+        if abs(oldSize.width - newSize.width) > 0.5 || abs(oldSize.height - newSize.height) > 0.5 {
+            onBoundsChanged?()
+        }
+    }
+
 }
 
 struct PDFViewportPosition: Equatable {
@@ -36,20 +46,23 @@ struct PDFKitView: NSViewRepresentable {
     var readingContextID: String?
     var readingPosition: PaperReaderPosition?
     var command: PDFKitCommand?
+    var internalLinkTarget: PDFInternalLinkTarget?
     var onSelection: (PDFSelectionInfo?) -> Void
     var onReadingPositionChange: (PDFViewportPosition) -> Void
     var onDocumentStatusChange: (PDFDocumentStatus) -> Void
+    var onInternalLinkSplit: (PDFInternalLinkTarget) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             onSelection: onSelection,
             onReadingPositionChange: onReadingPositionChange,
-            onDocumentStatusChange: onDocumentStatusChange
+            onDocumentStatusChange: onDocumentStatusChange,
+            onInternalLinkSplit: onInternalLinkSplit
         )
     }
 
     func makeNSView(context: Context) -> PDFView {
-        let view = CitationAwarePDFView()
+        let view = ResponsivePDFView()
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical
@@ -57,6 +70,9 @@ struct PDFKitView: NSViewRepresentable {
         let coordinator = context.coordinator
         view.onMouseDown = { [weak coordinator] pdfView, event in
             coordinator?.handlePDFMouseDown(in: pdfView, event: event) ?? false
+        }
+        view.onBoundsChanged = { [weak coordinator] in
+            coordinator?.pdfViewBoundsChanged()
         }
         context.coordinator.pdfView = view
         NotificationCenter.default.addObserver(
@@ -97,7 +113,9 @@ struct PDFKitView: NSViewRepresentable {
         context.coordinator.onSelection = onSelection
         context.coordinator.onReadingPositionChange = onReadingPositionChange
         context.coordinator.onDocumentStatusChange = onDocumentStatusChange
+        context.coordinator.onInternalLinkSplit = onInternalLinkSplit
         context.coordinator.applyReadingPosition(readingPosition, contextID: readingContextID)
+        context.coordinator.applyInternalLinkTarget(internalLinkTarget)
         context.coordinator.applyJumpTarget(jumpTarget)
         context.coordinator.applyCommand(command)
     }
@@ -111,40 +129,49 @@ struct PDFKitView: NSViewRepresentable {
         var onSelection: (PDFSelectionInfo?) -> Void
         var onReadingPositionChange: (PDFViewportPosition) -> Void
         var onDocumentStatusChange: (PDFDocumentStatus) -> Void
+        var onInternalLinkSplit: (PDFInternalLinkTarget) -> Void
         private var highlightedAnnotations: [(PDFPage, PDFAnnotation)] = []
         private var lastJumpTarget: PDFJumpTarget?
+        private var lastAppliedInternalLinkTarget: PDFInternalLinkTarget?
         private var lastAppliedReadingContext: String?
         private var lastAppliedCommand: PDFKitCommand?
         private var lastReportedStatus: PDFDocumentStatus?
         private var lastReportedPosition: PDFViewportPosition?
         private weak var observedClipView: NSClipView?
         private var pendingViewportReport: DispatchWorkItem?
+        private var pendingWidthRefit: DispatchWorkItem?
         private var isApplyingReadingPosition = false
+        private var shouldFitWidthOnResize = true
         private var referenceResolver = PDFReferenceResolver(pageTexts: [:])
         private var citationPopover: NSPopover?
 
         init(
             onSelection: @escaping (PDFSelectionInfo?) -> Void,
             onReadingPositionChange: @escaping (PDFViewportPosition) -> Void,
-            onDocumentStatusChange: @escaping (PDFDocumentStatus) -> Void
+            onDocumentStatusChange: @escaping (PDFDocumentStatus) -> Void,
+            onInternalLinkSplit: @escaping (PDFInternalLinkTarget) -> Void
         ) {
             self.onSelection = onSelection
             self.onReadingPositionChange = onReadingPositionChange
             self.onDocumentStatusChange = onDocumentStatusChange
+            self.onInternalLinkSplit = onInternalLinkSplit
         }
 
         deinit {
             pendingViewportReport?.cancel()
+            pendingWidthRefit?.cancel()
             NotificationCenter.default.removeObserver(self)
         }
 
         @MainActor
         func documentDidLoad() {
             lastJumpTarget = nil
+            lastAppliedInternalLinkTarget = nil
             lastAppliedReadingContext = nil
             lastAppliedCommand = nil
             lastReportedStatus = nil
             lastReportedPosition = nil
+            shouldFitWidthOnResize = true
             referenceResolver = Self.makeReferenceResolver(from: pdfView?.document)
             citationPopover?.close()
             citationPopover = nil
@@ -209,15 +236,18 @@ struct PDFKitView: NSViewRepresentable {
             lastAppliedCommand = command
             switch command.kind {
             case .zoomIn:
+                shouldFitWidthOnResize = false
                 pdfView.autoScales = false
                 pdfView.scaleFactor = min(pdfView.scaleFactor * 1.18, pdfView.maxScaleFactor)
             case .zoomOut:
+                shouldFitWidthOnResize = false
                 pdfView.autoScales = false
                 pdfView.scaleFactor = max(pdfView.scaleFactor / 1.18, pdfView.minScaleFactor)
             case .fitWidth:
-                pdfView.autoScales = true
-                pdfView.scaleFactor = pdfView.scaleFactorForSizeToFit
+                shouldFitWidthOnResize = true
+                refitForCurrentWidth()
             case .fitPage:
+                shouldFitWidthOnResize = true
                 pdfView.autoScales = true
                 pdfView.displayMode = .singlePage
                 DispatchQueue.main.async {
@@ -249,7 +279,9 @@ struct PDFKitView: NSViewRepresentable {
             }
 
             isApplyingReadingPosition = true
-            if position.scaleFactor.isFinite, position.scaleFactor > 0 {
+            if shouldFitWidthOnResize {
+                refitForCurrentWidth()
+            } else if position.scaleFactor.isFinite, position.scaleFactor > 0 {
                 pdfView.autoScales = false
                 pdfView.scaleFactor = CGFloat(position.scaleFactor)
             }
@@ -260,6 +292,64 @@ struct PDFKitView: NSViewRepresentable {
                 self?.scheduleViewportReport()
                 self?.reportDocumentStatus()
             }
+        }
+
+        @MainActor
+        func applyInternalLinkTarget(_ target: PDFInternalLinkTarget?) {
+            guard target != lastAppliedInternalLinkTarget else {
+                return
+            }
+            lastAppliedInternalLinkTarget = target
+            guard let target,
+                  let pdfView,
+                  let document = pdfView.document,
+                  target.pageIndex >= 0,
+                  target.pageIndex < document.pageCount,
+                  let page = document.page(at: target.pageIndex) else {
+                return
+            }
+            if shouldFitWidthOnResize {
+                refitForCurrentWidth()
+            }
+            let point = NSPoint(x: target.pagePointX, y: target.pagePointY)
+            pdfView.go(to: PDFDestination(page: page, at: point))
+            scheduleViewportReport()
+            reportDocumentStatus()
+        }
+
+        @MainActor
+        func pdfViewBoundsChanged() {
+            scheduleWidthRefit()
+        }
+
+        @MainActor
+        private func scheduleWidthRefit() {
+            guard shouldFitWidthOnResize else {
+                return
+            }
+            pendingWidthRefit?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                self?.refitForCurrentWidth()
+            }
+            pendingWidthRefit = workItem
+            DispatchQueue.main.async(execute: workItem)
+        }
+
+        @MainActor
+        private func refitForCurrentWidth() {
+            guard shouldFitWidthOnResize,
+                  let pdfView,
+                  pdfView.document != nil else {
+                return
+            }
+            pdfView.autoScales = true
+            let targetScale = pdfView.scaleFactorForSizeToFit
+            if targetScale.isFinite,
+               targetScale > 0,
+               abs(pdfView.scaleFactor - targetScale) > 0.005 {
+                pdfView.scaleFactor = targetScale
+            }
+            reportDocumentStatus()
         }
 
         @MainActor
@@ -363,7 +453,7 @@ struct PDFKitView: NSViewRepresentable {
         }
 
         @MainActor
-        fileprivate func handlePDFMouseDown(in pdfView: CitationAwarePDFView, event: NSEvent) -> Bool {
+        fileprivate func handlePDFMouseDown(in pdfView: ResponsivePDFView, event: NSEvent) -> Bool {
             guard event.clickCount == 1,
                   event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty else {
                 return false
@@ -444,6 +534,10 @@ struct PDFKitView: NSViewRepresentable {
             closeCitationPopover()
             if let url = preview.url {
                 NSWorkspace.shared.open(url)
+                return
+            }
+            if let internalTarget = preview.internalTarget {
+                onInternalLinkSplit(internalTarget)
                 return
             }
             if let destination = preview.destination {
@@ -616,7 +710,8 @@ struct PDFKitView: NSViewRepresentable {
                     actionTitle: "Open",
                     systemImage: "link",
                     url: url,
-                    destination: nil
+                    destination: nil,
+                    internalTarget: nil
                 )
             }
             let destination = annotation.destination ?? (annotation.action as? PDFActionGoTo)?.destination
@@ -634,10 +729,27 @@ struct PDFKitView: NSViewRepresentable {
                 title: "PDF Link",
                 target: pageNumber.map { "Page \($0)" } ?? "Internal destination",
                 sourceText: sourceText,
-                actionTitle: "Jump",
+                actionTitle: "Open Split",
                 systemImage: "arrow.turn.down.right",
                 url: nil,
-                destination: destination
+                destination: destination,
+                internalTarget: internalLinkTarget(for: destination, document: document)
+            )
+        }
+
+        private static func internalLinkTarget(for destination: PDFDestination, document: PDFDocument) -> PDFInternalLinkTarget? {
+            guard let page = destination.page else {
+                return nil
+            }
+            let pageIndex = document.index(for: page)
+            guard pageIndex >= 0 else {
+                return nil
+            }
+            let point = destination.point
+            return PDFInternalLinkTarget(
+                pageIndex: pageIndex,
+                pagePointX: Double(point.x),
+                pagePointY: Double(point.y)
             )
         }
 
@@ -678,6 +790,7 @@ private struct PDFLinkPreview {
     var systemImage: String
     var url: URL?
     var destination: PDFDestination?
+    var internalTarget: PDFInternalLinkTarget?
 }
 
 private struct InTextCitationPreview: View {

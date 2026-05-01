@@ -35,29 +35,27 @@ struct SidebarSplitLayout<Sidebar: View, Content: View>: View {
                     .frame(width: sidebarWidth)
                     .frame(maxHeight: .infinity, alignment: .topLeading)
                     .clipped()
-                SplitterHandle()
+                WindowSafeSplitterHandle(
+                    onDragChanged: { translationX in
+                        if dragStartWidth == nil {
+                            dragStartWidth = sidebarWidth
+                        }
+                        liveSidebarWidth = clampedSidebarWidth(
+                            (dragStartWidth ?? sidebarWidth) + translationX,
+                            totalWidth: proxy.size.width,
+                            handleWidth: handleWidth
+                        )
+                    },
+                    onDragEnded: {
+                        if let liveSidebarWidth {
+                            model.setLibrarySidebarWidth(liveSidebarWidth)
+                        }
+                        dragStartWidth = nil
+                        liveSidebarWidth = nil
+                    }
+                )
                     .frame(width: handleWidth)
                     .frame(maxHeight: .infinity)
-                    .gesture(
-                        DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                            .onChanged { value in
-                                if dragStartWidth == nil {
-                                    dragStartWidth = sidebarWidth
-                                }
-                                liveSidebarWidth = clampedSidebarWidth(
-                                    (dragStartWidth ?? sidebarWidth) + value.translation.width,
-                                    totalWidth: proxy.size.width,
-                                    handleWidth: handleWidth
-                                )
-                            }
-                            .onEnded { _ in
-                                if let liveSidebarWidth {
-                                    model.setLibrarySidebarWidth(liveSidebarWidth)
-                                }
-                                dragStartWidth = nil
-                                liveSidebarWidth = nil
-                            }
-                    )
                 content()
                     .frame(minWidth: contentMinWidth, maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
@@ -76,40 +74,103 @@ struct SidebarSplitLayout<Sidebar: View, Content: View>: View {
     }
 }
 
-struct SplitterHandle: View {
-    @State private var isHovering = false
+struct WindowSafeSplitterHandle: NSViewRepresentable {
+    var onDragChanged: (CGFloat) -> Void
+    var onDragEnded: () -> Void
 
-    var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor).opacity(isHovering ? 0.80 : 0.55))
-                .frame(width: 5)
-            Capsule()
-                .fill(isHovering ? Color.accentColor.opacity(0.72) : Color.clear)
-                .frame(width: 3, height: 52)
-                .shadow(color: isHovering ? Color.accentColor.opacity(0.32) : .clear, radius: 6)
+    func makeNSView(context: Context) -> SplitterHandleView {
+        let view = SplitterHandleView()
+        view.onDragChanged = onDragChanged
+        view.onDragEnded = onDragEnded
+        return view
+    }
+
+    func updateNSView(_ view: SplitterHandleView, context: Context) {
+        view.onDragChanged = onDragChanged
+        view.onDragEnded = onDragEnded
+    }
+
+    final class SplitterHandleView: NSView {
+        var onDragChanged: (CGFloat) -> Void = { _ in }
+        var onDragEnded: () -> Void = {}
+        private var dragStartWindowX: CGFloat?
+        private var isHovering = false
+        private var trackingArea: NSTrackingArea?
+
+        override var mouseDownCanMoveWindow: Bool {
+            false
         }
-        .overlay(
-            Rectangle()
-                .fill(Color.clear)
-                .frame(width: 22)
-        )
-        .contentShape(Rectangle())
-        .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) {
-                isHovering = hovering
-            }
-            if hovering {
-                NSCursor.resizeLeftRight.set()
-            } else {
-                NSCursor.arrow.set()
-            }
+
+        override var acceptsFirstResponder: Bool {
+            true
         }
-        .onDisappear {
-            if isHovering {
-                NSCursor.arrow.set()
-            }
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+            true
         }
-        .help("Resize sidebar")
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let trackingArea {
+                removeTrackingArea(trackingArea)
+            }
+            let area = NSTrackingArea(
+                rect: bounds,
+                options: [.activeInActiveApp, .mouseEnteredAndExited, .inVisibleRect],
+                owner: self,
+                userInfo: nil
+            )
+            addTrackingArea(area)
+            trackingArea = area
+        }
+
+        override func resetCursorRects() {
+            addCursorRect(bounds, cursor: .resizeLeftRight)
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            isHovering = true
+            needsDisplay = true
+            NSCursor.resizeLeftRight.set()
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            isHovering = false
+            needsDisplay = true
+            NSCursor.arrow.set()
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            dragStartWindowX = event.locationInWindow.x
+            window?.makeFirstResponder(self)
+            NSCursor.resizeLeftRight.set()
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard let dragStartWindowX else {
+                return
+            }
+            onDragChanged(event.locationInWindow.x - dragStartWindowX)
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            dragStartWindowX = nil
+            onDragEnded()
+            needsDisplay = true
+        }
+
+        override func draw(_ dirtyRect: NSRect) {
+            super.draw(dirtyRect)
+            NSColor.separatorColor.withAlphaComponent(isHovering ? 0.80 : 0.55).setFill()
+            let separator = NSRect(x: bounds.midX - 2.5, y: bounds.minY, width: 5, height: bounds.height)
+            separator.fill()
+
+            guard isHovering else {
+                return
+            }
+            NSColor.controlAccentColor.withAlphaComponent(0.72).setFill()
+            let accent = NSRect(x: bounds.midX - 1.5, y: bounds.midY - 26, width: 3, height: 52)
+            NSBezierPath(roundedRect: accent, xRadius: 1.5, yRadius: 1.5).fill()
+        }
     }
 }

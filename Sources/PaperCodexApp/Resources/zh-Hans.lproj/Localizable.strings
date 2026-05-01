@@ -174,6 +174,11 @@
 "Zoom In" = "放大";
 "Fit Width" = "适合宽度";
 "Back to source" = "返回原位置";
+"Link Preview" = "链接预览";
+"Open Split" = "分屏打开";
+"Open PDF Split" = "打开 PDF 分屏";
+"Close PDF Split" = "关闭 PDF 分屏";
+"Close Split" = "关闭分屏";
 "Back to Library" = "返回文库";
 "Cached paper" = "已缓存论文";
 "Close tab" = "关闭标签";

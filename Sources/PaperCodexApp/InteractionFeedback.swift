@@ -77,6 +77,12 @@ struct CitationReturnPoint: Equatable {
     var label: String
 }
 
+struct PDFInternalLinkTarget: Equatable {
+    var pageIndex: Int
+    var pagePointX: Double
+    var pagePointY: Double
+}
+
 enum PDFKitCommandKind: Equatable {
     case zoomIn
     case zoomOut

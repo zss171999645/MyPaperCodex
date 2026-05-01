@@ -4,6 +4,8 @@ import SwiftUI
 struct ReaderView: View {
     @EnvironmentObject private var model: AppModel
     @State private var isShowingSaveToLibrarySheet = false
+    @State private var isPDFSplitVisible = false
+    @State private var pdfSplitTarget: PDFInternalLinkTarget?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -14,12 +16,16 @@ struct ReaderView: View {
             Divider()
             HSplitView {
                 pdfPane
-                    .frame(minWidth: 560)
+                    .frame(minWidth: ReaderPDFLayout.minimumPaneWidth, maxWidth: .infinity)
                 ChatView()
                     .frame(minWidth: 330, idealWidth: 420, maxWidth: .infinity)
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .onChange(of: model.selectedPaper?.id) { _, _ in
+            isPDFSplitVisible = false
+            pdfSplitTarget = nil
+        }
         .sheet(isPresented: $isShowingSaveToLibrarySheet) {
             if let paper = model.selectedPaper {
                 SaveToLibrarySheet(
@@ -46,26 +52,13 @@ struct ReaderView: View {
                     ReaderPDFToolbar(
                         status: model.pdfDocumentStatus,
                         returnPoint: model.citationReturnPoint,
+                        isSplitVisible: isPDFSplitVisible,
                         onCommand: { model.sendPDFKitCommand($0) },
-                        onReturn: { model.returnFromCitationJump() }
+                        onReturn: { model.returnFromCitationJump() },
+                        onToggleSplit: { togglePDFSplit() }
                     )
                     Divider()
-                    PDFKitView(
-                        filePath: paper.filePath,
-                        jumpTarget: model.pdfJumpTarget,
-                        readingContextID: model.readerPositionContextID,
-                        readingPosition: model.readerPosition,
-                        command: model.pdfKitCommand,
-                        onSelection: { selection in
-                            model.updateSelection(selection)
-                        },
-                        onReadingPositionChange: { position in
-                            model.updateReaderPosition(position)
-                        },
-                        onDocumentStatusChange: { status in
-                            model.updatePDFDocumentStatus(status)
-                        }
-                    )
+                    pdfContent(for: paper)
                 }
             } else {
                 ContentUnavailableView("No Paper Selected", systemImage: "doc.text")
@@ -73,13 +66,109 @@ struct ReaderView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
     }
+
+    @ViewBuilder
+    private func pdfContent(for paper: Paper) -> some View {
+        if isPDFSplitVisible {
+            VSplitView {
+                primaryPDFView(for: paper)
+                    .frame(minHeight: ReaderPDFLayout.minimumSplitPaneHeight, maxHeight: .infinity)
+                secondaryPDFView(for: paper)
+                    .frame(minHeight: ReaderPDFLayout.minimumSplitPaneHeight, maxHeight: .infinity)
+            }
+        } else {
+            primaryPDFView(for: paper)
+        }
+    }
+
+    private func primaryPDFView(for paper: Paper) -> some View {
+        PDFKitView(
+            filePath: paper.filePath,
+            jumpTarget: model.pdfJumpTarget,
+            readingContextID: model.readerPositionContextID,
+            readingPosition: model.readerPosition,
+            command: model.pdfKitCommand,
+            internalLinkTarget: nil,
+            onSelection: { selection in
+                model.updateSelection(selection)
+            },
+            onReadingPositionChange: { position in
+                model.updateReaderPosition(position)
+            },
+            onDocumentStatusChange: { status in
+                model.updatePDFDocumentStatus(status)
+            },
+            onInternalLinkSplit: { target in
+                openPDFSplit(target)
+            }
+        )
+    }
+
+    private func secondaryPDFView(for paper: Paper) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Label("Link Preview", systemImage: "rectangle.split.2x1")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    isPDFSplitVisible = false
+                    pdfSplitTarget = nil
+                } label: {
+                    Image(systemName: "xmark")
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.borderless)
+                .help("Close Split")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color(nsColor: .windowBackgroundColor))
+            Divider()
+            PDFKitView(
+                filePath: paper.filePath,
+                jumpTarget: nil,
+                readingContextID: "split-\(paper.id)",
+                readingPosition: nil,
+                command: nil,
+                internalLinkTarget: pdfSplitTarget,
+                onSelection: { selection in
+                    model.updateSelection(selection)
+                },
+                onReadingPositionChange: { _ in },
+                onDocumentStatusChange: { _ in },
+                onInternalLinkSplit: { target in
+                    openPDFSplit(target)
+                }
+            )
+        }
+    }
+
+    private func openPDFSplit(_ target: PDFInternalLinkTarget) {
+        pdfSplitTarget = target
+        isPDFSplitVisible = true
+    }
+
+    private func togglePDFSplit() {
+        isPDFSplitVisible.toggle()
+        if !isPDFSplitVisible {
+            pdfSplitTarget = nil
+        }
+    }
+}
+
+private enum ReaderPDFLayout {
+    static let minimumPaneWidth: CGFloat = 360
+    static let minimumSplitPaneHeight: CGFloat = 220
 }
 
 private struct ReaderPDFToolbar: View {
     var status: PDFDocumentStatus?
     var returnPoint: CitationReturnPoint?
+    var isSplitVisible: Bool
     var onCommand: (PDFKitCommandKind) -> Void
     var onReturn: () -> Void
+    var onToggleSplit: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
@@ -145,6 +234,15 @@ private struct ReaderPDFToolbar: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 54, alignment: .leading)
+
+            Button(action: onToggleSplit) {
+                Image(systemName: isSplitVisible ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
+                    .frame(width: 28, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(isSplitVisible ? Color.accentColor : Color.primary)
+            .help(isSplitVisible ? "Close PDF Split" : "Open PDF Split")
+            .accessibilityLabel(isSplitVisible ? "Close PDF Split" : "Open PDF Split")
 
             Spacer()
 

@@ -495,6 +495,7 @@ func runUILayoutSourceChecks() throws {
     let rootViewSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/PaperCodexApp.swift"))
     let typographySource = (try? String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/Typography.swift"))) ?? ""
     let sidebarRowSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/SidebarRowButton.swift"))
+    let sidebarSplitSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/SidebarSplitLayout.swift"))
     let windowChromeSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/WindowChrome.swift"))
     let buildScriptSource = try String(contentsOf: root.appendingPathComponent("scripts/build-app-bundle.sh"))
     try check(
@@ -525,6 +526,10 @@ func runUILayoutSourceChecks() throws {
             && discoverSource.contains("paperCodexSidebarChromePadding()")
             && settingsViewSource.contains("paperCodexSidebarChromePadding()"),
         "main sidebars should reserve top space for embedded traffic-light controls"
+    )
+    try check(
+        sidebarSplitSource.contains("WindowSafeSplitterHandle") && sidebarSplitSource.contains("mouseDownCanMoveWindow"),
+        "sidebar splitter should handle resize in an AppKit view that cannot initiate window dragging"
     )
     try check(
         windowChromeSource.contains("installTitlebarDoubleClickZoomMonitor")
@@ -699,12 +704,28 @@ func runUILayoutSourceChecks() throws {
         "reader should provide explicit PDF toolbar controls"
     )
     try check(
+        readerSource.contains("VSplitView") && readerSource.contains("isPDFSplitVisible") && readerSource.contains("pdfSplitTarget"),
+        "reader should support a top-bottom PDF split view for simultaneous source and link-target reading"
+    )
+    try check(
+        !readerSource.contains(".frame(minWidth: 560)") && readerSource.contains(".frame(minWidth: ReaderPDFLayout.minimumPaneWidth"),
+        "reader PDF pane should be allowed to resize with the split divider instead of holding a wide fixed minimum"
+    )
+    try check(
         appModelSource.contains("returnFromCitationJump"),
         "AppModel should keep a citation return path"
     )
     try check(
         pdfKitSource.contains("PDFKitCommand"),
         "PDFKit view should accept explicit toolbar commands"
+    )
+    try check(
+        pdfKitSource.contains("ResponsivePDFView") && pdfKitSource.contains("refitForCurrentWidth"),
+        "PDFKit view should refit the document when its split-pane width changes"
+    )
+    try check(
+        pdfKitSource.contains("PDFInternalLinkTarget") && pdfKitSource.contains("onInternalLinkSplit"),
+        "PDF hyperlink previews should be able to open internal link targets in the secondary split pane"
     )
     try check(
         interactionSource.contains("case restorePosition(PaperReaderPosition)"),
@@ -715,7 +736,7 @@ func runUILayoutSourceChecks() throws {
         "PDF reading-position saves should not trigger viewport restoration through updatedAt changes"
     )
     try check(
-        pdfKitSource.contains("CitationAwarePDFView"),
+        pdfKitSource.contains("ResponsivePDFView") && pdfKitSource.contains("override func mouseDown"),
         "PDFKit view should use a click-aware PDFView subclass for in-PDF citation previews"
     )
     try check(
