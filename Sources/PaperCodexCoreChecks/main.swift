@@ -553,6 +553,11 @@ func runUILayoutSourceChecks() throws {
         "window chrome should embed traffic-light controls into full-size app content"
     )
     try check(
+        windowChromeSource.contains("window.isMovableByWindowBackground = false")
+            && !windowChromeSource.contains("window.isMovableByWindowBackground = true"),
+        "window background dragging should stay disabled so PDFKit content drags cannot move the whole app"
+    )
+    try check(
         windowChromeSource.contains("paperCodexSidebarChromePadding")
             && librarySource.contains("paperCodexSidebarChromePadding()")
             && discoverSource.contains("paperCodexSidebarChromePadding()")
@@ -829,16 +834,13 @@ func runUILayoutSourceChecks() throws {
         "PDFKit view should use a click-aware PDFView subclass for in-PDF citation previews"
     )
     try check(
-        pdfKitSource.contains("override var mouseDownCanMoveWindow")
-            && pdfKitSource.contains("suppressWindowBackgroundDragging"),
+        pdfKitSource.contains("override var mouseDownCanMoveWindow"),
         "PDF drag interactions should not be treated as full-window background dragging"
     )
     try check(
-        pdfKitSource.contains("installWindowDragSuppressionMonitor")
-            && pdfKitSource.contains("NSEvent.addLocalMonitorForEvents")
-            && pdfKitSource.contains(".leftMouseDown")
-            && pdfKitSource.contains("eventIsInsidePDFView"),
-        "PDF drag suppression should run from a window event monitor before PDFKit internal subviews can start a window drag"
+        !pdfKitSource.contains("installWindowDragSuppressionMonitor")
+            && !pdfKitSource.contains("suppressWindowBackgroundDragging"),
+        "PDF drag suppression should rely on global window chrome policy instead of fragile PDFKit-local event monitors"
     )
     try check(
         pdfKitSource.contains("showCitationPreviewPopover"),

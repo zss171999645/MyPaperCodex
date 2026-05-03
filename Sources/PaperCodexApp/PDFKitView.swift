@@ -5,11 +5,6 @@ import SwiftUI
 fileprivate final class ResponsivePDFView: PDFView {
     var onMouseDown: ((ResponsivePDFView, NSEvent) -> Bool)?
     var onBoundsChanged: (() -> Void)?
-    private var trackingArea: NSTrackingArea?
-    private var windowDragSuppressionMonitor: Any?
-    private var wasWindowMovableByBackground: Bool?
-    private var isPointerInside = false
-    private var isMouseInteractionActive = false
 
     override var mouseDownCanMoveWindow: Bool {
         false
@@ -19,59 +14,11 @@ fileprivate final class ResponsivePDFView: PDFView {
         true
     }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingArea {
-            removeTrackingArea(trackingArea)
-        }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.activeInActiveApp, .mouseEnteredAndExited, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        trackingArea = area
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        isPointerInside = true
-        suppressWindowBackgroundDragging()
-        super.mouseEntered(with: event)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        isPointerInside = false
-        if !isMouseInteractionActive {
-            restoreWindowBackgroundDragging()
-        }
-        super.mouseExited(with: event)
-    }
-
     override func mouseDown(with event: NSEvent) {
-        isMouseInteractionActive = true
-        suppressWindowBackgroundDragging()
         if onMouseDown?(self, event) == true {
-            isMouseInteractionActive = false
-            if !isPointerInside {
-                restoreWindowBackgroundDragging()
-            }
             return
         }
         super.mouseDown(with: event)
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        suppressWindowBackgroundDragging()
-        super.mouseDragged(with: event)
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        super.mouseUp(with: event)
-        isMouseInteractionActive = false
-        if !isPointerInside {
-            restoreWindowBackgroundDragging()
-        }
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -80,97 +27,6 @@ fileprivate final class ResponsivePDFView: PDFView {
         if abs(oldSize.width - newSize.width) > 0.5 || abs(oldSize.height - newSize.height) > 0.5 {
             onBoundsChanged?()
         }
-    }
-
-    override func viewWillMove(toWindow newWindow: NSWindow?) {
-        if newWindow == nil {
-            removeWindowDragSuppressionMonitor()
-            restoreWindowBackgroundDragging()
-        }
-        super.viewWillMove(toWindow: newWindow)
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        installWindowDragSuppressionMonitor()
-    }
-
-    deinit {
-        MainActor.assumeIsolated {
-            removeWindowDragSuppressionMonitor()
-            restoreWindowBackgroundDragging()
-        }
-    }
-
-    private func installWindowDragSuppressionMonitor() {
-        guard windowDragSuppressionMonitor == nil else {
-            return
-        }
-        windowDragSuppressionMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
-        ) { [weak self] event in
-            self?.handleWindowDragSuppressionEvent(event)
-            return event
-        }
-    }
-
-    private func removeWindowDragSuppressionMonitor() {
-        if let windowDragSuppressionMonitor {
-            NSEvent.removeMonitor(windowDragSuppressionMonitor)
-        }
-        windowDragSuppressionMonitor = nil
-    }
-
-    private func handleWindowDragSuppressionEvent(_ event: NSEvent) {
-        guard event.window === window else {
-            return
-        }
-        switch event.type {
-        case .leftMouseDown:
-            if eventIsInsidePDFView(event) {
-                isMouseInteractionActive = true
-                suppressWindowBackgroundDragging()
-            } else if !isPointerInside {
-                restoreWindowBackgroundDragging()
-            }
-        case .leftMouseDragged:
-            if isMouseInteractionActive || eventIsInsidePDFView(event) {
-                suppressWindowBackgroundDragging()
-            }
-        case .leftMouseUp:
-            isMouseInteractionActive = false
-            if !isPointerInside {
-                restoreWindowBackgroundDragging()
-            }
-        default:
-            break
-        }
-    }
-
-    private func eventIsInsidePDFView(_ event: NSEvent) -> Bool {
-        guard event.window === window else {
-            return false
-        }
-        let point = convert(event.locationInWindow, from: nil)
-        return bounds.contains(point)
-    }
-
-    private func suppressWindowBackgroundDragging() {
-        guard let window else {
-            return
-        }
-        if wasWindowMovableByBackground == nil {
-            wasWindowMovableByBackground = window.isMovableByWindowBackground
-        }
-        window.isMovableByWindowBackground = false
-    }
-
-    private func restoreWindowBackgroundDragging() {
-        guard let wasWindowMovableByBackground else {
-            return
-        }
-        window?.isMovableByWindowBackground = wasWindowMovableByBackground
-        self.wasWindowMovableByBackground = nil
     }
 }
 

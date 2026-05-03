@@ -35,7 +35,7 @@ struct WindowChromeConfigurator: NSViewRepresentable {
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.styleMask.insert(.fullSizeContentView)
-            window.isMovableByWindowBackground = true
+            window.isMovableByWindowBackground = false
             coordinator.installTitlebarDoubleClickZoomMonitor(for: window, windowHeight: window.frame.height)
         }
     }
