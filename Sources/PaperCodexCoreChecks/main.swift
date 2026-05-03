@@ -834,6 +834,13 @@ func runUILayoutSourceChecks() throws {
         "PDF drag interactions should not be treated as full-window background dragging"
     )
     try check(
+        pdfKitSource.contains("installWindowDragSuppressionMonitor")
+            && pdfKitSource.contains("NSEvent.addLocalMonitorForEvents")
+            && pdfKitSource.contains(".leftMouseDown")
+            && pdfKitSource.contains("eventIsInsidePDFView"),
+        "PDF drag suppression should run from a window event monitor before PDFKit internal subviews can start a window drag"
+    )
+    try check(
         pdfKitSource.contains("showCitationPreviewPopover"),
         "PDFKit view should show a popup preview for in-text citations"
     )
