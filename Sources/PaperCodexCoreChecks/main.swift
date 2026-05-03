@@ -981,7 +981,7 @@ func runUILayoutSourceChecks() throws {
         "AppModel should publish recent conversations for the library surface"
     )
     try check(
-        librarySource.contains("RecentConversationsSection")
+        librarySource.contains("RecentConversationsContent")
             && librarySource.contains("openSelectedPapersForReading")
             && librarySource.contains("openSelectedPapersForChat")
             && librarySource.contains("selectedCategoryPaperIDsInOrder"),
@@ -989,17 +989,24 @@ func runUILayoutSourceChecks() throws {
     )
     if let sidebarRange = librarySource.range(of: "private var sidebar: some View"),
        let paperListRange = librarySource.range(of: "private var paperList: some View"),
-       let recentRange = librarySource.range(of: "RecentConversationsSection("),
+       let recentNavRange = librarySource.range(of: "title: \"Recent Conversations\""),
        let libraryButtonRange = librarySource.range(of: "title: \"Library\"") {
         try check(
-            sidebarRange.lowerBound < recentRange.lowerBound
-                && recentRange.lowerBound < libraryButtonRange.lowerBound
-                && recentRange.lowerBound < paperListRange.lowerBound,
-            "recent conversations should live in the left sidebar above the Library navigation item"
+            sidebarRange.lowerBound < recentNavRange.lowerBound
+                && recentNavRange.lowerBound < libraryButtonRange.lowerBound
+                && libraryButtonRange.lowerBound < paperListRange.lowerBound,
+            "recent conversations should be a left-sidebar navigation item above Library"
         )
     } else {
-        throw CheckFailure(description: "library sidebar should include recent conversations above Library navigation")
+        throw CheckFailure(description: "library sidebar should include a Recent Conversations navigation item above Library")
     }
+    try check(
+        librarySource.contains("LibrarySurface")
+            && librarySource.contains("case recentConversations")
+            && librarySource.contains("RecentConversationsContent")
+            && librarySource.contains("RecentConversationDetailPanel"),
+        "recent conversations should render session content in the main library panes instead of embedding session rows in the sidebar"
+    )
     try check(
         repositorySource.contains("fetchRecentSessions(limit:"),
         "repository should expose recent sessions for the library conversation list"

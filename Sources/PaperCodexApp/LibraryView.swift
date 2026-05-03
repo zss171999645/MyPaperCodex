@@ -27,6 +27,8 @@ struct LibraryView: View {
     @State private var noteTitle = ""
     @State private var noteBody = ""
     @State private var editingNoteID: String?
+    @State private var selectedLibrarySurface: LibrarySurface = .papers
+    @State private var selectedRecentSessionID: String?
     @AppStorage("PaperCodexLibrarySortOption") private var librarySortRawValue = LibrarySortOption.addedNewest.rawValue
     @AppStorage("PaperCodexLibrarySortAscending") private var librarySortAscending = false
 
@@ -115,21 +117,25 @@ struct LibraryView: View {
         return option.sorted(categoryPapers, ascending: librarySortAscending).map(\.id)
     }
 
+    private var selectedRecentSession: PaperSession? {
+        if let selectedRecentSessionID,
+           let session = model.recentSessions.first(where: { $0.id == selectedRecentSessionID }) {
+            return session
+        }
+        return model.recentSessions.first
+    }
+
     var body: some View {
         SidebarSplitLayout(minContentWidth: 840) {
             sidebar
         } content: {
-            HSplitView {
-                paperList
-                    .padding(.top, LibraryLayout.splitPaneTopInset)
-                    .frame(minWidth: 500)
-                inspector
-                    .padding(.top, LibraryLayout.splitPaneTopInset)
-                    .frame(minWidth: 300, idealWidth: 340, maxWidth: 420)
-            }
+            contentPane
         }
         .onChange(of: sortedPapers.map(\.id)) { _, _ in
             prunePaperSelection()
+        }
+        .onChange(of: model.recentSessions.map(\.id)) { _, _ in
+            pruneRecentSessionSelection()
         }
         .alert("Delete selected papers?", isPresented: $isConfirmingBulkDelete) {
             Button("Delete", role: .destructive) {
@@ -280,20 +286,22 @@ struct LibraryView: View {
             Text("Paper Codex")
                 .font(.paperCodexSystem(size: 24, weight: .semibold))
 
-            RecentConversationsSection(
-                sessions: model.recentSessions,
-                papersBySessionID: model.recentSessionPapersByID,
-                onOpen: { session in
-                    model.openRecentSession(session)
-                }
-            )
-
             VStack(alignment: .leading, spacing: 8) {
+                filterButton(
+                    title: "Recent Conversations",
+                    systemImage: "clock",
+                    isSelected: selectedLibrarySurface == .recentConversations
+                ) {
+                    selectedLibrarySurface = .recentConversations
+                    selectedRecentSessionID = selectedRecentSessionID ?? model.recentSessions.first?.id
+                }
                 filterButton(
                     title: "Library",
                     systemImage: "books.vertical.fill",
-                    isSelected: true
-                ) {}
+                    isSelected: selectedLibrarySurface == .papers
+                ) {
+                    selectedLibrarySurface = .papers
+                }
                 filterButton(
                     title: "Discover",
                     systemImage: "sparkle.magnifyingglass",
@@ -319,8 +327,9 @@ struct LibraryView: View {
                 filterButton(
                     title: "All Papers",
                     systemImage: selectedCategoryID == nil && selectedTagID == nil ? "tray.full.fill" : "tray.full",
-                    isSelected: selectedCategoryID == nil && selectedTagID == nil
+                    isSelected: selectedLibrarySurface == .papers && selectedCategoryID == nil && selectedTagID == nil
                 ) {
+                    selectedLibrarySurface = .papers
                     selectedCategoryID = nil
                     selectedTagID = nil
                 }
@@ -332,7 +341,7 @@ struct LibraryView: View {
                             title: item.category.name,
                             countText: "\(paperCount(inCategory: item.category.id))",
                             systemImage: selectedCategoryID == item.category.id ? "folder.fill" : "folder",
-                            isSelected: selectedCategoryID == item.category.id,
+                            isSelected: selectedLibrarySurface == .papers && selectedCategoryID == item.category.id,
                             depth: item.depth,
                             hasChildren: hasChildCategories(item.category.id),
                             isExpanded: !collapsedCategoryIDs.contains(item.category.id),
@@ -340,6 +349,7 @@ struct LibraryView: View {
                                 toggleCategoryCollapsed(item.category.id)
                             },
                             onSelect: {
+                                selectedLibrarySurface = .papers
                                 selectedCategoryID = item.category.id
                                 selectedTagID = nil
                             },
@@ -352,6 +362,7 @@ struct LibraryView: View {
                             },
                             onDropPapers: { paperIDs in
                                 model.movePapers(paperIDs, toCategory: item.category.id)
+                                selectedLibrarySurface = .papers
                                 selectedCategoryID = item.category.id
                                 selectedTagID = nil
                             }
@@ -373,8 +384,9 @@ struct LibraryView: View {
                         TagSidebarRow(
                             title: tag.name,
                             countText: "\(paperCount(forTag: tag.id))",
-                            isSelected: selectedTagID == tag.id
+                            isSelected: selectedLibrarySurface == .papers && selectedTagID == tag.id
                         ) {
+                            selectedLibrarySurface = .papers
                             selectedTagID = tag.id
                             selectedCategoryID = nil
                         } onManage: {
@@ -388,6 +400,53 @@ struct LibraryView: View {
         }
         .paperCodexSidebarChromePadding()
         .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private var contentPane: some View {
+        HSplitView {
+            primaryContentPane
+                .padding(.top, LibraryLayout.splitPaneTopInset)
+                .frame(minWidth: 500)
+            secondaryContentPane
+                .padding(.top, LibraryLayout.splitPaneTopInset)
+                .frame(minWidth: 300, idealWidth: 340, maxWidth: 420)
+        }
+    }
+
+    @ViewBuilder
+    private var primaryContentPane: some View {
+        switch selectedLibrarySurface {
+        case .papers:
+            paperList
+        case .recentConversations:
+            RecentConversationsContent(
+                sessions: model.recentSessions,
+                papersBySessionID: model.recentSessionPapersByID,
+                selectedSessionID: Binding(
+                    get: { selectedRecentSessionID ?? model.recentSessions.first?.id },
+                    set: { selectedRecentSessionID = $0 }
+                ),
+                onOpen: { session in
+                    model.openRecentSession(session)
+                }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var secondaryContentPane: some View {
+        switch selectedLibrarySurface {
+        case .papers:
+            inspector
+        case .recentConversations:
+            RecentConversationDetailPanel(
+                session: selectedRecentSession,
+                papers: selectedRecentSession.map { model.papersForSession($0) } ?? [],
+                onOpen: { session in
+                    model.openRecentSession(session)
+                }
+            )
+        }
     }
 
     private var paperList: some View {
@@ -936,6 +995,14 @@ struct LibraryView: View {
         if let lastSelectedPaperID, !selectedPaperIDs.isEmpty, !selectedPaperIDs.contains(lastSelectedPaperID) {
             self.lastSelectedPaperID = selectedPaperIDsInOrder.last
         }
+    }
+
+    private func pruneRecentSessionSelection() {
+        if let selectedRecentSessionID,
+           model.recentSessions.contains(where: { $0.id == selectedRecentSessionID }) {
+            return
+        }
+        selectedRecentSessionID = model.recentSessions.first?.id
     }
 
     private func deleteSelectedPapers() {
@@ -1491,73 +1558,95 @@ private struct SidebarEmptyText: View {
     }
 }
 
-private struct RecentConversationsSection: View {
+private struct RecentConversationsContent: View {
     var sessions: [PaperSession]
     var papersBySessionID: [String: [Paper]]
+    @Binding var selectedSessionID: String?
     var onOpen: (PaperSession) -> Void
 
     var body: some View {
-        Group {
-            if !sessions.isEmpty {
-                VStack(alignment: .leading, spacing: 7) {
-                    HStack {
-                        Label("Recent Conversations", systemImage: "clock")
-                            .font(.paperCodexSystem(size: 12.5, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
-                    VStack(spacing: 5) {
-                        ForEach(Array(sessions.prefix(4))) { session in
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                Text("Recent Conversations")
+                    .font(.paperCodexSystem(size: 28, weight: .semibold))
+                Spacer()
+            }
+
+            if sessions.isEmpty {
+                ContentUnavailableView("No Conversations", systemImage: "text.bubble")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(sessions) { session in
                             RecentConversationRow(
                                 session: session,
                                 papers: papersBySessionID[session.id, default: []],
+                                isSelected: selectedSessionID == session.id,
+                                onSelect: {
+                                    selectedSessionID = session.id
+                                },
                                 onOpen: {
                                     onOpen(session)
                                 }
                             )
                         }
                     }
+                    .padding(.vertical, 4)
                 }
             }
         }
+        .padding(24)
     }
 }
 
 private struct RecentConversationRow: View {
     var session: PaperSession
     var papers: [Paper]
+    var isSelected: Bool
+    var onSelect: () -> Void
     var onOpen: () -> Void
 
     var body: some View {
-        Button(action: onOpen) {
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 6) {
-                    Image(systemName: session.paperIDs.count > 1 ? "square.stack.3d.up.fill" : "doc.text")
-                        .foregroundStyle(Color.accentColor)
-                    Text(session.title)
-                        .font(.paperCodexSystem(size: 13, weight: .semibold))
+        HStack(alignment: .center, spacing: 10) {
+            Button(action: onSelect) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 7) {
+                        Image(systemName: session.paperIDs.count > 1 ? "square.stack.3d.up.fill" : "doc.text")
+                            .foregroundStyle(Color.accentColor)
+                        Text(session.title)
+                            .font(.paperCodexSystem(size: 14, weight: .semibold))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        Text(Self.relativeFormatter.localizedString(for: session.updatedAt, relativeTo: Date()))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                    Text(detailText)
+                        .font(.paperCodexSystem(size: 12.5))
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
-                    Spacer(minLength: 0)
                 }
-                Text(detailText)
-                    .font(.paperCodexSystem(size: 12.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Text(Self.relativeFormatter.localizedString(for: session.updatedAt, relativeTo: Date()))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
-            .background(Color(nsColor: .windowBackgroundColor).opacity(0.72))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-            )
+            .buttonStyle(.plain)
+
+            Button(action: onOpen) {
+                Image(systemName: "arrow.forward.circle")
+                    .font(.paperCodexSystem(size: 18, weight: .semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.borderless)
+            .help("Open Session")
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(isSelected ? Color.accentColor.opacity(0.12) : Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isSelected ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.08), lineWidth: 1)
+        )
         .help(session.title)
     }
 
@@ -1574,6 +1663,93 @@ private struct RecentConversationRow: View {
         formatter.unitsStyle = .short
         return formatter
     }()
+}
+
+private struct RecentConversationDetailPanel: View {
+    var session: PaperSession?
+    var papers: [Paper]
+    var onOpen: (PaperSession) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Conversation Details")
+                .font(.paperCodexSystem(size: 20, weight: .semibold))
+
+            if let session {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 7) {
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: session.paperIDs.count > 1 ? "square.stack.3d.up.fill" : "doc.text")
+                                    .foregroundStyle(Color.accentColor)
+                                Text(session.title)
+                                    .font(.headline)
+                                    .lineLimit(3)
+                            }
+                            Text("\(session.paperIDs.count) paper\(session.paperIDs.count == 1 ? "" : "s")")
+                                .foregroundStyle(.secondary)
+                            Text(Self.relativeFormatter.localizedString(for: session.updatedAt, relativeTo: Date()))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                        }
+
+                        Button {
+                            onOpen(session)
+                        } label: {
+                            Label("Open Session", systemImage: "arrow.forward.circle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Divider()
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label("Papers", systemImage: "doc.on.doc")
+                                .font(.headline)
+                            if papers.isEmpty {
+                                SidebarEmptyText("No papers")
+                            } else {
+                                ForEach(papers) { paper in
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Image(systemName: "doc.text")
+                                            .foregroundStyle(.secondary)
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(paper.title)
+                                                .font(.paperCodexSystem(size: 13, weight: .semibold))
+                                                .lineLimit(2)
+                                            Text(paper.authors.isEmpty ? "Authors not set" : paper.authors.joined(separator: ", "))
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.trailing, 4)
+                }
+            } else {
+                ContentUnavailableView("Select Conversation", systemImage: "text.bubble")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(22)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter
+    }()
+}
+
+private enum LibrarySurface {
+    case recentConversations
+    case papers
 }
 
 private struct BulkLibraryActionBar: View {
