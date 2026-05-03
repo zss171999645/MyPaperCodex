@@ -880,6 +880,16 @@ func runUILayoutSourceChecks() throws {
         "chat should distinguish the active session run from other sessions"
     )
     try check(
+        chatSource.contains("model.activeCodexRun(for: model.selectedSession?.id)")
+            && chatSource.contains("model.isSessionSending(model.selectedSession?.id)")
+            && !chatSource.contains("isOtherSessionSending"),
+        "chat should allow other sessions to send while this session is running or idle"
+    )
+    try check(
+        !chatSource.contains("guard !model.isSending, !message.isEmpty"),
+        "chat send action should not use a global sending guard"
+    )
+    try check(
         chatSource.contains("@State private var draftsByComposerKey")
             && chatSource.contains("composerDraftKey")
             && chatSource.contains("composerDraftBinding"),
@@ -921,6 +931,22 @@ func runUILayoutSourceChecks() throws {
     try check(
         appModelSource.contains("appendCodexCancellationMessage"),
         "cancelling Codex should leave a visible trace in the session"
+    )
+    try check(
+        appModelSource.contains("@Published var activeCodexRunsBySessionID")
+            && appModelSource.contains("private var activeCodexRunHandlesBySessionID")
+            && appModelSource.contains("private var cancellingCodexRunSessionIDs"),
+        "AppModel should track active Codex runs independently by session"
+    )
+    try check(
+        appModelSource.contains("func isSessionSending(_ sessionID: String?) -> Bool")
+            && appModelSource.contains("func activeCodexRun(for sessionID: String?) -> ActiveCodexRun?"),
+        "AppModel should expose per-session run state to chat views"
+    )
+    try check(
+        !appModelSource.contains("@Published var isSending = false")
+            && !appModelSource.contains("guard !isSending else"),
+        "AppModel should not block all sessions with one global sending flag"
     )
     try check(
         appModelSource.contains("paperScopedSessions")

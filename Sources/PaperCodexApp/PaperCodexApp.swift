@@ -93,7 +93,7 @@ struct PaperCodexCommands: Commands {
                 model.cancelActiveCodexRun()
             }
             .keyboardShortcut(".", modifiers: [.command])
-            .disabled(!model.isSending)
+            .disabled(!model.isSessionSending(model.selectedSession?.id))
 
             Divider()
 

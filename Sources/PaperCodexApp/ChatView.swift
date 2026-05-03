@@ -68,7 +68,7 @@ struct ChatView: View {
                             ForEach(model.messages) { message in
                                 MessageBubble(
                                     message: message,
-                                    isBusy: model.isSending,
+                                    isBusy: isCurrentSessionSending,
                                     onCitation: { citationID in
                                         model.jumpToCitation(citationID)
                                     },
@@ -97,7 +97,7 @@ struct ChatView: View {
                 .onChange(of: model.messages.count) { _, _ in
                     scrollToBottom(proxy)
                 }
-                .onChange(of: model.activeCodexRun?.events.count ?? 0) { _, _ in
+                .onChange(of: visibleActiveCodexRun?.events.count ?? 0) { _, _ in
                     scrollToBottom(proxy)
                 }
             }
@@ -106,19 +106,11 @@ struct ChatView: View {
     }
 
     private var visibleActiveCodexRun: ActiveCodexRun? {
-        guard let run = model.activeCodexRun,
-              run.sessionID == model.selectedSession?.id else {
-            return nil
-        }
-        return run
+        model.activeCodexRun(for: model.selectedSession?.id)
     }
 
     private var isCurrentSessionSending: Bool {
-        model.isSending && model.activeCodexRun?.sessionID == model.selectedSession?.id
-    }
-
-    private var isOtherSessionSending: Bool {
-        model.isSending && !isCurrentSessionSending
+        model.isSessionSending(model.selectedSession?.id)
     }
 
     private var canEditComposer: Bool {
@@ -153,9 +145,6 @@ struct ChatView: View {
     private var canUseSendButton: Bool {
         if isCurrentSessionSending {
             return true
-        }
-        if isOtherSessionSending {
-            return false
         }
         return !trimmedDraft.isEmpty
     }
@@ -325,9 +314,6 @@ struct ChatView: View {
         if isCurrentSessionSending {
             return isSendButtonHovered ? "xmark.circle.fill" : "hourglass.circle.fill"
         }
-        if isOtherSessionSending {
-            return "hourglass.circle"
-        }
         return "arrow.up.circle.fill"
     }
 
@@ -335,22 +321,19 @@ struct ChatView: View {
         if isCurrentSessionSending {
             return isSendButtonHovered ? .red : .blue
         }
-        return isOtherSessionSending ? .secondary : .blue
+        return .blue
     }
 
     private var sendButtonHelp: String {
         if isCurrentSessionSending {
             return "Stop Codex"
         }
-        if isOtherSessionSending {
-            return "Codex is running in another session"
-        }
         return "Send"
     }
 
     private func sendDraft() {
         let message = trimmedDraft
-        guard !model.isSending, !message.isEmpty else {
+        guard !isCurrentSessionSending, !message.isEmpty else {
             return
         }
         draftsByComposerKey[composerDraftKey] = ""

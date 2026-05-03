@@ -308,10 +308,9 @@ final class AppModel: ObservableObject {
     }()
     @Published var codexSystemPrompt: String = PromptBuilder.defaultSystemPrompt
     @Published var globalLanguageMode: PaperCodexLanguageMode = .automatic
-    @Published var activeCodexRun: ActiveCodexRun?
+    @Published var activeCodexRunsBySessionID: [String: ActiveCodexRun] = [:]
     @Published var errorMessage: String?
     @Published var notices: [InteractionNotice] = []
-    @Published var isSending = false
     @Published var discoverCodexModelOverride: String = UserDefaults.standard.string(forKey: discoverCodexModelOverrideDefaultsKey) ?? ""
     @Published var discoverCodexConcurrency: Int = loadDiscoverCodexConcurrencyFromDefaults()
     @Published var availableCodexModelIDs: [String] = []
@@ -378,11 +377,23 @@ final class AppModel: ObservableObject {
     private var watchedFolderAutoScanTask: Task<Void, Never>?
     private var activeDiscoverSearchTask: Task<Void, Never>?
     private var activeDiscoverPDFCacheTask: Task<Void, Never>?
-    private var activeCodexRunHandle: CodexRunHandle?
+    private var activeCodexRunHandlesBySessionID: [String: CodexRunHandle] = [:]
     private var activeDiscoverCodexRunHandles: [CodexRunHandle] = []
-    private var isCancellingCodexRun = false
+    private var cancellingCodexRunSessionIDs: Set<String> = []
     private var isCancellingDiscoverProcessing = false
     private var isCancellingDiscoverPDFCache = false
+
+    var activeCodexRun: ActiveCodexRun? {
+        activeCodexRun(for: selectedSession?.id)
+    }
+
+    var isSending: Bool {
+        !activeCodexRunsBySessionID.isEmpty
+    }
+
+    var isCancellingCodexRun: Bool {
+        !cancellingCodexRunSessionIDs.isEmpty
+    }
 
     var arxivDisposableCachePath: String {
         supportRoot.appendingPathComponent("cache", isDirectory: true).path
@@ -426,14 +437,28 @@ final class AppModel: ObservableObject {
             )
         }
         if isSending {
+            let activeRuns = activeCodexRunsBySessionID.values.sorted { $0.startedAt < $1.startedAt }
             return AppOperationStatus(
                 title: isCancellingCodexRun ? "Stopping Codex" : "Codex Running",
-                detail: activeCodexRun?.title ?? selectedSession?.title ?? "Current session",
+                detail: activeRuns.count == 1
+                    ? (activeRuns.first?.title ?? "Current session")
+                    : "\(activeRuns.count) sessions running",
                 systemImage: "brain.head.profile",
                 tint: .purple
             )
         }
         return nil
+    }
+
+    func activeCodexRun(for sessionID: String?) -> ActiveCodexRun? {
+        guard let sessionID else {
+            return nil
+        }
+        return activeCodexRunsBySessionID[sessionID]
+    }
+
+    func isSessionSending(_ sessionID: String?) -> Bool {
+        activeCodexRun(for: sessionID) != nil
     }
 
     var readerPositionContextID: String? {
@@ -2399,12 +2424,14 @@ final class AppModel: ObservableObject {
     }
 
     func cancelActiveCodexRun() {
-        guard isSending else {
+        let targetSessionID = selectedSession?.id ?? activeCodexRunsBySessionID.values.sorted { $0.startedAt < $1.startedAt }.first?.sessionID
+        guard let targetSessionID,
+              let run = activeCodexRunsBySessionID[targetSessionID] else {
             return
         }
-        isCancellingCodexRun = true
-        activeCodexRunHandle?.cancel()
-        postNotice(kind: .info, title: "Stopping Codex", message: activeCodexRun?.title ?? selectedSession?.title ?? "Current session")
+        cancellingCodexRunSessionIDs.insert(targetSessionID)
+        activeCodexRunHandlesBySessionID[targetSessionID]?.cancel()
+        postNotice(kind: .info, title: "Stopping Codex", message: run.title)
     }
 
     func jumpToCitation(_ citationID: String) {
@@ -2496,17 +2523,12 @@ final class AppModel: ObservableObject {
         guard !trimmed.isEmpty else {
             return
         }
-        guard !isSending else {
-            return
-        }
-        isSending = true
-        defer {
-            isSending = false
-            activeCodexRun = nil
-            activeCodexRunHandle = nil
-            isCancellingCodexRun = false
-        }
         var runSessionID: String?
+        defer {
+            if let runSessionID {
+                finishCodexRun(sessionID: runSessionID)
+            }
+        }
 
         do {
             guard let repository else {
@@ -2521,7 +2543,11 @@ final class AppModel: ObservableObject {
             guard session.paperIDs == [paper.id] else {
                 throw AppModelError.sessionPaperMismatch
             }
-            runSessionID = session.id
+            let sessionID = session.id
+            guard !isSessionSending(sessionID) else {
+                return
+            }
+            runSessionID = sessionID
 
             let context = try loadSessionPaperContext(session: session, fallbackPaper: paper, repository: repository)
             let focusedSpans = context.spansByPaperID[paper.id] ?? []
@@ -2580,10 +2606,8 @@ final class AppModel: ObservableObject {
         } catch AppModelError.anchorMatchFailed {
             errorMessage = AppModelError.anchorMatchFailed.description
         } catch {
-            if isCancellingCodexRun {
-                if let runSessionID {
-                    await appendCodexCancellationMessage(sessionID: runSessionID)
-                }
+            if let runSessionID, cancellingCodexRunSessionIDs.contains(runSessionID) {
+                await appendCodexCancellationMessage(sessionID: runSessionID)
                 return
             }
             if let runSessionID {
@@ -2595,17 +2619,12 @@ final class AppModel: ObservableObject {
     }
 
     func retryCodexFailure(messageID: String) async {
-        guard !isSending else {
-            return
-        }
-        isSending = true
-        defer {
-            isSending = false
-            activeCodexRun = nil
-            activeCodexRunHandle = nil
-            isCancellingCodexRun = false
-        }
         var runSessionID: String?
+        defer {
+            if let runSessionID {
+                finishCodexRun(sessionID: runSessionID)
+            }
+        }
 
         do {
             guard let repository else {
@@ -2614,7 +2633,11 @@ final class AppModel: ObservableObject {
             guard let session = selectedSession else {
                 throw AppModelError.noSelectedSession
             }
-            runSessionID = session.id
+            let sessionID = session.id
+            guard !isSessionSending(sessionID) else {
+                return
+            }
+            runSessionID = sessionID
             guard let failureIndex = messages.firstIndex(where: { $0.id == messageID }),
                   CodexFailureNotice.parse(messages[failureIndex].content) != nil else {
                 throw AppModelError.noRecoverableCodexTurn
@@ -2632,10 +2655,8 @@ final class AppModel: ObservableObject {
             )
             try refreshVisibleSessionState(session: updatedSession, paperID: fallbackPaper.id, repository: repository)
         } catch {
-            if isCancellingCodexRun {
-                if let runSessionID {
-                    await appendCodexCancellationMessage(sessionID: runSessionID)
-                }
+            if let runSessionID, cancellingCodexRunSessionIDs.contains(runSessionID) {
+                await appendCodexCancellationMessage(sessionID: runSessionID)
                 return
             }
             if let runSessionID {
@@ -2677,7 +2698,9 @@ final class AppModel: ObservableObject {
 
     private func clearActiveCodexRunIfIdle() {
         if !isSending {
-            activeCodexRun = nil
+            activeCodexRunsBySessionID.removeAll()
+            activeCodexRunHandlesBySessionID.removeAll()
+            cancellingCodexRunSessionIDs.removeAll()
         }
     }
 
@@ -3627,7 +3650,7 @@ final class AppModel: ObservableObject {
 
     private func beginCodexRun(sessionID: String, title: String) -> String {
         let runID = UUID().uuidString.lowercased()
-        activeCodexRun = ActiveCodexRun(
+        activeCodexRunsBySessionID[sessionID] = ActiveCodexRun(
             id: runID,
             sessionID: sessionID,
             title: title,
@@ -3640,13 +3663,19 @@ final class AppModel: ObservableObject {
     }
 
     private func appendCodexRunEvent(_ event: CodexRunEvent, runID: String) {
-        guard activeCodexRun?.id == runID else {
+        guard let sessionID = activeCodexRunsBySessionID.first(where: { $0.value.id == runID })?.key else {
             return
         }
-        activeCodexRun?.events.append(event)
-        if let count = activeCodexRun?.events.count, count > 80 {
-            activeCodexRun?.events.removeFirst(count - 80)
+        activeCodexRunsBySessionID[sessionID]?.events.append(event)
+        if let count = activeCodexRunsBySessionID[sessionID]?.events.count, count > 80 {
+            activeCodexRunsBySessionID[sessionID]?.events.removeFirst(count - 80)
         }
+    }
+
+    private func finishCodexRun(sessionID: String) {
+        activeCodexRunsBySessionID[sessionID] = nil
+        activeCodexRunHandlesBySessionID[sessionID] = nil
+        cancellingCodexRunSessionIDs.remove(sessionID)
     }
 
     private func startWatchedFolderAutoScan() {
@@ -3726,7 +3755,7 @@ final class AppModel: ObservableObject {
             }
         }
         let runHandle = CodexRunHandle()
-        activeCodexRunHandle = runHandle
+        activeCodexRunHandlesBySessionID[session.id] = runHandle
         let stdout = try await Task.detached(priority: .userInitiated) {
             try cli.runStreaming(
                 arguments: arguments,
