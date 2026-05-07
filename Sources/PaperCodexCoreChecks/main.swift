@@ -664,6 +664,21 @@ func runUILayoutSourceChecks() throws {
         "AppModel should run collection chat against the fixed JSON editing contract"
     )
     try check(
+        appModelSource.contains("func updateCollectionColumnTitle")
+            && appModelSource.contains("func updateCollectionColumnWidth")
+            && appModelSource.contains("func setCollectionColumnRequired")
+            && appModelSource.contains("func setCollectionColumnAllowedValues")
+            && appModelSource.contains("func setCollectionColumnDescription")
+            && appModelSource.contains("validationIssues(for collection:"),
+        "AppModel should expose collection column setting and validation APIs"
+    )
+    try check(
+        appModelSource.contains("required: \\(column.isRequired)")
+            && appModelSource.contains("allowedValues: \\(allowedValues)")
+            && appModelSource.contains("description: \\(column.description)"),
+        "collection prompt context should include required, allowed values, and description field settings"
+    )
+    try check(
         appModelSource.contains("movePapers(_ paperIDs: [String], toCategory categoryID: String?)"),
         "AppModel should provide a batch paper category move path for drag and drop"
     )

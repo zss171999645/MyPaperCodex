@@ -824,6 +824,88 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func updateCollectionColumnTitle(collectionID: String, columnID: String, title: String) {
+        do {
+            guard let collectionIndex = collections.firstIndex(where: { $0.id == collectionID }) else {
+                throw AppModelError.collectionNotFound(collectionID)
+            }
+            var collection = collections[collectionIndex]
+            collection.updateColumnTitle(columnID, title: title)
+            try collectionStore.save(collection)
+            collections[collectionIndex] = collection
+            selectedCollectionID = collectionID
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func updateCollectionColumnWidth(collectionID: String, columnID: String, width: Double) {
+        do {
+            guard let collectionIndex = collections.firstIndex(where: { $0.id == collectionID }) else {
+                throw AppModelError.collectionNotFound(collectionID)
+            }
+            var collection = collections[collectionIndex]
+            collection.updateColumnWidth(columnID, width: width)
+            try collectionStore.save(collection)
+            collections[collectionIndex] = collection
+            selectedCollectionID = collectionID
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func setCollectionColumnRequired(collectionID: String, columnID: String, required: Bool) {
+        do {
+            guard let collectionIndex = collections.firstIndex(where: { $0.id == collectionID }) else {
+                throw AppModelError.collectionNotFound(collectionID)
+            }
+            var collection = collections[collectionIndex]
+            collection.setColumnRequired(columnID, required: required)
+            try collectionStore.save(collection)
+            collections[collectionIndex] = collection
+            selectedCollectionID = collectionID
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func setCollectionColumnAllowedValues(collectionID: String, columnID: String, allowedValues: [String]) {
+        do {
+            guard let collectionIndex = collections.firstIndex(where: { $0.id == collectionID }) else {
+                throw AppModelError.collectionNotFound(collectionID)
+            }
+            var collection = collections[collectionIndex]
+            let normalizedValues = allowedValues
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            collection.setColumnAllowedValues(columnID, allowedValues: normalizedValues)
+            try collectionStore.save(collection)
+            collections[collectionIndex] = collection
+            selectedCollectionID = collectionID
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func setCollectionColumnDescription(collectionID: String, columnID: String, description: String) {
+        do {
+            guard let collectionIndex = collections.firstIndex(where: { $0.id == collectionID }) else {
+                throw AppModelError.collectionNotFound(collectionID)
+            }
+            var collection = collections[collectionIndex]
+            collection.setColumnDescription(columnID, description: description)
+            try collectionStore.save(collection)
+            collections[collectionIndex] = collection
+            selectedCollectionID = collectionID
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func validationIssues(for collection: PaperCollectionDocument) -> [PaperCollectionValidationIssue] {
+        collection.validationIssues()
+    }
+
     func renameCollection(_ collectionID: String, title: String, description: String) {
         do {
             guard var collection = collections.first(where: { $0.id == collectionID }) else {
@@ -1054,8 +1136,15 @@ final class AppModel: ObservableObject {
             )
         )
         let columns = collection.columns.map { column in
-            "- \(column.id): \(column.title) (\(column.valueKind.rawValue), locked: \(column.isLocked), hidden: \(column.isHidden))"
+            let allowedValues = column.allowedValues.isEmpty ? "[]" : "[\(column.allowedValues.joined(separator: ", "))]"
+            return "- \(column.id): \(column.title) (type: \(column.valueKind.rawValue), locked: \(column.isLocked), hidden: \(column.isHidden), required: \(column.isRequired), allowedValues: \(allowedValues), description: \(column.description))"
         }.joined(separator: "\n")
+        let validationIssues = validationIssues(for: collection)
+        let validationSummary = validationIssues.isEmpty ? "" : """
+
+        [Collection Validation Issues]
+        \(validationIssues.map { "- row \($0.rowID), column \($0.columnID): \($0.message)" }.joined(separator: "\n"))
+        """
         return """
         \(paperPrompt)
 
@@ -1067,6 +1156,7 @@ final class AppModel: ObservableObject {
 
         [Collection Columns]
         \(columns)
+        \(validationSummary)
 
         \(PaperCollectionDocument.codexEditingContract(collectionJSONPath: collectionJSONPath))
 
