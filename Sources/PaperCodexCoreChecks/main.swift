@@ -201,6 +201,20 @@ func runCollectionChecks() throws {
     try check(document.rows[0].values["paper_title"] == "Representation Autoencoders", "collection row should copy existing title metadata")
     try check(document.rows[0].values["tags"] == "vae, diffusion", "collection row should copy existing tag metadata")
     try check(document.columns.allSatisfy { !$0.isHidden }, "collection columns should be visible by default")
+    let legacyColumnJSON = """
+    {
+      "id": "legacy_note",
+      "title": "Legacy Note",
+      "valueKind": "text",
+      "width": 160,
+      "isLocked": false,
+      "isHidden": false
+    }
+    """
+    let legacyColumn = try JSONDecoder().decode(PaperCollectionColumn.self, from: Data(legacyColumnJSON.utf8))
+    try check(!legacyColumn.isRequired, "collection column JSON decode should default missing required state to false")
+    try check(legacyColumn.allowedValues.isEmpty, "collection column JSON decode should default missing allowed values to empty")
+    try check(legacyColumn.description.isEmpty, "collection column JSON decode should default missing description to empty")
 
     var edited = document
     let customColumn = PaperCollectionColumn(
@@ -228,6 +242,29 @@ func runCollectionChecks() throws {
     try check(edited.rows[1].values[customColumn.id] == "", "new rows should initialize custom cells")
     edited.setColumnHidden("authors", hidden: true, updatedAt: now.addingTimeInterval(90))
     try check(edited.columns.first { $0.id == "authors" }?.isHidden == true, "collection columns should support persistent hiding")
+    edited.setColumnRequired(customColumn.id, required: true, updatedAt: now.addingTimeInterval(100))
+    try check(edited.columns.first { $0.id == customColumn.id }?.isRequired == true, "collection columns should support required fields")
+
+    edited.setColumnAllowedValues(customColumn.id, allowedValues: ["latent", "baseline"], updatedAt: now.addingTimeInterval(110))
+    try check(edited.columns.first { $0.id == customColumn.id }?.allowedValues == ["latent", "baseline"], "collection columns should support allowed values")
+
+    edited.setColumnDescription(customColumn.id, description: "Decision label for paper triage.", updatedAt: now.addingTimeInterval(120))
+    try check(edited.columns.first { $0.id == customColumn.id }?.description == "Decision label for paper triage.", "collection columns should support descriptions")
+
+    var invalid = edited
+    invalid.updateCell(rowID: invalid.rows[0].id, columnID: customColumn.id, value: "surprise", updatedAt: now.addingTimeInterval(130))
+    let invalidIssues = invalid.validationIssues()
+    try check(invalidIssues.contains { $0.rowID == invalid.rows[0].id && $0.columnID == customColumn.id }, "collection validation should report row and column ids")
+    try check(invalidIssues.contains { $0.message.contains("allowed") }, "collection validation should report allowed-value failures")
+
+    let requiredColumn = PaperCollectionColumn(id: "priority", title: "Priority", valueKind: .number, width: 100, isLocked: false, isRequired: true)
+    invalid.columns.append(requiredColumn)
+    for index in invalid.rows.indices {
+        invalid.rows[index].values[requiredColumn.id] = index == 0 ? "" : "not-a-number"
+    }
+    let requiredIssues = invalid.validationIssues()
+    try check(requiredIssues.contains { $0.columnID == "priority" && $0.message.contains("required") }, "collection validation should report empty required values")
+    try check(requiredIssues.contains { $0.columnID == "priority" && $0.message.contains("number") }, "collection validation should report invalid number values")
 
     let tempRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("paper-codex-collections-\(UUID().uuidString)", isDirectory: true)
@@ -242,6 +279,9 @@ func runCollectionChecks() throws {
     try check(contract.contains("collection.json"), "collection codex contract should name the editable JSON source")
     try check(contract.contains("Do not change"), "collection codex contract should protect stable ids")
     try check(contract.contains("isHidden"), "collection codex contract should include hidden-column state")
+    try check(contract.contains("isRequired"), "collection codex contract should include required-column state")
+    try check(contract.contains("allowedValues"), "collection codex contract should include allowed values")
+    try check(contract.contains("description"), "collection codex contract should include field descriptions")
 }
 
 func runCollectionSourceChecks() throws {

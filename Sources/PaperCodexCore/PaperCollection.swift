@@ -21,6 +21,9 @@ public struct PaperCollectionColumn: Codable, Equatable, Identifiable, Sendable 
     public var width: Double
     public var isLocked: Bool
     public var isHidden: Bool
+    public var isRequired: Bool
+    public var allowedValues: [String]
+    public var description: String
 
     public init(
         id: String,
@@ -28,7 +31,10 @@ public struct PaperCollectionColumn: Codable, Equatable, Identifiable, Sendable 
         valueKind: PaperCollectionColumnValueKind,
         width: Double,
         isLocked: Bool = false,
-        isHidden: Bool = false
+        isHidden: Bool = false,
+        isRequired: Bool = false,
+        allowedValues: [String] = [],
+        description: String = ""
     ) {
         self.id = id
         self.title = title
@@ -36,6 +42,9 @@ public struct PaperCollectionColumn: Codable, Equatable, Identifiable, Sendable 
         self.width = width
         self.isLocked = isLocked
         self.isHidden = isHidden
+        self.isRequired = isRequired
+        self.allowedValues = allowedValues
+        self.description = description
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -45,6 +54,9 @@ public struct PaperCollectionColumn: Codable, Equatable, Identifiable, Sendable 
         case width
         case isLocked
         case isHidden
+        case isRequired
+        case allowedValues
+        case description
     }
 
     public init(from decoder: any Decoder) throws {
@@ -55,6 +67,9 @@ public struct PaperCollectionColumn: Codable, Equatable, Identifiable, Sendable 
         width = try container.decode(Double.self, forKey: .width)
         isLocked = try container.decodeIfPresent(Bool.self, forKey: .isLocked) ?? false
         isHidden = try container.decodeIfPresent(Bool.self, forKey: .isHidden) ?? false
+        isRequired = try container.decodeIfPresent(Bool.self, forKey: .isRequired) ?? false
+        allowedValues = try container.decodeIfPresent([String].self, forKey: .allowedValues) ?? []
+        description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -65,6 +80,24 @@ public struct PaperCollectionColumn: Codable, Equatable, Identifiable, Sendable 
         try container.encode(width, forKey: .width)
         try container.encode(isLocked, forKey: .isLocked)
         try container.encode(isHidden, forKey: .isHidden)
+        try container.encode(isRequired, forKey: .isRequired)
+        try container.encode(allowedValues, forKey: .allowedValues)
+        try container.encode(description, forKey: .description)
+    }
+}
+
+public struct PaperCollectionValidationIssue: Codable, Equatable, Identifiable, Sendable {
+    public var id: String { "\(rowID):\(columnID):\(message)" }
+    public var rowID: String
+    public var columnID: String
+    public var severity: String
+    public var message: String
+
+    public init(rowID: String, columnID: String, severity: String = "error", message: String) {
+        self.rowID = rowID
+        self.columnID = columnID
+        self.severity = severity
+        self.message = message
     }
 }
 
@@ -273,6 +306,72 @@ public struct PaperCollectionDocument: Codable, Equatable, Identifiable, Sendabl
         self.updatedAt = updatedAt
     }
 
+    public mutating func updateColumnTitle(_ columnID: String, title: String, updatedAt: Date = Date()) {
+        guard let columnIndex = columns.firstIndex(where: { $0.id == columnID }) else {
+            return
+        }
+        columns[columnIndex].title = title
+        self.updatedAt = updatedAt
+    }
+
+    public mutating func updateColumnWidth(_ columnID: String, width: Double, updatedAt: Date = Date()) {
+        guard let columnIndex = columns.firstIndex(where: { $0.id == columnID }) else {
+            return
+        }
+        columns[columnIndex].width = width
+        self.updatedAt = updatedAt
+    }
+
+    public mutating func setColumnRequired(_ columnID: String, required: Bool, updatedAt: Date = Date()) {
+        guard let columnIndex = columns.firstIndex(where: { $0.id == columnID }) else {
+            return
+        }
+        columns[columnIndex].isRequired = required
+        self.updatedAt = updatedAt
+    }
+
+    public mutating func setColumnAllowedValues(_ columnID: String, allowedValues: [String], updatedAt: Date = Date()) {
+        guard let columnIndex = columns.firstIndex(where: { $0.id == columnID }) else {
+            return
+        }
+        columns[columnIndex].allowedValues = allowedValues
+        self.updatedAt = updatedAt
+    }
+
+    public mutating func setColumnDescription(_ columnID: String, description: String, updatedAt: Date = Date()) {
+        guard let columnIndex = columns.firstIndex(where: { $0.id == columnID }) else {
+            return
+        }
+        columns[columnIndex].description = description
+        self.updatedAt = updatedAt
+    }
+
+    public func validationIssues() -> [PaperCollectionValidationIssue] {
+        var issues: [PaperCollectionValidationIssue] = []
+        for row in rows {
+            for column in columns {
+                let value = row.values[column.id, default: ""]
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if column.isRequired && trimmed.isEmpty {
+                    issues.append(PaperCollectionValidationIssue(rowID: row.id, columnID: column.id, message: "\(column.title) is required."))
+                }
+                if !trimmed.isEmpty && column.valueKind == .number && Double(trimmed.replacingOccurrences(of: ",", with: "")) == nil {
+                    issues.append(PaperCollectionValidationIssue(rowID: row.id, columnID: column.id, message: "\(column.title) must be a number."))
+                }
+                if !trimmed.isEmpty && column.valueKind == .year && !Self.isValidYear(trimmed) {
+                    issues.append(PaperCollectionValidationIssue(rowID: row.id, columnID: column.id, message: "\(column.title) must be a 4-digit year."))
+                }
+                if !trimmed.isEmpty && column.valueKind == .date && !Self.isValidDate(trimmed) {
+                    issues.append(PaperCollectionValidationIssue(rowID: row.id, columnID: column.id, message: "\(column.title) must be a valid date."))
+                }
+                if !trimmed.isEmpty && !column.allowedValues.isEmpty && !column.allowedValues.contains(trimmed) {
+                    issues.append(PaperCollectionValidationIssue(rowID: row.id, columnID: column.id, message: "\(column.title) must use an allowed value."))
+                }
+            }
+        }
+        return issues
+    }
+
     public mutating func refreshPaperMetadata(_ papers: [PaperCollectionSeedPaper], updatedAt: Date = Date()) {
         let papersByID = Dictionary(uniqueKeysWithValues: papers.map { ($0.paperID, $0) })
         for index in rows.indices {
@@ -301,8 +400,9 @@ public struct PaperCollectionDocument: Codable, Equatable, Identifiable, Sendabl
         - Do not change schemaVersion, collection id, row ids, paperID values, or locked metadata column ids.
         - You may update rows[].values for analysis, classification, summaries, tags, decisions, and notes requested by the user.
         - You may append new unlocked columns to columns when the user asks for a new comparison axis. Column ids must be lowercase snake_case and unique.
-        - Every new column must include id, title, valueKind, width, isLocked, and isHidden. Set isLocked to false for user/Codex columns. Set isHidden to false unless the user explicitly asks to hide it.
+        - Every new column must include id, title, valueKind, width, isLocked, isHidden, isRequired, allowedValues, and description. Set isLocked to false for user/Codex columns. Set isHidden to false unless the user explicitly asks to hide it.
         - valueKind must be one of: text, long_text, badge, number, date.
+        - Use allowedValues when present. Preserve column field settings such as isHidden, isRequired, allowedValues, and description unless the user asks to change them.
         - For every new column id, add a string value for every row in rows[].values.
         - Every row value must be a string. Use an empty string when the value is unknown.
         - Preserve valid JSON. Do not wrap the file in Markdown fences.
@@ -345,6 +445,30 @@ public struct PaperCollectionDocument: Codable, Equatable, Identifiable, Sendabl
             .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
             .lowercased()
         return collapsed.isEmpty ? "column" : collapsed
+    }
+
+    private static func isValidYear(_ value: String) -> Bool {
+        guard value.count == 4, let year = Int(value) else {
+            return false
+        }
+        return (1000...9999).contains(year)
+    }
+
+    private static func isValidDate(_ value: String) -> Bool {
+        if ISO8601DateFormatter().date(from: value) != nil {
+            return true
+        }
+        return ["yyyy-MM-dd", "yyyy/MM/dd"].contains { format in
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.isLenient = false
+            formatter.dateFormat = format
+            guard let date = formatter.date(from: value) else {
+                return false
+            }
+            return formatter.string(from: date) == value
+        }
     }
 }
 
