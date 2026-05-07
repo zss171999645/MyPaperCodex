@@ -690,6 +690,18 @@ func runUILayoutSourceChecks() throws {
         "Collection validation UI should group issues by cell and expose invalid-value and missing-required views"
     )
     try check(
+        collectionSource.contains("formulaDraftCell")
+            && collectionSource.contains("commitFormulaDraft(collection: collection, coordinate:")
+            && collectionSource.contains("draftColumnID")
+            && collectionSource.contains("cancelledEditingCell"),
+        "Collection edit drafts should keep ownership across formula, inspector, and grid selection changes"
+    )
+    try check(
+        collectionSource.contains("visibleColumnCount")
+            && collectionSource.contains(".disabled(!column.isHidden && visibleColumnCount <= 1)"),
+        "Collection field inspector should not hide the last visible column"
+    )
+    try check(
         collectionSource.contains("issue.reason == .required")
             && !collectionSource.contains("message.localizedCaseInsensitiveContains(\"required\")"),
         "Collection validation tabs should use typed validation reasons instead of message text"

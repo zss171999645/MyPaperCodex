@@ -42,7 +42,9 @@ struct CollectionView: View {
     @State private var activeViewMode: CollectionTableViewMode = .all
     @State private var selectedCell: CollectionCellCoordinate?
     @State private var editingCell: CollectionCellCoordinate?
+    @State private var cancelledEditingCell: CollectionCellCoordinate?
     @State private var formulaDraft = ""
+    @State private var formulaDraftCell: CollectionCellCoordinate?
 
     var body: some View {
         SidebarSplitLayout(minContentWidth: 940) {
@@ -64,7 +66,9 @@ struct CollectionView: View {
             activeViewMode = .all
             selectedCell = nil
             editingCell = nil
+            cancelledEditingCell = nil
             formulaDraft = ""
+            formulaDraftCell = nil
         }
         .sheet(isPresented: $isCreatingCollection) {
             CollectionCreateSheet(
@@ -228,7 +232,9 @@ struct CollectionView: View {
             activeViewMode: $activeViewMode,
             selectedCell: $selectedCell,
             editingCell: $editingCell,
+            cancelledEditingCell: $cancelledEditingCell,
             formulaDraft: $formulaDraft,
+            formulaDraftCell: $formulaDraftCell,
             filterText: $filterText,
             sortColumnID: sortColumnID,
             sortAscending: sortAscending,
@@ -332,9 +338,11 @@ struct CollectionView: View {
         if !displayedRowIDs.contains(selectedCell.rowID) || !visibleColumnIDs.contains(selectedCell.columnID) {
             self.selectedCell = nil
             if editingCell == selectedCell {
+                cancelledEditingCell = selectedCell
                 editingCell = nil
             }
             formulaDraft = ""
+            formulaDraftCell = nil
         }
     }
 
@@ -346,7 +354,10 @@ struct CollectionView: View {
     ) {
         guard !displayedRows.isEmpty, !visibleColumns.isEmpty else {
             selectedCell = nil
+            cancelledEditingCell = editingCell
             editingCell = nil
+            formulaDraftCell = nil
+            formulaDraft = ""
             return
         }
         let currentRowIndex = selectedCell.flatMap { cell in
@@ -365,29 +376,36 @@ struct CollectionView: View {
     }
 
     private func commitFormulaDraft(collection: PaperCollectionDocument) {
-        guard let selectedCell else {
+        commitFormulaDraft(collection: collection, coordinate: formulaDraftCell ?? selectedCell)
+    }
+
+    private func commitFormulaDraft(collection: PaperCollectionDocument, coordinate: CollectionCellCoordinate?) {
+        guard let coordinate else {
             return
         }
-        let currentValue = collection.rows.first { $0.id == selectedCell.rowID }?.values[selectedCell.columnID, default: ""] ?? ""
+        let currentValue = collection.rows.first { $0.id == coordinate.rowID }?.values[coordinate.columnID, default: ""] ?? ""
         guard formulaDraft != currentValue else {
             return
         }
         model.updateCollectionCell(
             collectionID: collection.id,
-            rowID: selectedCell.rowID,
-            columnID: selectedCell.columnID,
+            rowID: coordinate.rowID,
+            columnID: coordinate.columnID,
             value: formulaDraft
         )
     }
 
     private func cancelCellEdit(collection: PaperCollectionDocument) {
+        cancelledEditingCell = editingCell
         editingCell = nil
         guard let selectedCell,
               let row = collection.rows.first(where: { $0.id == selectedCell.rowID }) else {
             formulaDraft = ""
+            formulaDraftCell = nil
             return
         }
         formulaDraft = row.values[selectedCell.columnID, default: ""]
+        formulaDraftCell = selectedCell
     }
 
     private func navButton(title: String, systemImage: String, selected: Bool = false, action: @escaping () -> Void) -> some View {
@@ -442,7 +460,7 @@ struct CollectionView: View {
             return true
         case .invalid:
             return issues.contains { issue in
-                issue.rowID == row.id && issue.reason != .required
+                issue.rowID == row.id
             }
         case .missingRequired:
             return issues.contains { issue in
@@ -511,7 +529,9 @@ private struct CollectionWorkbench: View {
     @Binding var activeViewMode: CollectionTableViewMode
     @Binding var selectedCell: CollectionCellCoordinate?
     @Binding var editingCell: CollectionCellCoordinate?
+    @Binding var cancelledEditingCell: CollectionCellCoordinate?
     @Binding var formulaDraft: String
+    @Binding var formulaDraftCell: CollectionCellCoordinate?
     @Binding var filterText: String
     var sortColumnID: String?
     var sortAscending: Bool
@@ -562,6 +582,7 @@ private struct CollectionWorkbench: View {
                 selectedCell: selectedCell,
                 columns: allColumns,
                 formulaDraft: $formulaDraft,
+                formulaDraftCell: $formulaDraftCell,
                 commitFormulaDraft: commitFormulaDraft
             )
             Divider()
@@ -572,6 +593,7 @@ private struct CollectionWorkbench: View {
                     selectedRowIDs: $selectedRowIDs,
                     selectedCell: $selectedCell,
                     editingCell: $editingCell,
+                    cancelledEditingCell: $cancelledEditingCell,
                     validationIssuesByCell: validationIssuesByCell,
                     sortColumnID: sortColumnID,
                     sortAscending: sortAscending,
@@ -590,6 +612,7 @@ private struct CollectionWorkbench: View {
                     collection: collection,
                     selectedCell: selectedCell,
                     columns: allColumns,
+                    visibleColumnCount: visibleColumns.count,
                     validationIssues: validationIssues,
                     onUpdateColumnTitle: onUpdateColumnTitle,
                     onSetColumnHidden: onSetColumnHidden,
@@ -742,7 +765,7 @@ private struct CollectionWorkbench: View {
     }
 
     private var invalidRowIDs: Set<String> {
-        Set(validationIssues.filter { $0.reason != .required }.map(\.rowID))
+        Set(validationIssues.map(\.rowID))
     }
 
     private var missingRequiredRowIDs: Set<String> {
@@ -833,6 +856,7 @@ private struct CollectionFormulaBar: View {
     var selectedCell: CollectionCellCoordinate?
     var columns: [PaperCollectionColumn]
     @Binding var formulaDraft: String
+    @Binding var formulaDraftCell: CollectionCellCoordinate?
     var commitFormulaDraft: () -> Void
     @FocusState private var isFormulaFocused: Bool
 
@@ -855,13 +879,19 @@ private struct CollectionFormulaBar: View {
                 .focused($isFormulaFocused)
                 .disabled(selectedCell == nil)
                 .onAppear {
+                    formulaDraftCell = selectedCell
                     formulaDraft = selectedValue
                 }
-                .onChange(of: selectedCell) { _, _ in
+                .onChange(of: selectedCell) { _, newCell in
+                    if isFormulaFocused {
+                        commitFormulaDraft()
+                    }
+                    formulaDraftCell = newCell
                     formulaDraft = selectedValue
                 }
                 .onChange(of: selectedValue) { _, newValue in
                     if !isFormulaFocused {
+                        formulaDraftCell = selectedCell
                         formulaDraft = newValue
                     }
                 }
@@ -929,6 +959,7 @@ private struct CollectionFieldInspector: View {
     var collection: PaperCollectionDocument
     var selectedCell: CollectionCellCoordinate?
     var columns: [PaperCollectionColumn]
+    var visibleColumnCount: Int
     var validationIssues: [PaperCollectionValidationIssue]
     var onUpdateColumnTitle: (String, String) -> Void
     var onSetColumnHidden: (String, Bool) -> Void
@@ -940,6 +971,7 @@ private struct CollectionFieldInspector: View {
     @State private var titleDraft = ""
     @State private var allowedValuesDraft = ""
     @State private var descriptionDraft = ""
+    @State private var draftColumnID: String?
     @FocusState private var focusedField: InspectorFocusedField?
 
     var body: some View {
@@ -970,9 +1002,15 @@ private struct CollectionFieldInspector: View {
 
                     Toggle("Visible", isOn: Binding(
                         get: { !column.isHidden },
-                        set: { onSetColumnHidden(column.id, !$0) }
+                        set: { isVisible in
+                            guard isVisible || column.isHidden || visibleColumnCount > 1 else {
+                                return
+                            }
+                            onSetColumnHidden(column.id, !isVisible)
+                        }
                     ))
                     .font(.caption)
+                    .disabled(!column.isHidden && visibleColumnCount <= 1)
 
                     Toggle("Required", isOn: Binding(
                         get: { column.isRequired },
@@ -1018,6 +1056,7 @@ private struct CollectionFieldInspector: View {
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.75))
         .onAppear(perform: syncDrafts)
         .onChange(of: column?.id) { _, _ in
+            commitFocusedField(focusedField)
             syncDrafts()
         }
         .onChange(of: column?.title) { _, _ in
@@ -1082,10 +1121,11 @@ private struct CollectionFieldInspector: View {
         titleDraft = column?.title ?? ""
         allowedValuesDraft = column?.allowedValues.joined(separator: ", ") ?? ""
         descriptionDraft = column?.description ?? ""
+        draftColumnID = column?.id
     }
 
     private func commitFocusedField(_ field: InspectorFocusedField?) {
-        guard let column else {
+        guard let column = draftColumn else {
             return
         }
         switch field {
@@ -1121,6 +1161,13 @@ private struct CollectionFieldInspector: View {
             return
         }
         onSetColumnDescription(column.id, descriptionDraft)
+    }
+
+    private var draftColumn: PaperCollectionColumn? {
+        guard let draftColumnID else {
+            return nil
+        }
+        return columns.first { $0.id == draftColumnID }
     }
 }
 
@@ -1164,6 +1211,7 @@ private struct CollectionSpreadsheet: View {
     @Binding var selectedRowIDs: Set<String>
     @Binding var selectedCell: CollectionCellCoordinate?
     @Binding var editingCell: CollectionCellCoordinate?
+    @Binding var cancelledEditingCell: CollectionCellCoordinate?
     var validationIssuesByCell: [String: [PaperCollectionValidationIssue]]
     var sortColumnID: String?
     var sortAscending: Bool
@@ -1192,6 +1240,7 @@ private struct CollectionSpreadsheet: View {
                         isSelected: selectedRowIDs.contains(row.id),
                         selectedCell: $selectedCell,
                         editingCell: $editingCell,
+                        cancelledEditingCell: $cancelledEditingCell,
                         validationIssuesByCell: validationIssuesByCell,
                         onToggleSelection: {
                             toggle(row.id)
@@ -1359,6 +1408,7 @@ private struct CollectionTableRow: View {
     var isSelected: Bool
     @Binding var selectedCell: CollectionCellCoordinate?
     @Binding var editingCell: CollectionCellCoordinate?
+    @Binding var cancelledEditingCell: CollectionCellCoordinate?
     var validationIssuesByCell: [String: [PaperCollectionValidationIssue]]
     var onToggleSelection: () -> Void
     var onOpenPaper: () -> Void
@@ -1395,6 +1445,7 @@ private struct CollectionTableRow: View {
                     isSelected: selectedCell == coordinate,
                     selectedCell: $selectedCell,
                     editingCell: $editingCell,
+                    cancelledEditingCell: $cancelledEditingCell,
                     onOpenPaper: column.id == "paper_title" ? onOpenPaper : nil,
                     onCommit: { value in
                         onCellCommit(column.id, value)
@@ -1427,6 +1478,7 @@ private struct CollectionTableCell: View {
     var isSelected: Bool
     @Binding var selectedCell: CollectionCellCoordinate?
     @Binding var editingCell: CollectionCellCoordinate?
+    @Binding var cancelledEditingCell: CollectionCellCoordinate?
     var onOpenPaper: (() -> Void)?
     var onCommit: (String) -> Void
     var onMoveSelection: (Int, Int) -> Void
@@ -1510,17 +1562,31 @@ private struct CollectionTableCell: View {
         )
         .help(issueMessages)
         .onTapGesture(count: 2) {
+            if editingCell != coordinate {
+                editingCell = nil
+            }
             selectedCell = coordinate
             editingCell = coordinate
             draft = value
         }
         .onTapGesture {
+            if editingCell != coordinate {
+                editingCell = nil
+            }
             selectedCell = coordinate
         }
         .onAppear {
             draft = value
         }
-        .onChange(of: editingCell) { _, newValue in
+        .onChange(of: editingCell) { oldValue, newValue in
+            if oldValue == coordinate && newValue != coordinate {
+                if cancelledEditingCell == coordinate {
+                    draft = value
+                    cancelledEditingCell = nil
+                } else {
+                    commitDraft()
+                }
+            }
             if newValue != coordinate {
                 draft = value
             }
