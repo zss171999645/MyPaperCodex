@@ -10,6 +10,7 @@ let package = Package(
     products: [
         .library(name: "PaperCodexCore", targets: ["PaperCodexCore"]),
         .executable(name: "PaperCodexApp", targets: ["PaperCodexApp"]),
+        .executable(name: "CodeArxivFavoritesMigrator", targets: ["CodeArxivFavoritesMigrator"]),
         .executable(name: "PaperCodexCoreChecks", targets: ["PaperCodexCoreChecks"])
     ],
     targets: [
@@ -23,6 +24,10 @@ let package = Package(
             name: "PaperCodexApp",
             dependencies: ["PaperCodexCore"],
             exclude: ["Resources"]
+        ),
+        .executableTarget(
+            name: "CodeArxivFavoritesMigrator",
+            dependencies: ["PaperCodexCore"]
         ),
         .executableTarget(
             name: "PaperCodexCoreChecks",
