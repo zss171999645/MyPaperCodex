@@ -175,6 +175,9 @@ struct DiscoverView: View {
                     model.goToLibrary()
                 }
                 navButton(title: "Discover", systemImage: "sparkle.magnifyingglass", selected: true) {}
+                navButton(title: "Collections", systemImage: "tablecells") {
+                    model.showCollections()
+                }
                 navButton(title: "Settings", systemImage: "gearshape") {
                     model.showSettings()
                 }

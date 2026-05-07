@@ -176,6 +176,110 @@ func runLocalStoreV2ModelChecks() throws {
     try check(PaperStorageState.feedPDFCache.rawValue == "feed_pdf_cache", "feed PDF cache state should be stable")
 }
 
+func runCollectionChecks() throws {
+    let now = Date(timeIntervalSince1970: 1_777_500_000)
+    let seedPaper = PaperCollectionSeedPaper(
+        paperID: "paper-a",
+        title: "Representation Autoencoders",
+        authors: ["Alice", "Bob"],
+        year: 2026,
+        sourceURL: "https://arxiv.org/abs/2604.00001",
+        categories: ["Generative Models"],
+        tags: ["vae", "diffusion"]
+    )
+    let document = PaperCollectionDocument.newDocument(
+        title: "VAE Comparison",
+        description: "Compare papers for a project decision.",
+        papers: [seedPaper],
+        createdAt: now
+    )
+
+    try check(document.schemaVersion == PaperCollectionDocument.currentSchemaVersion, "collection document should expose a stable schema version")
+    try check(document.columns.map(\.id).prefix(6) == ["paper_title", "authors", "year", "categories", "tags", "source_url"], "collection should start with stable paper metadata columns")
+    try check(document.rows.count == 1, "collection should create one row per seed paper")
+    try check(document.rows[0].paperID == "paper-a", "collection row should preserve paper id")
+    try check(document.rows[0].values["paper_title"] == "Representation Autoencoders", "collection row should copy existing title metadata")
+    try check(document.rows[0].values["tags"] == "vae, diffusion", "collection row should copy existing tag metadata")
+
+    var edited = document
+    let customColumn = PaperCollectionColumn(
+        id: "codex_label",
+        title: "Codex Label",
+        valueKind: .badge,
+        width: 150,
+        isLocked: false
+    )
+    edited.columns.append(customColumn)
+    edited.rows[0].values[customColumn.id] = "latent"
+    let addedPaper = PaperCollectionSeedPaper(
+        paperID: "paper-b",
+        title: "Flow Matching Policies",
+        authors: ["Chen"],
+        year: nil,
+        sourceURL: nil,
+        categories: [],
+        tags: ["robotics"]
+    )
+    edited.addPapers([addedPaper], updatedAt: now.addingTimeInterval(60))
+
+    try check(edited.rows.count == 2, "collection should append new paper rows")
+    try check(edited.rows[0].values[customColumn.id] == "latent", "adding papers should preserve existing custom cells")
+    try check(edited.rows[1].values[customColumn.id] == "", "new rows should initialize custom cells")
+
+    let tempRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("paper-codex-collections-\(UUID().uuidString)", isDirectory: true)
+    let store = PaperCollectionStore(root: tempRoot)
+    try store.save(edited)
+    let loaded = try store.load(id: edited.id)
+    try check(loaded == edited, "collection store should persist JSON documents losslessly")
+    let listedIDs = try store.list().map(\.id)
+    try check(listedIDs == [edited.id], "collection store should list saved documents")
+
+    let contract = PaperCollectionDocument.codexEditingContract(collectionJSONPath: "/tmp/collection.json")
+    try check(contract.contains("collection.json"), "collection codex contract should name the editable JSON source")
+    try check(contract.contains("Do not change"), "collection codex contract should protect stable ids")
+}
+
+func runCollectionSourceChecks() throws {
+    let paperA = Paper(
+        id: "paper-a",
+        filePath: "/tmp/a.pdf",
+        fileHash: "hash-a",
+        title: "Paper A",
+        authors: ["Ada"],
+        year: 2025,
+        sourceURL: nil,
+        importedAt: Date(timeIntervalSince1970: 1_777_500_000),
+        updatedAt: Date(timeIntervalSince1970: 1_777_500_000)
+    )
+    let paperB = Paper(
+        id: "paper-b",
+        filePath: "/tmp/b.pdf",
+        fileHash: "hash-b",
+        title: "Paper B",
+        authors: ["Ben"],
+        year: nil,
+        sourceURL: nil,
+        importedAt: Date(timeIntervalSince1970: 1_777_500_000),
+        updatedAt: Date(timeIntervalSince1970: 1_777_500_000)
+    )
+    let categoriesByPaperID = ["paper-a": ["Vision"], "paper-b": ["Robotics"]]
+    let tagsByPaperID = [
+        "paper-a": [PaperTag(id: "tag-a", name: "diffusion")],
+        "paper-b": [PaperTag(id: "tag-b", name: "policy"), PaperTag(id: "tag-c", name: "control")]
+    ]
+
+    let seeds = PaperCollectionSeedPaper.seedPapers(
+        papers: [paperA, paperB],
+        categoriesByPaperID: categoriesByPaperID,
+        tagsByPaperID: tagsByPaperID
+    )
+
+    try check(seeds.map(\.paperID) == ["paper-a", "paper-b"], "seed papers should preserve input order")
+    try check(seeds[0].categories == ["Vision"], "seed papers should include display category names")
+    try check(seeds[1].tags == ["policy", "control"], "seed papers should include display tag names")
+}
+
 func runReaderTabStateChecks() throws {
     var state = ReaderTabState()
     let paperA = ReaderPaperTab(paperID: "paper-a", title: "Paper A", detail: "/tmp/a.pdf", isSaved: true)
@@ -441,9 +545,49 @@ func runUILayoutSourceChecks() throws {
     let settingsViewSource = try String(contentsOf: settingsViewURL)
     let discoverViewURL = root.appendingPathComponent("Sources/PaperCodexApp/DiscoverView.swift")
     let discoverSource = try String(contentsOf: discoverViewURL)
+    let collectionViewURL = root.appendingPathComponent("Sources/PaperCodexApp/CollectionView.swift")
+    let collectionSource = try String(contentsOf: collectionViewURL)
+    let appSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/PaperCodexApp.swift"))
     let chatViewURL = root.appendingPathComponent("Sources/PaperCodexApp/ChatView.swift")
     let chatSource = try String(contentsOf: chatViewURL)
     let saveToLibrarySource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/SaveToLibrarySheet.swift"))
+    try check(
+        librarySource.contains("title: \"Collections\"")
+            && discoverSource.contains("title: \"Collections\"")
+            && settingsViewSource.contains("title: \"Collections\""),
+        "Library, Discover, and Settings sidebars should expose the Collections route under Discover"
+    )
+    try check(
+        librarySource.contains("createCollectionFromSelectedPapers")
+            && librarySource.contains("model.createCollectionFromCategory(category.id)"),
+        "Library should create collections quickly from multi-selected papers or the selected folder"
+    )
+    try check(
+        appSource.contains("case .collections") && appSource.contains("CollectionView()"),
+        "Root route should render the CollectionView"
+    )
+    try check(
+        collectionSource.contains("CollectionSpreadsheet")
+            && collectionSource.contains("CollectionChatPanel")
+            && collectionSource.contains("collectionJSONPath(for: collection.id)"),
+        "CollectionView should combine a spreadsheet surface, source JSON access, and collection chat"
+    )
+    try check(
+        collectionSource.contains("model.addColumn(toCollectionID:")
+            && collectionSource.contains("model.updateCollectionCell("),
+        "CollectionView should support user-added columns and editable custom cells"
+    )
+    try check(
+        collectionSource.contains("model.addCategory(category.id, toCollectionID: collection.id)")
+            && collectionSource.contains("model.openPapersForChat(selectedPapers.map(\\.id))"),
+        "CollectionView should add papers by folder and start paper chat from selected table rows"
+    )
+    try check(
+        appModelSource.contains("sendCollectionMessage")
+            && appModelSource.contains("collectionPrompt(")
+            && appModelSource.contains("PaperCollectionDocument.codexEditingContract"),
+        "AppModel should run collection chat against the fixed JSON editing contract"
+    )
     try check(
         appModelSource.contains("movePapers(_ paperIDs: [String], toCategory categoryID: String?)"),
         "AppModel should provide a batch paper category move path for drag and drop"
@@ -3311,6 +3455,14 @@ do {
     if selectedChecks.isEmpty || selectedChecks.contains("local-store-v2-models") {
         try runLocalStoreV2ModelChecks()
         print("local-store-v2-models: pass")
+    }
+    if selectedChecks.isEmpty || selectedChecks.contains("collections") {
+        try runCollectionChecks()
+        print("collections: pass")
+    }
+    if selectedChecks.isEmpty || selectedChecks.contains("collection-sources") {
+        try runCollectionSourceChecks()
+        print("collection-sources: pass")
     }
     if selectedChecks.isEmpty || selectedChecks.contains("reader-tabs") {
         try runReaderTabStateChecks()

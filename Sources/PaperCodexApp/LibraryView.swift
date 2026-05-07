@@ -310,6 +310,13 @@ struct LibraryView: View {
                     model.showDiscover()
                 }
                 filterButton(
+                    title: "Collections",
+                    systemImage: "tablecells",
+                    isSelected: false
+                ) {
+                    model.showCollections()
+                }
+                filterButton(
                     title: "Settings",
                     systemImage: "gearshape",
                     isSelected: false
@@ -598,6 +605,7 @@ struct LibraryView: View {
                     canOpenConversation: !selectedReadablePaperIDsInOrder.isEmpty,
                     onRead: openSelectedPapersForReading,
                     onChat: openSelectedPapersForChat,
+                    onCollect: createCollectionFromSelectedPapers,
                     onMove: {
                         isShowingBulkMove = true
                     },
@@ -644,6 +652,12 @@ struct LibraryView: View {
                 Label("Chat", systemImage: "text.bubble")
             }
             .buttonStyle(.borderedProminent)
+            .disabled(selectedCategoryPaperIDsInOrder.isEmpty)
+            Button {
+                model.createCollectionFromCategory(category.id)
+            } label: {
+                Label("Collection", systemImage: "tablecells")
+            }
             .disabled(selectedCategoryPaperIDsInOrder.isEmpty)
         }
         .buttonStyle(.bordered)
@@ -1051,6 +1065,16 @@ struct LibraryView: View {
             return
         }
         model.openPapersForChat(paperIDs)
+    }
+
+    private func createCollectionFromSelectedPapers() {
+        let paperIDs = selectedReadablePaperIDsInOrder
+        guard !paperIDs.isEmpty else {
+            return
+        }
+        model.createCollection(title: "Selected Papers", paperIDs: paperIDs)
+        selectedPaperIDs.removeAll()
+        lastSelectedPaperID = nil
     }
 
     private func clearNoteDraft() {
@@ -1795,6 +1819,7 @@ private struct BulkLibraryActionBar: View {
     var canOpenConversation: Bool
     var onRead: () -> Void
     var onChat: () -> Void
+    var onCollect: () -> Void
     var onMove: () -> Void
     var onTag: () -> Void
     var onDelete: () -> Void
@@ -1816,6 +1841,11 @@ private struct BulkLibraryActionBar: View {
             }
             .disabled(!canOpenConversation)
             .help("Chat with selected papers together")
+            Button(action: onCollect) {
+                Label("Collection", systemImage: "tablecells")
+            }
+            .disabled(!canOpenConversation)
+            .help("Create a collection from selected papers")
             Button(action: onMove) {
                 Label("Move", systemImage: "folder")
             }
