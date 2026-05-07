@@ -441,6 +441,8 @@ func runUILayoutSourceChecks() throws {
     let settingsViewSource = try String(contentsOf: settingsViewURL)
     let discoverViewURL = root.appendingPathComponent("Sources/PaperCodexApp/DiscoverView.swift")
     let discoverSource = try String(contentsOf: discoverViewURL)
+    let chatViewURL = root.appendingPathComponent("Sources/PaperCodexApp/ChatView.swift")
+    let chatSource = try String(contentsOf: chatViewURL)
     let saveToLibrarySource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/SaveToLibrarySheet.swift"))
     try check(
         appModelSource.contains("movePapers(_ paperIDs: [String], toCategory categoryID: String?)"),
@@ -638,8 +640,6 @@ func runUILayoutSourceChecks() throws {
         "app bundle build should copy localization resources"
     )
 
-    let chatViewURL = root.appendingPathComponent("Sources/PaperCodexApp/ChatView.swift")
-    let chatSource = try String(contentsOf: chatViewURL)
     try check(
         chatSource.contains("chatComposerTextHeightDefaultsKey"),
         "chat composer height should be persisted locally"
@@ -1116,6 +1116,14 @@ func runUILayoutSourceChecks() throws {
             && appModelSource.contains("discoverEnrichment(existing, satisfies: actions)")
             && appModelSource.contains("discoverEnrichmentPrompt(for: paper, actions: actions)"),
         "Discover translation and summarization actions should use action-aware enrichment prompts and cache completeness checks"
+    )
+    try check(
+        appModelSource.contains("tokenUsage: CodexTokenUsage?")
+            && appModelSource.contains("aggregateTokenUsage")
+            && appModelSource.contains("Process Tokens")
+            && chatSource.contains("tokenUsageSummary")
+            && chatSource.contains("case .usage"),
+        "Process and chat Codex runs should surface token usage from real Codex usage events"
     )
     try check(
         discoverSource.contains("activeFilterChips"),
@@ -2318,6 +2326,21 @@ func runCodexCLIChecks() throws {
     let toolEvent = try CodexJSONEventParser.parseLine(#"{"type":"tool_call","name":"web.search","arguments":{"query":"paper"}}"#)
     try check(toolEvent?.kind == .tool, "non-terminal tool calls should be classified as tool events")
     try check(toolEvent?.title == "web.search", "tool events should show the tool name")
+    let usageEvent = try CodexJSONEventParser.parseLine(#"{"type":"turn.completed","usage":{"input_tokens":24111,"cached_input_tokens":2432,"output_tokens":424,"reasoning_output_tokens":247}}"#)
+    try check(usageEvent?.kind == .usage, "turn completion usage should be classified as a usage event")
+    try check(usageEvent?.tokenUsage?.inputTokens == 24_111, "usage events should preserve input token counts")
+    try check(usageEvent?.tokenUsage?.cachedInputTokens == 2_432, "usage events should preserve cached input token counts")
+    try check(usageEvent?.tokenUsage?.outputTokens == 424, "usage events should preserve output token counts")
+    try check(usageEvent?.tokenUsage?.reasoningOutputTokens == 247, "usage events should preserve reasoning token counts")
+    try check(usageEvent?.detail.contains("24.1k in") == true, "usage event detail should show compact token counts")
+    let aggregateUsage = CodexCLI.aggregateTokenUsage(from: """
+    {"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":100,"output_tokens":50,"reasoning_output_tokens":20}}
+    {"type":"turn.completed","usage":{"input_tokens":2000,"cached_input_tokens":300,"output_tokens":70,"reasoning_output_tokens":30}}
+    """)
+    try check(aggregateUsage?.inputTokens == 3_000, "Codex usage aggregation should sum input tokens across JSONL")
+    try check(aggregateUsage?.cachedInputTokens == 400, "Codex usage aggregation should sum cached input tokens across JSONL")
+    try check(aggregateUsage?.outputTokens == 120, "Codex usage aggregation should sum output tokens across JSONL")
+    try check(aggregateUsage?.reasoningOutputTokens == 50, "Codex usage aggregation should sum reasoning tokens across JSONL")
 
     let parsedVersion = CodexCLI.parseVersion(from: "codex-cli 0.114.0\n")
     try check(parsedVersion == "0.114.0", "Codex version parser should read codex-cli output")

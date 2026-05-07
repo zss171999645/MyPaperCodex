@@ -965,7 +965,17 @@ private struct CodexRunBubble: View {
     var run: ActiveCodexRun
 
     private var visibleEvents: [CodexRunEvent] {
-        Array(run.events.filter { $0.kind == .thinking || $0.kind == .answer }.suffix(8))
+        Array(run.events.filter { $0.kind == .thinking || $0.kind == .answer || $0.kind == .usage }.suffix(8))
+    }
+
+    private var tokenUsageSummary: String? {
+        var aggregate = CodexTokenUsage()
+        for event in run.events {
+            if let tokenUsage = event.tokenUsage {
+                aggregate.add(tokenUsage)
+            }
+        }
+        return aggregate.isEmpty ? nil : aggregate.compactSummary
     }
 
     var body: some View {
@@ -1005,7 +1015,10 @@ private struct CodexRunBubble: View {
     }
 
     private var statusText: String {
-        visibleEvents.isEmpty ? "Working" : "\(visibleEvents.count) update\(visibleEvents.count == 1 ? "" : "s")"
+        if let tokenUsageSummary {
+            return tokenUsageSummary
+        }
+        return visibleEvents.isEmpty ? "Working" : "\(visibleEvents.count) update\(visibleEvents.count == 1 ? "" : "s")"
     }
 }
 
@@ -1071,6 +1084,8 @@ private struct CodexRunEventRow: View {
             "terminal"
         case .answer:
             "text.bubble"
+        case .usage:
+            "chart.bar"
         case .warning:
             "exclamationmark.triangle"
         case .error:
@@ -1092,6 +1107,8 @@ private struct CodexRunEventRow: View {
             .gray
         case .answer:
             .green
+        case .usage:
+            .indigo
         case .warning:
             .orange
         case .error:

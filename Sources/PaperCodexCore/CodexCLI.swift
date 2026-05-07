@@ -105,9 +105,74 @@ public enum CodexRunEventKind: String, Codable, Equatable, Sendable {
     case tool
     case terminal
     case answer
+    case usage
     case warning
     case error
     case raw
+}
+
+public struct CodexTokenUsage: Codable, Equatable, Sendable {
+    public var inputTokens: Int
+    public var cachedInputTokens: Int
+    public var outputTokens: Int
+    public var reasoningOutputTokens: Int
+
+    public init(
+        inputTokens: Int = 0,
+        cachedInputTokens: Int = 0,
+        outputTokens: Int = 0,
+        reasoningOutputTokens: Int = 0
+    ) {
+        self.inputTokens = inputTokens
+        self.cachedInputTokens = cachedInputTokens
+        self.outputTokens = outputTokens
+        self.reasoningOutputTokens = reasoningOutputTokens
+    }
+
+    public var isEmpty: Bool {
+        inputTokens == 0 && cachedInputTokens == 0 && outputTokens == 0 && reasoningOutputTokens == 0
+    }
+
+    public var totalTokens: Int {
+        inputTokens + outputTokens
+    }
+
+    public mutating func add(_ usage: CodexTokenUsage) {
+        inputTokens += usage.inputTokens
+        cachedInputTokens += usage.cachedInputTokens
+        outputTokens += usage.outputTokens
+        reasoningOutputTokens += usage.reasoningOutputTokens
+    }
+
+    public func adding(_ usage: CodexTokenUsage) -> CodexTokenUsage {
+        var copy = self
+        copy.add(usage)
+        return copy
+    }
+
+    public var compactSummary: String {
+        var parts = [
+            "\(Self.compact(inputTokens)) in",
+            "\(Self.compact(outputTokens)) out"
+        ]
+        if reasoningOutputTokens > 0 {
+            parts.append("\(Self.compact(reasoningOutputTokens)) reasoning")
+        }
+        if cachedInputTokens > 0 {
+            parts.append("\(Self.compact(cachedInputTokens)) cached")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private static func compact(_ value: Int) -> String {
+        if value >= 1_000_000 {
+            return String(format: "%.1fm", Double(value) / 1_000_000)
+        }
+        if value >= 1_000 {
+            return String(format: "%.1fk", Double(value) / 1_000)
+        }
+        return "\(value)"
+    }
 }
 
 public struct CodexRunEvent: Codable, Equatable, Identifiable, Sendable {
@@ -115,6 +180,7 @@ public struct CodexRunEvent: Codable, Equatable, Identifiable, Sendable {
     public var kind: CodexRunEventKind
     public var title: String
     public var detail: String
+    public var tokenUsage: CodexTokenUsage?
     public var createdAt: Date
 
     public init(
@@ -122,12 +188,14 @@ public struct CodexRunEvent: Codable, Equatable, Identifiable, Sendable {
         kind: CodexRunEventKind,
         title: String,
         detail: String,
+        tokenUsage: CodexTokenUsage? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
         self.kind = kind
         self.title = title
         self.detail = detail
+        self.tokenUsage = tokenUsage
         self.createdAt = createdAt
     }
 
@@ -171,6 +239,15 @@ public enum CodexJSONEventParser {
             ?? "event"
         let lowerType = type.lowercased()
 
+        if lowerType.contains("turn.completed"),
+           let usage = tokenUsage(in: effective) ?? tokenUsage(in: json) {
+            return CodexRunEvent(
+                kind: .usage,
+                title: "Token usage",
+                detail: usage.compactSummary,
+                tokenUsage: usage
+            )
+        }
         if lowerType.contains("thread.started") {
             let threadID = stringValue(named: "thread_id", in: effective)
                 ?? stringValue(named: "thread_id", in: json)
@@ -235,6 +312,37 @@ public enum CodexJSONEventParser {
         }
 
         return CodexRunEvent(kind: .raw, title: type, detail: compactJSONString(effective) ?? trimmed)
+    }
+
+    private static func tokenUsage(in value: Any?) -> CodexTokenUsage? {
+        guard let dictionary = value as? [String: Any],
+              let usage = dictionary["usage"] as? [String: Any] else {
+            return nil
+        }
+        let tokenUsage = CodexTokenUsage(
+            inputTokens: integerValue(named: "input_tokens", in: usage),
+            cachedInputTokens: integerValue(named: "cached_input_tokens", in: usage),
+            outputTokens: integerValue(named: "output_tokens", in: usage),
+            reasoningOutputTokens: integerValue(named: "reasoning_output_tokens", in: usage)
+        )
+        return tokenUsage.isEmpty ? nil : tokenUsage
+    }
+
+    private static func integerValue(named key: String, in value: Any?) -> Int {
+        guard let dictionary = value as? [String: Any],
+              let raw = dictionary[key] else {
+            return 0
+        }
+        if let int = raw as? Int {
+            return int
+        }
+        if let double = raw as? Double {
+            return Int(double)
+        }
+        if let string = raw as? String {
+            return Int(string) ?? 0
+        }
+        return 0
     }
 
     private static func summaryText(in value: Any?) -> String? {
@@ -891,6 +999,18 @@ public struct CodexCLI: Sendable {
             }
         }
         return nil
+    }
+
+    public static func aggregateTokenUsage(from jsonl: String) -> CodexTokenUsage? {
+        var aggregate = CodexTokenUsage()
+        for line in jsonl.split(separator: "\n") {
+            guard let event = try? CodexJSONEventParser.parseLine(String(line)),
+                  let usage = event.tokenUsage else {
+                continue
+            }
+            aggregate.add(usage)
+        }
+        return aggregate.isEmpty ? nil : aggregate
     }
 
     public static func parseVersion(from output: String) -> String? {

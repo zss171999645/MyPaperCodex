@@ -135,6 +135,7 @@ private enum DiscoverPaperProcessingState: Sendable {
 private struct DiscoverPaperProcessingResult: Sendable {
     var paperID: String
     var state: DiscoverPaperProcessingState
+    var tokenUsage: CodexTokenUsage? = nil
 }
 
 private struct DiscoverSimilarityCategorySource {
@@ -1142,6 +1143,7 @@ final class AppModel: ObservableObject {
             var completed = 0
             var cached = 0
             var failed = 0
+            var aggregateTokenUsage = CodexTokenUsage()
             discoverProcessingProgress = ArxivCacheProgress(
                 date: selectedArxivDate ?? "\(discoverStartDate)...\(discoverEndDate)",
                 title: "Processing results",
@@ -1181,7 +1183,16 @@ final class AppModel: ObservableObject {
                     case .cancelled:
                         break
                     }
-                    updateDiscoverProcessingProgress(completed: completed, cached: cached, failed: failed, total: total)
+                    if let tokenUsage = result.tokenUsage {
+                        aggregateTokenUsage.add(tokenUsage)
+                    }
+                    updateDiscoverProcessingProgress(
+                        completed: completed,
+                        cached: cached,
+                        failed: failed,
+                        total: total,
+                        tokenUsage: aggregateTokenUsage.isEmpty ? nil : aggregateTokenUsage
+                    )
                     if isCancellingDiscoverProcessing || Task.isCancelled {
                         group.cancelAll()
                         break
@@ -1194,6 +1205,14 @@ final class AppModel: ObservableObject {
                         }
                     }
                 }
+            }
+            if !aggregateTokenUsage.isEmpty {
+                postNotice(
+                    kind: .info,
+                    title: "Process Tokens",
+                    message: aggregateTokenUsage.compactSummary,
+                    autoDismissAfter: 8
+                )
             }
         }
 
@@ -1281,11 +1300,11 @@ final class AppModel: ObservableObject {
 
         do {
             discoverPaperInteractionStateByID[paper.id] = .processing
-            let enrichment = try await runDiscoverCodexEnrichment(for: paper, actions: actions, existing: existing)
-            try localDiscoverCache.saveEnrichment(enrichment)
-            discoverEnrichmentsByID[paper.id] = enrichment
+            let runResult = try await runDiscoverCodexEnrichment(for: paper, actions: actions, existing: existing)
+            try localDiscoverCache.saveEnrichment(runResult.enrichment)
+            discoverEnrichmentsByID[paper.id] = runResult.enrichment
             discoverPaperInteractionStateByID[paper.id] = .processed
-            return DiscoverPaperProcessingResult(paperID: paper.id, state: .processed)
+            return DiscoverPaperProcessingResult(paperID: paper.id, state: .processed, tokenUsage: runResult.tokenUsage)
         } catch {
             if isCancellingDiscoverProcessing || Task.isCancelled || isCancellationError(error) {
                 discoverPaperInteractionStateByID[paper.id] = .cancelled
@@ -3317,12 +3336,22 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func updateDiscoverProcessingProgress(completed: Int, cached: Int, failed: Int, total: Int) {
+    private func updateDiscoverProcessingProgress(
+        completed: Int,
+        cached: Int,
+        failed: Int,
+        total: Int,
+        tokenUsage: CodexTokenUsage? = nil
+    ) {
         let processed = max(completed - cached - failed, 0)
+        var detail = "\(processed) processed · \(cached) cached · \(failed) failed · \(completed)/\(total)"
+        if let tokenUsage {
+            detail += " · \(tokenUsage.compactSummary)"
+        }
         discoverProcessingProgress = ArxivCacheProgress(
             date: selectedArxivDate ?? "\(discoverStartDate)...\(discoverEndDate)",
             title: isCancellingDiscoverProcessing ? "Stopping processing" : "Processing results",
-            detail: "\(processed) processed · \(cached) cached · \(failed) failed · \(completed)/\(total)",
+            detail: detail,
             completed: completed,
             total: total
         )
@@ -4016,7 +4045,7 @@ final class AppModel: ObservableObject {
         for paper: ArxivFeedPaper,
         actions: Set<DiscoverProcessAction>,
         existing: DiscoverPaperEnrichment?
-    ) async throws -> DiscoverPaperEnrichment {
+    ) async throws -> (enrichment: DiscoverPaperEnrichment, tokenUsage: CodexTokenUsage?) {
         let executable = try CodexCLI.findCodexExecutable(preferWorkspaceImageOutput: false)
         let cli = CodexCLI(executablePath: executable)
         let workspaceURL = supportRoot
@@ -4040,7 +4069,7 @@ final class AppModel: ObservableObject {
         defer {
             activeDiscoverCodexRunHandles.removeAll { $0 === runHandle }
         }
-        _ = try await Task.detached(priority: .userInitiated) {
+        let stdout = try await Task.detached(priority: .userInitiated) {
             try cli.runStreaming(
                 arguments: arguments,
                 eventLogURL: eventLogURL,
@@ -4049,13 +4078,14 @@ final class AppModel: ObservableObject {
             ) { _ in }
         }.value
         let lastMessage = try String(contentsOf: outputURL, encoding: .utf8)
+        let tokenUsage = CodexCLI.aggregateTokenUsage(from: stdout)
         let parsed = try DiscoverEnrichmentParser.parse(
             lastMessage,
             arxivID: paper.id,
             modelIdentity: modelIdentity,
             generatedAt: Date()
         )
-        return mergeDiscoverEnrichment(parsed, existing: existing, actions: actions)
+        return (mergeDiscoverEnrichment(parsed, existing: existing, actions: actions), tokenUsage)
     }
 
     private func mergeDiscoverEnrichment(
@@ -4215,7 +4245,7 @@ final class AppModel: ObservableObject {
         session: PaperSession,
         runID: String,
         prefersWorkspaceImageOutput: Bool
-    ) async throws -> (stdout: String, lastMessage: String, threadID: String?, generatedImages: [URL]) {
+    ) async throws -> (stdout: String, lastMessage: String, threadID: String?, generatedImages: [URL], tokenUsage: CodexTokenUsage?) {
         let executable = try CodexCLI.findCodexExecutable(preferWorkspaceImageOutput: prefersWorkspaceImageOutput)
         let cli = CodexCLI(executablePath: executable)
         appendCodexRunEvent(
@@ -4278,6 +4308,7 @@ final class AppModel: ObservableObject {
             )
         }.value
         let lastMessage = (try? String(contentsOf: outputURL, encoding: .utf8)) ?? ""
+        let tokenUsage = CodexCLI.aggregateTokenUsage(from: stdout)
         let generatedImages = try GeneratedImageCollector.newImages(in: workspaceURL, excluding: imageSnapshot)
         if !generatedImages.isEmpty {
             appendCodexRunEvent(
@@ -4285,7 +4316,13 @@ final class AppModel: ObservableObject {
                 runID: runID
             )
         }
-        return (stdout: stdout, lastMessage: lastMessage, threadID: CodexCLI.parseThreadID(from: stdout), generatedImages: generatedImages)
+        return (
+            stdout: stdout,
+            lastMessage: lastMessage,
+            threadID: CodexCLI.parseThreadID(from: stdout),
+            generatedImages: generatedImages,
+            tokenUsage: tokenUsage
+        )
     }
 
     private func effectiveModelOverride(prefersWorkspaceImageOutput: Bool) -> String {
@@ -4390,6 +4427,14 @@ final class AppModel: ObservableObject {
             createdAt: Date()
         )
         try repository.appendMessage(codexMessage)
+        if let tokenUsage = codexReply.tokenUsage {
+            postNotice(
+                kind: .info,
+                title: "Chat Tokens",
+                message: tokenUsage.compactSummary,
+                autoDismissAfter: 8
+            )
+        }
         return updatedSession
     }
 
