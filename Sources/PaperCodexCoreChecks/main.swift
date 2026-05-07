@@ -710,6 +710,12 @@ func runUILayoutSourceChecks() throws {
         "global feedback should render non-blocking notices instead of forcing every message into an alert"
     )
     try check(
+        interactionSource.contains("@State private var isExpanded")
+            && interactionSource.contains("ScrollView(.vertical")
+            && interactionSource.contains(".textSelection(.enabled)"),
+        "long error notices should expand into a scrollable selectable detail view"
+    )
+    try check(
         rootViewSource.contains("PaperCodexCommands"),
         "the app should expose keyboard shortcuts through a Commands scene"
     )
@@ -2765,6 +2771,13 @@ func runLocalDiscoverEngineChecks() throws {
     try check(embeddingEndpointA.absoluteString == "https://api.openai.com/v1/embeddings", "embedding endpoint should append /v1/embeddings to provider roots")
     try check(embeddingEndpointB.absoluteString == "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings", "embedding endpoint should append /embeddings to /v1 base URLs")
     try check(embeddingEndpointC.absoluteString == "https://example.com/custom/embeddings", "embedding endpoint should preserve explicit embeddings URLs")
+    let embeddingBatches = OpenAICompatibleEmbeddingClient.embeddingBatches(
+        (1...23).map { "paper-\($0)" }
+    )
+    try check(
+        embeddingBatches.map(\.count) == [10, 10, 3],
+        "embedding client should split large requests into provider-safe batches"
+    )
 
     let codexJSON = """
     {

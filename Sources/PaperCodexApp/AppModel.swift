@@ -3705,17 +3705,29 @@ final class AppModel: ObservableObject {
         )
 
         if !missing.isEmpty {
-            let vectors = try await client.embed(texts: missing.map(\.text))
-            for (input, vector) in zip(missing, vectors) {
-                let record = DiscoverEmbeddingRecord(
-                    sourceID: input.sourceID,
-                    model: model,
-                    textHash: DiscoverEmbeddingText.hash(input.text),
-                    vector: vector,
-                    generatedAt: Date()
+            let cachedCount = inputs.count - missing.count
+            var generatedCount = 0
+            for batch in OpenAICompatibleEmbeddingClient.embeddingBatches(missing) {
+                let vectors = try await client.embed(texts: batch.map(\.text))
+                for (input, vector) in zip(batch, vectors) {
+                    let record = DiscoverEmbeddingRecord(
+                        sourceID: input.sourceID,
+                        model: model,
+                        textHash: DiscoverEmbeddingText.hash(input.text),
+                        vector: vector,
+                        generatedAt: Date()
+                    )
+                    try localDiscoverCache.saveEmbedding(record)
+                    vectorsBySourceID[input.sourceID] = vector
+                }
+                generatedCount += batch.count
+                arxivCacheProgress = ArxivCacheProgress(
+                    date: progressDate,
+                    title: progressTitle,
+                    detail: "\(cachedCount + generatedCount)/\(inputs.count) ready",
+                    completed: totalOffset + cachedCount + generatedCount,
+                    total: totalOffset + inputs.count
                 )
-                try localDiscoverCache.saveEmbedding(record)
-                vectorsBySourceID[input.sourceID] = vector
             }
         }
 

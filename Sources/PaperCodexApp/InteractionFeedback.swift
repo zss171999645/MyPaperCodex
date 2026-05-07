@@ -129,7 +129,7 @@ struct InteractionNoticeStack: View {
             }
         }
         .padding(14)
-        .frame(maxWidth: 420, alignment: .topTrailing)
+        .frame(maxWidth: 560, alignment: .topTrailing)
         .animation(.spring(response: 0.22, dampingFraction: 0.86), value: notices)
     }
 }
@@ -138,32 +138,62 @@ private struct InteractionNoticeCard: View {
     var notice: InteractionNotice
     var onDismiss: () -> Void
 
+    @State private var isExpanded = false
+
+    private var canExpand: Bool {
+        notice.message.count > 180 || notice.message.contains("\n")
+    }
+
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: notice.kind.systemImage)
-                .foregroundStyle(notice.kind.tint)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(notice.title)
-                    .font(.paperCodexSystem(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                if !notice.message.isEmpty {
-                    Text(notice.message)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                        .truncationMode(.tail)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: notice.kind.systemImage)
+                    .foregroundStyle(notice.kind.tint)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(notice.title)
+                        .font(.paperCodexSystem(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    if !notice.message.isEmpty, !isExpanded {
+                        Text(notice.message)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                            .truncationMode(.tail)
+                    }
                 }
+                Spacer(minLength: 8)
+                if canExpand {
+                    Button {
+                        isExpanded.toggle()
+                    } label: {
+                        Label(isExpanded ? "Less" : "Details", systemImage: isExpanded ? "chevron.up" : "doc.text.magnifyingglass")
+                            .labelStyle(.iconOnly)
+                            .frame(width: 20, height: 20)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help(isExpanded ? "Hide details" : "Show details")
+                }
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.paperCodexSystem(size: 10, weight: .bold))
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Dismiss notification")
             }
-            Spacer(minLength: 8)
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.paperCodexSystem(size: 10, weight: .bold))
-                    .frame(width: 18, height: 18)
+            if isExpanded, !notice.message.isEmpty {
+                ScrollView(.vertical) {
+                    Text(notice.message)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: 260)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("Dismiss notification")
         }
         .padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))

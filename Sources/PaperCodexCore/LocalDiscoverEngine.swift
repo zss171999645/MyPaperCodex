@@ -300,6 +300,8 @@ public enum DiscoverEmbeddingText {
 }
 
 public final class OpenAICompatibleEmbeddingClient: @unchecked Sendable {
+    public static let defaultEmbeddingBatchSize = 10
+
     private let endpoint: URL
     private let model: String
     private let apiKey: String
@@ -342,10 +344,38 @@ public final class OpenAICompatibleEmbeddingClient: @unchecked Sendable {
         return url
     }
 
+    public static func embeddingBatches<T>(
+        _ values: [T],
+        maxBatchSize: Int = defaultEmbeddingBatchSize
+    ) -> [[T]] {
+        guard !values.isEmpty else {
+            return []
+        }
+        let batchSize = max(1, maxBatchSize)
+        var batches: [[T]] = []
+        batches.reserveCapacity(Int(ceil(Double(values.count) / Double(batchSize))))
+        var index = values.startIndex
+        while index < values.endIndex {
+            let nextIndex = values.index(index, offsetBy: batchSize, limitedBy: values.endIndex) ?? values.endIndex
+            batches.append(Array(values[index..<nextIndex]))
+            index = nextIndex
+        }
+        return batches
+    }
+
     public func embed(texts: [String]) async throws -> [[Double]] {
         guard !texts.isEmpty else {
             return []
         }
+        var vectors: [[Double]] = []
+        vectors.reserveCapacity(texts.count)
+        for batch in Self.embeddingBatches(texts) {
+            vectors.append(contentsOf: try await embedBatch(texts: batch))
+        }
+        return vectors
+    }
+
+    private func embedBatch(texts: [String]) async throws -> [[Double]] {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
