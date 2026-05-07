@@ -450,6 +450,16 @@ func runUILayoutSourceChecks() throws {
         "AppModel should provide a dedicated category reparenting path for folder drag and drop"
     )
     try check(
+        appModelSource.contains("let categoryIDs = Set([categoryID]).union(categoryDescendantIDs(of: categoryID))")
+            && appModelSource.contains("isDisjoint(with: categoryIDs)"),
+        "category similarity sources should include papers assigned to descendant folders"
+    )
+    try check(
+        appModelSource.contains("func rerankCurrentDiscoverResults() async")
+            && discoverSource.contains("await model.rerankCurrentDiscoverResults()"),
+        "discover similarity source changes should rerank the current results without another search"
+    )
+    try check(
         appModelSource.contains("assignPapers(_ paperIDs: [String], toTags tagIDs: [String])"),
         "AppModel should provide a batch paper-to-tags assignment path"
     )

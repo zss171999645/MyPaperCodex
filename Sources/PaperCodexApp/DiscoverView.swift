@@ -1250,10 +1250,17 @@ private struct SimilaritySourceMenu: View {
         return "\(model.discoverSelectedSimilaritySourceIDs.count) sources"
     }
 
+    private func selectSources(_ sourceIDs: [String]) {
+        model.discoverSelectedSimilaritySourceIDs = sourceIDs
+        Task {
+            await model.rerankCurrentDiscoverResults()
+        }
+    }
+
     var body: some View {
         Menu {
             Button {
-                model.discoverSelectedSimilaritySourceIDs = []
+                selectSources([])
             } label: {
                 if model.discoverSelectedSimilaritySourceIDs.isEmpty {
                     Label("None", systemImage: "checkmark")
@@ -1266,7 +1273,7 @@ private struct SimilaritySourceMenu: View {
                 Section("Tags") {
                     ForEach(model.tags) { tag in
                         Button {
-                            model.discoverSelectedSimilaritySourceIDs = ["tag:\(tag.id)"]
+                            selectSources(["tag:\(tag.id)"])
                         } label: {
                             if model.discoverSelectedSimilaritySourceIDs == ["tag:\(tag.id)"] {
                                 Label(tag.name, systemImage: "checkmark")
@@ -1282,7 +1289,7 @@ private struct SimilaritySourceMenu: View {
                 Section("Folders") {
                     ForEach(model.categories) { category in
                         Button {
-                            model.discoverSelectedSimilaritySourceIDs = ["category:\(category.id)"]
+                            selectSources(["category:\(category.id)"])
                         } label: {
                             if model.discoverSelectedSimilaritySourceIDs == ["category:\(category.id)"] {
                                 Label(category.name, systemImage: "checkmark")

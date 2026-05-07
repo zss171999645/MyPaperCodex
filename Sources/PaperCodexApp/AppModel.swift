@@ -1002,6 +1002,36 @@ final class AppModel: ObservableObject {
         activeDiscoverSearchTask?.cancel()
     }
 
+    func rerankCurrentDiscoverResults() async {
+        guard let currentFeed = arxivFeed,
+              !isSearchingDiscover,
+              !isProcessingDiscoverResults else {
+            return
+        }
+        do {
+            let range = try DiscoverDateRange(start: discoverStartDate, end: discoverEndDate)
+            let categories = discoverSelectedCategories.isEmpty ? [localDiscoverPreferences.normalized.categories.first ?? "cs.CV"] : discoverSelectedCategories
+            let similaritySourceIDs = effectiveDiscoverSimilaritySourceIDs()
+            let query = DiscoverQuery(
+                keyword: discoverKeyword,
+                dateRange: range,
+                categories: categories,
+                similaritySourceIDs: similaritySourceIDs,
+                rankingVersion: discoverRankingVersion()
+            ).normalized
+            let rankedFeed = try await applyDiscoverRanking(to: resetDiscoverRanking(in: currentFeed), query: query)
+            let filteredFeed = filterDiscoverFeed(rankedFeed, keyword: query.keyword)
+            try displayDiscoverFeed(
+                filteredFeed,
+                query: query,
+                progressTitle: similaritySourceIDs.isEmpty ? "Similarity cleared" : "Similarity ranking ready",
+                cacheRangeFeed: false
+            )
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
     func searchDiscover() async {
         do {
             isSearchingDiscover = true
@@ -3126,6 +3156,22 @@ final class AppModel: ObservableObject {
         reloadCachedArxivAssets()
     }
 
+    private func resetDiscoverRanking(in feed: ArxivFeedResponse) -> ArxivFeedResponse {
+        let papers = feed.papers.map { paper -> ArxivFeedPaper in
+            var resetPaper = paper
+            resetPaper.similarity = nil
+            resetPaper.filterGroup = nil
+            return resetPaper
+        }
+        return ArxivFeedResponse(
+            date: feed.date,
+            count: papers.count,
+            papers: papers,
+            groups: feed.groups,
+            tagOptions: feed.tagOptions
+        )
+    }
+
     private func filterDiscoverFeed(_ feed: ArxivFeedResponse, keyword: String) -> ArxivFeedResponse {
         let query = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
@@ -3732,7 +3778,8 @@ final class AppModel: ObservableObject {
                 }
             } else if sourceID.hasPrefix("category:") {
                 let categoryID = String(sourceID.dropFirst("category:".count))
-                for paper in papers where paperCategoryIDsByID[paper.id, default: []].contains(categoryID) {
+                let categoryIDs = Set([categoryID]).union(categoryDescendantIDs(of: categoryID))
+                for paper in papers where !Set(paperCategoryIDsByID[paper.id, default: []]).isDisjoint(with: categoryIDs) {
                     selectedPaperIDs.insert(paper.id)
                 }
             } else {
