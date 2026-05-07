@@ -1,7 +1,7 @@
 # Collection Advanced Table Design
 
 Date: 2026-05-07
-Status: approved for implementation planning
+Status: superseded by `2026-05-07-collection-ai-table-workbench-redesign.md`
 
 ## Goal
 
