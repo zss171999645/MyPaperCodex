@@ -429,11 +429,11 @@ public enum DiscoverEnrichmentParser {
             processorVersion: DiscoverPaperEnrichment.currentProcessorVersion,
             promptVersion: DiscoverPaperEnrichment.currentPromptVersion,
             modelIdentity: modelIdentity,
-            titleZH: decoded.titleZH.trimmingCharacters(in: .whitespacesAndNewlines),
-            summaryZH: decoded.summaryZH.trimmingCharacters(in: .whitespacesAndNewlines),
-            contribution: decoded.contribution.trimmingCharacters(in: .whitespacesAndNewlines),
-            tags: normalizedOrdered(decoded.tags),
-            links: decoded.links.filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
+            titleZH: (decoded.titleZH ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            summaryZH: (decoded.summaryZH ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            contribution: (decoded.contribution ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            tags: normalizedOrdered(decoded.tags ?? []),
+            links: (decoded.links ?? [:]).filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
             generatedAt: generatedAt,
             error: nil
         )
@@ -451,11 +451,11 @@ public enum DiscoverEnrichmentParser {
 }
 
 private struct DecodedDiscoverEnrichment: Decodable {
-    var titleZH: String
-    var summaryZH: String
-    var contribution: String
-    var tags: [String]
-    var links: [String: String]
+    var titleZH: String?
+    var summaryZH: String?
+    var contribution: String?
+    var tags: [String]?
+    var links: [String: String]?
 
     private enum CodingKeys: String, CodingKey {
         case titleZH = "title_zh"

@@ -130,19 +130,12 @@ struct DiscoverView: View {
                 )
             }
             .sheet(isPresented: $isShowingProcessSelection) {
-                DiscoverProcessSelectionSheet(
-                    visiblePapers: papers,
-                    allPapers: model.arxivFeed?.papers ?? papers,
-                    enrichmentsByID: model.discoverEnrichmentsByID,
-                    initialSource: model.discoverLastProcessSource,
-                    initialSelectedPaperIDs: model.discoverLastProcessPaperIDs,
-                    languageMode: model.globalLanguageMode,
-                    onConfirm: { source, selectedPaperIDs in
+                DiscoverProcessActionSheet(
+                    paperCount: papers.count,
+                    onConfirm: { actions in
                         isShowingProcessSelection = false
-                        model.saveDiscoverProcessSelection(source: source, paperIDs: selectedPaperIDs)
-                        let selectedPapers = processPapers(source: source, selectedPaperIDs: selectedPaperIDs)
                         Task {
-                            await model.processCurrentDiscoverResults(selectedPapers)
+                            await model.processCurrentDiscoverResults(papers, actions: Set(actions))
                         }
                     },
                     onCancel: {
@@ -418,25 +411,6 @@ struct DiscoverView: View {
             withAnimation(.easeOut(duration: 0.18)) {
                 proxy.scrollTo(paperID, anchor: .center)
             }
-        }
-    }
-
-    private func processPapers(source: DiscoverProcessSource, selectedPaperIDs: [String]) -> [ArxivFeedPaper] {
-        let selectedIDSet = Set(selectedPaperIDs)
-        let sourcePapers: [ArxivFeedPaper]
-        switch source {
-        case .visible:
-            sourcePapers = papers
-        case .allResults:
-            sourcePapers = model.arxivFeed?.papers ?? papers
-        }
-        var seen: Set<String> = []
-        return sourcePapers.filter { paper in
-            guard selectedIDSet.contains(paper.id), !seen.contains(paper.id) else {
-                return false
-            }
-            seen.insert(paper.id)
-            return true
         }
     }
 
@@ -967,58 +941,36 @@ private struct QuickRangeButtons: View {
     }
 }
 
-private struct DiscoverProcessSelectionSheet: View {
+private struct DiscoverProcessActionSheet: View {
     @Environment(\.dismiss) private var dismiss
 
-    var visiblePapers: [ArxivFeedPaper]
-    var allPapers: [ArxivFeedPaper]
-    var enrichmentsByID: [String: DiscoverPaperEnrichment]
-    var languageMode: PaperCodexLanguageMode
-    var onConfirm: (DiscoverProcessSource, [String]) -> Void
+    var paperCount: Int
+    var onConfirm: ([DiscoverProcessAction]) -> Void
     var onCancel: () -> Void
 
-    @State private var source: DiscoverProcessSource
-    @State private var selectedPaperIDs: Set<String>
+    @State private var selectedActions: Set<DiscoverProcessAction>
 
     init(
-        visiblePapers: [ArxivFeedPaper],
-        allPapers: [ArxivFeedPaper],
-        enrichmentsByID: [String: DiscoverPaperEnrichment],
-        initialSource: DiscoverProcessSource,
-        initialSelectedPaperIDs: Set<String>,
-        languageMode: PaperCodexLanguageMode,
-        onConfirm: @escaping (DiscoverProcessSource, [String]) -> Void,
+        paperCount: Int,
+        onConfirm: @escaping ([DiscoverProcessAction]) -> Void,
         onCancel: @escaping () -> Void
     ) {
-        self.visiblePapers = visiblePapers
-        self.allPapers = allPapers
-        self.enrichmentsByID = enrichmentsByID
-        self.languageMode = languageMode
+        self.paperCount = paperCount
         self.onConfirm = onConfirm
         self.onCancel = onCancel
-        let resolvedSource = Self.resolveSource(initialSource, visiblePapers: visiblePapers, allPapers: allPapers)
-        let candidates = Self.candidatePapers(source: resolvedSource, visiblePapers: visiblePapers, allPapers: allPapers)
-        let validIDs = Set(candidates.map(\.id))
-        let rememberedIDs = initialSelectedPaperIDs.intersection(validIDs)
-        let selectedIDs = rememberedIDs.isEmpty ? Self.defaultSelectedIDs(candidates, enrichmentsByID: enrichmentsByID) : rememberedIDs
-        _source = State(initialValue: resolvedSource)
-        _selectedPaperIDs = State(initialValue: selectedIDs)
+        _selectedActions = State(initialValue: Set(DiscoverProcessAction.allCases))
     }
 
-    private var candidatePapers: [ArxivFeedPaper] {
-        Self.candidatePapers(source: source, visiblePapers: visiblePapers, allPapers: allPapers)
-    }
-
-    private var selectedOrderedPaperIDs: [String] {
-        candidatePapers.map(\.id).filter { selectedPaperIDs.contains($0) }
+    private var selectedOrderedActions: [DiscoverProcessAction] {
+        DiscoverProcessAction.allCases.filter { selectedActions.contains($0) }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Select Results to Process")
+                Text("Select Processing Steps")
                     .font(.paperCodexSystem(size: 20, weight: .semibold))
-                Text("\(selectedOrderedPaperIDs.count) selected · \(candidatePapers.count) available")
+                Text("\(paperCount) visible results")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -1027,54 +979,38 @@ private struct DiscoverProcessSelectionSheet: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 12) {
-                Picker("Result Scope", selection: $source) {
-                    ForEach(DiscoverProcessSource.allCases) { source in
-                        Text(LocalizedStringKey(source.title)).tag(source)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 320)
-
                 HStack(spacing: 8) {
-                    Button("Select Needed") {
-                        selectedPaperIDs = Self.defaultSelectedIDs(candidatePapers, enrichmentsByID: enrichmentsByID)
-                    }
                     Button("Select All") {
-                        selectedPaperIDs = Set(candidatePapers.map(\.id))
+                        selectedActions = Set(DiscoverProcessAction.allCases)
                     }
                     Button("Clear") {
-                        selectedPaperIDs = []
+                        selectedActions = []
                     }
                     Spacer()
+                    Text("\(selectedOrderedActions.count)/\(DiscoverProcessAction.allCases.count) steps")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
                 }
                 .controlSize(.small)
-            }
-            .padding(20)
 
-            Divider()
-
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(candidatePapers) { paper in
-                        DiscoverProcessPaperRow(
-                            paper: paper,
-                            enrichment: enrichmentsByID[paper.id],
-                            languageMode: languageMode,
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(DiscoverProcessAction.allCases) { action in
+                        DiscoverProcessActionRow(
+                            action: action,
                             isSelected: Binding(get: {
-                                selectedPaperIDs.contains(paper.id)
+                                selectedActions.contains(action)
                             }, set: { selected in
                                 if selected {
-                                    selectedPaperIDs.insert(paper.id)
+                                    selectedActions.insert(action)
                                 } else {
-                                    selectedPaperIDs.remove(paper.id)
+                                    selectedActions.remove(action)
                                 }
                             })
                         )
-                        Divider()
                     }
                 }
             }
-            .frame(minHeight: 280)
+            .padding(20)
 
             Divider()
 
@@ -1084,127 +1020,46 @@ private struct DiscoverProcessSelectionSheet: View {
                     onCancel()
                     dismiss()
                 }
-                Button("Process \(selectedOrderedPaperIDs.count)") {
-                    onConfirm(source, selectedOrderedPaperIDs)
+                Button("Process Results") {
+                    onConfirm(selectedOrderedActions)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .disabled(selectedOrderedPaperIDs.isEmpty)
+                .disabled(selectedOrderedActions.isEmpty || paperCount == 0)
             }
             .padding(20)
         }
-        .frame(minWidth: 640, minHeight: 560)
-        .onChange(of: source) { _, _ in
-            reconcileSelectionForCurrentSource()
-        }
-    }
-
-    private func reconcileSelectionForCurrentSource() {
-        let validIDs = Set(candidatePapers.map(\.id))
-        selectedPaperIDs = selectedPaperIDs.intersection(validIDs)
-        if selectedPaperIDs.isEmpty {
-            selectedPaperIDs = Self.defaultSelectedIDs(candidatePapers, enrichmentsByID: enrichmentsByID)
-        }
-    }
-
-    private static func resolveSource(
-        _ source: DiscoverProcessSource,
-        visiblePapers: [ArxivFeedPaper],
-        allPapers: [ArxivFeedPaper]
-    ) -> DiscoverProcessSource {
-        if source == .allResults, allPapers.isEmpty, !visiblePapers.isEmpty {
-            return .visible
-        }
-        return source
-    }
-
-    private static func candidatePapers(
-        source: DiscoverProcessSource,
-        visiblePapers: [ArxivFeedPaper],
-        allPapers: [ArxivFeedPaper]
-    ) -> [ArxivFeedPaper] {
-        let sourcePapers = source == .allResults ? allPapers : visiblePapers
-        var seen: Set<String> = []
-        return sourcePapers.filter { paper in
-            guard !seen.contains(paper.id) else {
-                return false
-            }
-            seen.insert(paper.id)
-            return true
-        }
-    }
-
-    private static func defaultSelectedIDs(
-        _ papers: [ArxivFeedPaper],
-        enrichmentsByID: [String: DiscoverPaperEnrichment]
-    ) -> Set<String> {
-        let needed = papers.filter { paper in
-            guard let enrichment = enrichmentsByID[paper.id] else {
-                return true
-            }
-            return enrichment.error != nil || !enrichment.isCurrent
-        }
-        return Set((needed.isEmpty ? papers : needed).map(\.id))
+        .frame(minWidth: 520, minHeight: 360)
     }
 }
 
-private struct DiscoverProcessPaperRow: View {
-    var paper: ArxivFeedPaper
-    var enrichment: DiscoverPaperEnrichment?
-    var languageMode: PaperCodexLanguageMode
+private struct DiscoverProcessActionRow: View {
+    var action: DiscoverProcessAction
     @Binding var isSelected: Bool
 
     var body: some View {
         Toggle(isOn: $isSelected) {
-            HStack(alignment: .top, spacing: 10) {
+            Label {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(paper.displayTitle(language: languageMode.discoverLanguageCode))
-                        .font(.paperCodexSystem(size: 13.5, weight: .medium))
-                        .lineLimit(2)
-                    Text("\(paper.id) · \(paper.primaryCategory ?? paper.categories.first ?? "arXiv")")
-                        .font(.caption.monospacedDigit())
+                    Text(LocalizedStringKey(action.title))
+                        .font(.paperCodexSystem(size: 14, weight: .semibold))
+                    Text(LocalizedStringKey(action.detail))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Spacer(minLength: 12)
-                Text(LocalizedStringKey(statusTitle))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(statusTint)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 4)
-                    .background(statusTint.opacity(0.10), in: Capsule())
+            } icon: {
+                Image(systemName: action.systemImage)
+                    .font(.paperCodexSystem(size: 15, weight: .semibold))
+                    .foregroundStyle(.indigo)
+                    .frame(width: 24)
             }
             .contentShape(Rectangle())
         }
         .toggleStyle(.checkbox)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-    }
-
-    private var statusTitle: String {
-        guard let enrichment else {
-            return "Not Processed"
-        }
-        if enrichment.error != nil {
-            return "Failed"
-        }
-        if enrichment.isCurrent {
-            return "Processed"
-        }
-        return "Needs Update"
-    }
-
-    private var statusTint: Color {
-        switch statusTitle {
-        case "Processed":
-            .green
-        case "Failed":
-            .red
-        case "Needs Update":
-            .orange
-        default:
-            .secondary
-        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

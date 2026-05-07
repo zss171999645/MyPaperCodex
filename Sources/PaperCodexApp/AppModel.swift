@@ -33,18 +33,43 @@ enum ArxivSaveOrganization: String, CaseIterable, Identifiable {
     }
 }
 
-enum DiscoverProcessSource: String, CaseIterable, Identifiable {
-    case visible
-    case allResults = "all-results"
+enum DiscoverProcessAction: String, CaseIterable, Identifiable {
+    case translate
+    case summarize
+    case cachePDFThumbnails = "cache-pdf-thumbnails"
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .visible:
-            "Visible Results"
-        case .allResults:
-            "All Results"
+        case .translate:
+            "Translate"
+        case .summarize:
+            "Summarize"
+        case .cachePDFThumbnails:
+            "Download & Thumbnails"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .translate:
+            "Chinese title translation for each result"
+        case .summarize:
+            "Chinese summary, contribution, tags, and useful links"
+        case .cachePDFThumbnails:
+            "Cache the PDF and render preview thumbnails"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .translate:
+            "character.book.closed"
+        case .summarize:
+            "text.alignleft"
+        case .cachePDFThumbnails:
+            "doc.richtext"
         }
     }
 }
@@ -140,8 +165,6 @@ private let embeddingProviderAPIKeyAccount = "default"
 private let arxivSaveOrganizationDefaultsKey = "PaperCodexArxivSaveOrganization"
 private let quickPromptsDefaultsKey = "PaperCodexQuickPrompts"
 private let librarySidebarWidthDefaultsKey = "PaperCodexLibrarySidebarWidth"
-private let discoverLastProcessSourceDefaultsKey = "PaperCodexDiscoverLastProcessSource"
-private let discoverLastProcessPaperIDsDefaultsKey = "PaperCodexDiscoverLastProcessPaperIDs"
 private let defaultDiscoverCodexConcurrency = 10
 
 private func loadDiscoverCodexConcurrencyFromDefaults() -> Int {
@@ -166,18 +189,6 @@ private func saveQuickPromptsToDefaults(_ prompts: [QuickPrompt]) {
     if let data = try? JSONEncoder().encode(prompts) {
         UserDefaults.standard.set(data, forKey: quickPromptsDefaultsKey)
     }
-}
-
-private func loadDiscoverLastProcessSourceFromDefaults() -> DiscoverProcessSource {
-    guard let value = UserDefaults.standard.string(forKey: discoverLastProcessSourceDefaultsKey),
-          let source = DiscoverProcessSource(rawValue: value) else {
-        return .visible
-    }
-    return source
-}
-
-private func loadDiscoverLastProcessPaperIDsFromDefaults() -> Set<String> {
-    Set(UserDefaults.standard.stringArray(forKey: discoverLastProcessPaperIDsDefaultsKey) ?? [])
 }
 
 private func loadCodexSystemPromptFromDefaults(languageMode: PaperCodexLanguageMode) -> String {
@@ -352,8 +363,6 @@ final class AppModel: ObservableObject {
     @Published var arxivAssetURLs: [String: URL] = [:]
     @Published var arxivPDFThumbnailURLsByID: [String: [URL]] = [:]
     @Published var discoverPaperInteractionStateByID: [String: DiscoverPaperInteractionState] = [:]
-    @Published var discoverLastProcessSource: DiscoverProcessSource = loadDiscoverLastProcessSourceFromDefaults()
-    @Published var discoverLastProcessPaperIDs: Set<String> = loadDiscoverLastProcessPaperIDsFromDefaults()
     @Published var isLoadingArxivFeed = false
     @Published var isRefreshingArxivDates = false
     @Published var isPreloadingArxivAssets = false
@@ -1107,8 +1116,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func processCurrentDiscoverResults(_ papers: [ArxivFeedPaper]) async {
+    func processCurrentDiscoverResults(_ papers: [ArxivFeedPaper], actions: Set<DiscoverProcessAction> = Set(DiscoverProcessAction.allCases)) async {
         guard !isProcessingDiscoverResults else {
+            return
+        }
+        let visiblePapers = uniqueArxivPapers(papers)
+        guard !visiblePapers.isEmpty, !actions.isEmpty else {
             return
         }
         isProcessingDiscoverResults = true
@@ -1120,74 +1133,76 @@ final class AppModel: ObservableObject {
             discoverProcessingProgress = nil
         }
 
-        let visiblePapers = papers
-        let total = visiblePapers.count
         for paper in visiblePapers {
             discoverPaperInteractionStateByID[paper.id] = .queued
         }
-        var completed = 0
-        var cached = 0
-        var failed = 0
-        discoverProcessingProgress = ArxivCacheProgress(
-            date: selectedArxivDate ?? "\(discoverStartDate)...\(discoverEndDate)",
-            title: "Processing results",
-            detail: "0/\(total) processed",
-            completed: completed,
-            total: total
-        )
 
-        let workerCount = min(max(discoverCodexConcurrency, 1), max(total, 1))
-        var nextIndex = 0
+        if actions.contains(.translate) || actions.contains(.summarize) {
+            let total = visiblePapers.count
+            var completed = 0
+            var cached = 0
+            var failed = 0
+            discoverProcessingProgress = ArxivCacheProgress(
+                date: selectedArxivDate ?? "\(discoverStartDate)...\(discoverEndDate)",
+                title: "Processing results",
+                detail: "0/\(total) processed",
+                completed: completed,
+                total: total
+            )
 
-        await withTaskGroup(of: DiscoverPaperProcessingResult.self) { group in
-            for _ in 0..<workerCount {
-                guard nextIndex < visiblePapers.count else {
-                    break
-                }
-                let paper = visiblePapers[nextIndex]
-                nextIndex += 1
-                group.addTask {
-                    await self.processDiscoverPaperForEnrichment(paper)
-                }
-            }
+            let workerCount = min(max(discoverCodexConcurrency, 1), max(total, 1))
+            var nextIndex = 0
 
-            while let result = await group.next() {
-                if result.state == .cancelled {
-                    group.cancelAll()
-                    break
-                }
-                completed += 1
-                switch result.state {
-                case .processed:
-                    break
-                case .cached:
-                    cached += 1
-                case .failed:
-                    failed += 1
-                case .cancelled:
-                    break
-                }
-                updateDiscoverProcessingProgress(completed: completed, cached: cached, failed: failed, total: total)
-                if isCancellingDiscoverProcessing || Task.isCancelled {
-                    group.cancelAll()
-                    break
-                }
-                if nextIndex < visiblePapers.count {
+            await withTaskGroup(of: DiscoverPaperProcessingResult.self) { group in
+                for _ in 0..<workerCount {
+                    guard nextIndex < visiblePapers.count else {
+                        break
+                    }
                     let paper = visiblePapers[nextIndex]
                     nextIndex += 1
                     group.addTask {
-                        await self.processDiscoverPaperForEnrichment(paper)
+                        await self.processDiscoverPaperForEnrichment(paper, actions: actions)
+                    }
+                }
+
+                while let result = await group.next() {
+                    if result.state == .cancelled {
+                        group.cancelAll()
+                        break
+                    }
+                    completed += 1
+                    switch result.state {
+                    case .processed:
+                        break
+                    case .cached:
+                        cached += 1
+                    case .failed:
+                        failed += 1
+                    case .cancelled:
+                        break
+                    }
+                    updateDiscoverProcessingProgress(completed: completed, cached: cached, failed: failed, total: total)
+                    if isCancellingDiscoverProcessing || Task.isCancelled {
+                        group.cancelAll()
+                        break
+                    }
+                    if nextIndex < visiblePapers.count {
+                        let paper = visiblePapers[nextIndex]
+                        nextIndex += 1
+                        group.addTask {
+                            await self.processDiscoverPaperForEnrichment(paper, actions: actions)
+                        }
                     }
                 }
             }
         }
-    }
 
-    func saveDiscoverProcessSelection(source: DiscoverProcessSource, paperIDs: [String]) {
-        discoverLastProcessSource = source
-        discoverLastProcessPaperIDs = Set(paperIDs)
-        UserDefaults.standard.set(source.rawValue, forKey: discoverLastProcessSourceDefaultsKey)
-        UserDefaults.standard.set(paperIDs, forKey: discoverLastProcessPaperIDsDefaultsKey)
+        if actions.contains(.cachePDFThumbnails),
+           !isCancellingDiscoverProcessing,
+           !Task.isCancelled {
+            discoverProcessingProgress = nil
+            await cacheDiscoverPDFs(visiblePapers)
+        }
     }
 
     func cancelDiscoverProcessing() {
@@ -1250,14 +1265,15 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func processDiscoverPaperForEnrichment(_ paper: ArxivFeedPaper) async -> DiscoverPaperProcessingResult {
+    private func processDiscoverPaperForEnrichment(_ paper: ArxivFeedPaper, actions: Set<DiscoverProcessAction>) async -> DiscoverPaperProcessingResult {
         if isCancellingDiscoverProcessing || Task.isCancelled {
             discoverPaperInteractionStateByID[paper.id] = .cancelled
             return DiscoverPaperProcessingResult(paperID: paper.id, state: .cancelled)
         }
 
-        if let existing = try? localDiscoverCache.loadEnrichment(arxivID: paper.id),
-           existing.isCurrent {
+        let existing = try? localDiscoverCache.loadEnrichment(arxivID: paper.id)
+        if let existing,
+           discoverEnrichment(existing, satisfies: actions) {
             discoverEnrichmentsByID[paper.id] = existing
             discoverPaperInteractionStateByID[paper.id] = .cached
             return DiscoverPaperProcessingResult(paperID: paper.id, state: .cached)
@@ -1265,7 +1281,7 @@ final class AppModel: ObservableObject {
 
         do {
             discoverPaperInteractionStateByID[paper.id] = .processing
-            let enrichment = try await runDiscoverCodexEnrichment(for: paper)
+            let enrichment = try await runDiscoverCodexEnrichment(for: paper, actions: actions, existing: existing)
             try localDiscoverCache.saveEnrichment(enrichment)
             discoverEnrichmentsByID[paper.id] = enrichment
             discoverPaperInteractionStateByID[paper.id] = .processed
@@ -1293,6 +1309,24 @@ final class AppModel: ObservableObject {
             discoverPaperInteractionStateByID[paper.id] = .failed
             return DiscoverPaperProcessingResult(paperID: paper.id, state: .failed)
         }
+    }
+
+    private func discoverEnrichment(_ enrichment: DiscoverPaperEnrichment, satisfies actions: Set<DiscoverProcessAction>) -> Bool {
+        guard enrichment.isCurrent, enrichment.error == nil else {
+            return false
+        }
+        if actions.contains(.translate),
+           enrichment.titleZH.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return false
+        }
+        if actions.contains(.summarize) {
+            let hasSummary = !enrichment.summaryZH.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let hasContribution = !enrichment.contribution.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if !hasSummary || !hasContribution || enrichment.tags.isEmpty {
+                return false
+            }
+        }
+        return true
     }
 
     func discoverEnrichment(for paper: ArxivFeedPaper) -> DiscoverPaperEnrichment? {
@@ -3978,7 +4012,11 @@ final class AppModel: ObservableObject {
         )
     }
 
-    private func runDiscoverCodexEnrichment(for paper: ArxivFeedPaper) async throws -> DiscoverPaperEnrichment {
+    private func runDiscoverCodexEnrichment(
+        for paper: ArxivFeedPaper,
+        actions: Set<DiscoverProcessAction>,
+        existing: DiscoverPaperEnrichment?
+    ) async throws -> DiscoverPaperEnrichment {
         let executable = try CodexCLI.findCodexExecutable(preferWorkspaceImageOutput: false)
         let cli = CodexCLI(executablePath: executable)
         let workspaceURL = supportRoot
@@ -3989,7 +4027,7 @@ final class AppModel: ObservableObject {
         let eventLogURL = workspaceURL.appendingPathComponent("events.jsonl")
         let modelOverride = effectiveDiscoverCodexModelOverride()
         let modelIdentity = modelOverride.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "codex" : "codex:\(modelOverride)"
-        let prompt = discoverEnrichmentPrompt(for: paper)
+        let prompt = discoverEnrichmentPrompt(for: paper, actions: actions)
         let arguments = cli.startArguments(
             prompt: prompt,
             workspacePath: workspaceURL.path,
@@ -4011,29 +4049,64 @@ final class AppModel: ObservableObject {
             ) { _ in }
         }.value
         let lastMessage = try String(contentsOf: outputURL, encoding: .utf8)
-        return try DiscoverEnrichmentParser.parse(
+        let parsed = try DiscoverEnrichmentParser.parse(
             lastMessage,
             arxivID: paper.id,
             modelIdentity: modelIdentity,
             generatedAt: Date()
         )
+        return mergeDiscoverEnrichment(parsed, existing: existing, actions: actions)
     }
 
-    private func discoverEnrichmentPrompt(for paper: ArxivFeedPaper) -> String {
-        """
+    private func mergeDiscoverEnrichment(
+        _ parsed: DiscoverPaperEnrichment,
+        existing: DiscoverPaperEnrichment?,
+        actions: Set<DiscoverProcessAction>
+    ) -> DiscoverPaperEnrichment {
+        let currentExisting = existing?.isCurrent == true && existing?.error == nil ? existing : nil
+        return DiscoverPaperEnrichment(
+            arxivID: parsed.arxivID,
+            processorVersion: parsed.processorVersion,
+            promptVersion: parsed.promptVersion,
+            modelIdentity: parsed.modelIdentity,
+            titleZH: actions.contains(.translate) ? parsed.titleZH : currentExisting?.titleZH ?? "",
+            summaryZH: actions.contains(.summarize) ? parsed.summaryZH : currentExisting?.summaryZH ?? "",
+            contribution: actions.contains(.summarize) ? parsed.contribution : currentExisting?.contribution ?? "",
+            tags: actions.contains(.summarize) ? parsed.tags : currentExisting?.tags ?? [],
+            links: actions.contains(.summarize) ? parsed.links : currentExisting?.links ?? [:],
+            generatedAt: parsed.generatedAt,
+            error: nil
+        )
+    }
+
+    private func discoverEnrichmentPrompt(for paper: ArxivFeedPaper, actions: Set<DiscoverProcessAction>) -> String {
+        var schemaLines: [String] = []
+        var taskLines: [String] = []
+        if actions.contains(.translate) {
+            schemaLines.append(#"  "title_zh": "Chinese translation of the title""#)
+            taskLines.append("- Translate the title into concise Chinese.")
+        }
+        if actions.contains(.summarize) {
+            schemaLines.append(#"  "summary_zh": "2 concise Chinese sentences summarizing the paper from title and abstract""#)
+            schemaLines.append(#"  "contribution": "1 concise Chinese sentence naming the main contribution""#)
+            schemaLines.append(#"  "tags": ["3-8 short lowercase tags"]"#)
+            schemaLines.append(#"  "links": {"github": "https://...", "project": "https://...", "hugging_face": "https://..."}"#)
+            taskLines.append("- Summarize the paper and extract discovery tags plus useful project links.")
+        }
+        let schema = "{\n\(schemaLines.joined(separator: ",\n"))\n}"
+        let tasks = taskLines.joined(separator: "\n")
+        return """
         You are helping Paper Codex enrich an arXiv discovery card.
         Return strict JSON only. Do not wrap the JSON in Markdown.
 
         Required JSON schema:
-        {
-          "title_zh": "Chinese translation of the title",
-          "summary_zh": "2 concise Chinese sentences summarizing the paper from title and abstract",
-          "contribution": "1 concise Chinese sentence naming the main contribution",
-          "tags": ["3-8 short lowercase tags"],
-          "links": {"github": "https://...", "project": "https://...", "hugging_face": "https://..."}
-        }
+        \(schema)
 
-        Use empty strings or omit link keys when no link is present. Tags should be useful for paper discovery.
+        Selected tasks:
+        \(tasks)
+
+        Include only the selected schema keys. Use empty strings or omit link keys when no link is present.
+        Tags should be useful for paper discovery.
 
         arXiv ID: \(paper.id)
         Primary category: \(paper.primaryCategory ?? paper.categories.first ?? "unknown")

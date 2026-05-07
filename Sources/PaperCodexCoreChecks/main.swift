@@ -1089,12 +1089,33 @@ func runUILayoutSourceChecks() throws {
         "Discover toolbar should not expose a separate PDF cache action"
     )
     try check(
-        discoverSource.contains("DiscoverProcessSelectionSheet"),
-        "Discover Process Results should open a selection sheet before starting processing"
+        discoverSource.contains("DiscoverProcessActionSheet"),
+        "Discover Process Results should open an action sheet before starting processing"
     )
     try check(
-        appModelSource.contains("discoverLastProcessPaperIDs") && appModelSource.contains("saveDiscoverProcessSelection"),
-        "Discover should remember the user's last process selection"
+        appModelSource.contains("enum DiscoverProcessAction")
+            && appModelSource.contains("case translate")
+            && appModelSource.contains("case summarize")
+            && appModelSource.contains("case cachePDFThumbnails"),
+        "Discover processing should model selectable processing actions instead of paper selection"
+    )
+    try check(
+        discoverSource.contains("Set(DiscoverProcessAction.allCases)")
+            && !discoverSource.contains("initialSelectedPaperIDs")
+            && !discoverSource.contains("DiscoverProcessPaperRow"),
+        "Discover processing actions should default to all selected and should not render per-paper selection rows"
+    )
+    try check(
+        appModelSource.contains("processCurrentDiscoverResults(_ papers: [ArxivFeedPaper], actions:")
+            && appModelSource.contains("actions.contains(.cachePDFThumbnails)")
+            && appModelSource.contains("await cacheDiscoverPDFs(visiblePapers)"),
+        "Discover processing should run selected actions, including PDF download and thumbnail generation"
+    )
+    try check(
+        appModelSource.contains("processDiscoverPaperForEnrichment(paper, actions: actions)")
+            && appModelSource.contains("discoverEnrichment(existing, satisfies: actions)")
+            && appModelSource.contains("discoverEnrichmentPrompt(for: paper, actions: actions)"),
+        "Discover translation and summarization actions should use action-aware enrichment prompts and cache completeness checks"
     )
     try check(
         discoverSource.contains("activeFilterChips"),
@@ -2821,6 +2842,20 @@ func runLocalDiscoverEngineChecks() throws {
     try check(parsed.titleZH == "本地优先的发现引擎", "discover parser should read Chinese title")
     try check(parsed.tags == ["local-first", "arxiv"], "discover parser should dedupe tags while preserving order")
     try check(parsed.links["github"] == "https://github.com/example/discover", "discover parser should preserve extracted links")
+
+    let partialCodexJSON = """
+    {
+      "title_zh": "只翻译标题"
+    }
+    """
+    let partialParsed = try DiscoverEnrichmentParser.parse(
+        partialCodexJSON,
+        arxivID: "2604.18805",
+        modelIdentity: "codex-test",
+        generatedAt: Date(timeIntervalSince1970: 1_777_300_011)
+    )
+    try check(partialParsed.titleZH == "只翻译标题", "discover parser should read action-specific partial enrichment JSON")
+    try check(partialParsed.summaryZH.isEmpty && partialParsed.tags.isEmpty, "discover parser should default omitted enrichment fields to empty values")
 }
 
 func runLocalArxivClientChecks() throws {
