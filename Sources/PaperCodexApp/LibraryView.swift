@@ -365,6 +365,7 @@ struct LibraryView: View {
                         depth: item.depth,
                         hasChildren: hasChildCategories(item.category.id),
                         isExpanded: !collapsedCategoryIDs.contains(item.category.id),
+                        categoryDragPayload: categoryDragPayload(for: item.category),
                         onToggle: {
                             toggleCategoryCollapsed(item.category.id)
                         },
@@ -385,6 +386,12 @@ struct LibraryView: View {
                             selectedLibrarySurface = .papers
                             selectedCategoryID = item.category.id
                             selectedTagID = nil
+                        },
+                        onDropCategory: { droppedCategoryID in
+                            guard droppedCategoryID != item.category.id else {
+                                return
+                            }
+                            model.moveCategory(droppedCategoryID, toParent: item.category.id)
                         }
                     )
                 }
@@ -1117,6 +1124,10 @@ struct LibraryView: View {
         paperIDsForDrag(startingWith: paper).joined(separator: "\n")
     }
 
+    private func categoryDragPayload(for category: PaperCodexCore.Category) -> String {
+        "\(LibraryLayout.categoryDragPayloadPrefix)\(category.id)"
+    }
+
     private func categories(for paper: Paper) -> [PaperCodexCore.Category] {
         let ids = Set(model.paperCategoryIDsByID[paper.id, default: []])
         return model.categories.filter { ids.contains($0.id) }
@@ -1349,6 +1360,16 @@ private enum LibraryLayout {
     static let bulkActionBarOverlayYOffset: CGFloat = 42
     static let bulkActionBarOverlayOpacity = 0.84
     static let categoryDropContentTypes: [UTType] = [.plainText]
+    static let categoryDragPayloadPrefix = "papercodex-category-id:"
+
+    static func droppedCategoryID(from payload: String) -> String? {
+        guard payload.hasPrefix(categoryDragPayloadPrefix) else {
+            return nil
+        }
+        let categoryID = String(payload.dropFirst(categoryDragPayloadPrefix.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return categoryID.isEmpty ? nil : categoryID
+    }
 }
 
 private struct PaperRow: View {
@@ -2142,11 +2163,13 @@ private struct CategorySidebarRow: View {
     var depth: Int
     var hasChildren: Bool
     var isExpanded: Bool
+    var categoryDragPayload: String
     var onToggle: () -> Void
     var onSelect: () -> Void
     var onCreateChild: () -> Void
     var onManage: () -> Void
     var onDropPapers: ([String]) -> Void
+    var onDropCategory: (String) -> Void
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -2225,10 +2248,13 @@ private struct CategorySidebarRow: View {
         .animation(.easeOut(duration: 0.12), value: isDropActive)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .onDrop(of: LibraryLayout.categoryDropContentTypes, isTargeted: $isDropTargeted) { providers in
-            loadDroppedPaperIDs(from: providers)
+        .onDrag {
+            NSItemProvider(object: categoryDragPayload as NSString)
         }
-        .help("Drop papers into \(title)")
+        .onDrop(of: LibraryLayout.categoryDropContentTypes, isTargeted: $isDropTargeted) { providers in
+            loadDroppedItems(from: providers)
+        }
+        .help("Drop papers or folders into \(title)")
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) {
                 isHovering = hovering
@@ -2240,18 +2266,24 @@ private struct CategorySidebarRow: View {
         isDropTargeted
     }
 
-    private func loadDroppedPaperIDs(from providers: [NSItemProvider]) -> Bool {
+    private func loadDroppedItems(from providers: [NSItemProvider]) -> Bool {
         let textProviders = providers.filter { $0.canLoadObject(ofClass: NSString.self) }
         guard !textProviders.isEmpty else {
             return false
         }
         for provider in textProviders {
             provider.loadObject(ofClass: NSString.self) { object, _ in
-                guard let paperID = (object as? NSString).map(String.init) else {
+                guard let payload = (object as? NSString).map(String.init) else {
                     return
                 }
-                let trimmedPaperID = paperID.trimmingCharacters(in: .whitespacesAndNewlines)
-                let paperIDs = trimmedPaperID
+                let trimmedPayload = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let droppedCategoryID = LibraryLayout.droppedCategoryID(from: trimmedPayload) {
+                    DispatchQueue.main.async {
+                        onDropCategory(droppedCategoryID)
+                    }
+                    return
+                }
+                let paperIDs = trimmedPayload
                     .components(separatedBy: .whitespacesAndNewlines)
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .filter { !$0.isEmpty }

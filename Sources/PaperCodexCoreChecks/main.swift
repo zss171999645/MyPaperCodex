@@ -408,6 +408,12 @@ func runUILayoutSourceChecks() throws {
         "dropping papers onto a folder should move them out of existing folders instead of copying category links"
     )
     try check(
+        librarySource.contains("categoryDragPayload(for: item.category)") &&
+            librarySource.contains("onDropCategory") &&
+            librarySource.contains("droppedCategoryID"),
+        "library category rows should support dragging folders onto other folders"
+    )
+    try check(
         librarySource.contains("bulkActionBarOverlayYOffset"),
         "library bulk action overlay should sit lower over the list instead of hugging the top edge"
     )
@@ -438,6 +444,10 @@ func runUILayoutSourceChecks() throws {
     try check(
         appModelSource.contains("movePapers(_ paperIDs: [String], toCategory categoryID: String?)"),
         "AppModel should provide a batch paper category move path for drag and drop"
+    )
+    try check(
+        appModelSource.contains("moveCategory(_ categoryID: String, toParent parentID: String?)"),
+        "AppModel should provide a dedicated category reparenting path for folder drag and drop"
     )
     try check(
         appModelSource.contains("assignPapers(_ paperIDs: [String], toTags tagIDs: [String])"),

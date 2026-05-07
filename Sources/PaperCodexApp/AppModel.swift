@@ -1779,6 +1779,29 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func moveCategory(_ categoryID: String, toParent parentID: String?) {
+        do {
+            guard let repository else {
+                throw AppModelError.repositoryUnavailable
+            }
+            guard var category = categories.first(where: { $0.id == categoryID }) else {
+                throw AppModelError.categoryNotFound(categoryID)
+            }
+            if parentID == categoryID || categoryDescendantIDs(of: categoryID).contains(parentID ?? "") {
+                throw AppModelError.invalidCategoryMove
+            }
+            guard category.parentID != parentID else {
+                return
+            }
+            category.parentID = parentID
+            try repository.upsertCategory(category)
+            try reloadLibrary()
+            postNotice(kind: .success, title: "Category Moved", message: category.name)
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
     func deleteCategory(_ categoryID: String) {
         do {
             guard let repository else {
