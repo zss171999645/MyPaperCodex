@@ -8,6 +8,9 @@ struct CollectionView: View {
     @State private var isAddingColumn = false
     @State private var collectionPendingRename: PaperCollectionDocument?
     @State private var collectionPendingDelete: PaperCollectionDocument?
+    @State private var filterText = ""
+    @State private var sortColumnID: String?
+    @State private var sortAscending = true
 
     var body: some View {
         SidebarSplitLayout(minContentWidth: 940) {
@@ -23,6 +26,9 @@ struct CollectionView: View {
         }
         .onChange(of: model.selectedCollectionID) { _, _ in
             selectedRowIDs.removeAll()
+            filterText = ""
+            sortColumnID = nil
+            sortAscending = true
         }
         .sheet(isPresented: $isCreatingCollection) {
             CollectionCreateSheet(
@@ -164,12 +170,25 @@ struct CollectionView: View {
     }
 
     private func tablePane(_ collection: PaperCollectionDocument) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let visibleColumns = visibleColumns(for: collection)
+        let displayRows = displayedRows(for: collection)
+
+        return VStack(alignment: .leading, spacing: 0) {
             collectionToolbar(collection)
             Divider()
             CollectionSpreadsheet(
-                collection: collection,
+                rows: displayRows,
+                columns: visibleColumns,
                 selectedRowIDs: $selectedRowIDs,
+                sortColumnID: sortColumnID,
+                sortAscending: sortAscending,
+                onSortColumn: { columnID, ascending in
+                    sortColumnID = columnID
+                    sortAscending = ascending
+                },
+                onHideColumn: { columnID in
+                    model.setCollectionColumnHidden(collectionID: collection.id, columnID: columnID, hidden: true)
+                },
                 onCellCommit: { rowID, columnID, value in
                     model.updateCollectionCell(
                         collectionID: collection.id,
@@ -189,15 +208,18 @@ struct CollectionView: View {
     }
 
     private func collectionToolbar(_ collection: PaperCollectionDocument) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let displayRows = displayedRows(for: collection)
+        let visibleColumnCount = collection.columns.filter { !$0.isHidden }.count
+
+        return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(collection.title)
                         .font(.paperCodexSystem(size: 26, weight: .semibold))
                         .lineLimit(1)
                     HStack(spacing: 10) {
-                        Label("\(collection.rows.count) papers", systemImage: "doc.text")
-                        Label("\(collection.columns.count) columns", systemImage: "rectangle.grid.3x2")
+                        Label(rowCountTitle(displayRows: displayRows.count, totalRows: collection.rows.count), systemImage: "doc.text")
+                        Label("\(visibleColumnCount)/\(collection.columns.count) visible columns", systemImage: "rectangle.grid.3x2")
                         Text(model.collectionJSONPath(for: collection.id))
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -229,59 +251,134 @@ struct CollectionView: View {
                 .help("Delete Collection")
             }
 
-            HStack(spacing: 10) {
-                Button {
-                    isAddingColumn = true
-                } label: {
-                    Label("Column", systemImage: "rectangle.badge.plus")
-                }
-                .buttonStyle(.bordered)
-
-                Menu {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
                     Button {
-                        model.addPapers(
-                            model.papers.filter { !$0.isArxivImportPlaceholder }.map(\.id),
-                            toCollectionID: collection.id
-                        )
+                        isAddingColumn = true
                     } label: {
-                        Label("All Library Papers", systemImage: "books.vertical")
-                    }
-                    Divider()
-                    ForEach(model.categories) { category in
-                        Button {
-                            model.addCategory(category.id, toCollectionID: collection.id)
-                        } label: {
-                            Label(category.name, systemImage: "folder")
-                        }
-                    }
-                } label: {
-                    Label("Add Papers", systemImage: "plus")
-                }
-                .menuStyle(.button)
-
-                Button {
-                    let selectedPapers = model.papers(in: collection, rowIDs: selectedRowIDs.isEmpty ? nil : selectedRowIDs)
-                    model.openPapersForChat(selectedPapers.map(\.id))
-                } label: {
-                    Label(selectedRowIDs.isEmpty ? "Chat All" : "Chat \(selectedRowIDs.count)", systemImage: "text.bubble")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(collection.rows.isEmpty)
-
-                if !selectedRowIDs.isEmpty {
-                    Button {
-                        selectedRowIDs.removeAll()
-                    } label: {
-                        Label("Clear", systemImage: "xmark.circle")
+                        Label("Column", systemImage: "rectangle.badge.plus")
                     }
                     .buttonStyle(.bordered)
+
+                    Menu {
+                        Button {
+                            model.addPapers(
+                                model.papers.filter { !$0.isArxivImportPlaceholder }.map(\.id),
+                                toCollectionID: collection.id
+                            )
+                        } label: {
+                            Label("All Library Papers", systemImage: "books.vertical")
+                        }
+                        Divider()
+                        ForEach(model.categories) { category in
+                            Button {
+                                model.addCategory(category.id, toCollectionID: collection.id)
+                            } label: {
+                                Label(category.name, systemImage: "folder")
+                            }
+                        }
+                    } label: {
+                        Label("Add Papers", systemImage: "plus")
+                    }
+                    .menuStyle(.button)
+
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(.secondary)
+                        TextField("Filter rows", text: $filterText)
+                            .textFieldStyle(.plain)
+                            .frame(width: 220)
+                        if !normalizedFilterText.isEmpty {
+                            Button {
+                                filterText = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .help("Clear Filter")
+                        }
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7)
+                            .stroke(Color.black.opacity(0.10), lineWidth: 1)
+                    )
+                    .help("Filter table rows")
+
+                    Menu {
+                        Button {
+                            sortColumnID = nil
+                        } label: {
+                            Label("No Sort", systemImage: sortColumnID == nil ? "checkmark" : "circle")
+                        }
+                        Divider()
+                        ForEach(collection.columns) { column in
+                            Button {
+                                sortColumnID = column.id
+                                sortAscending = true
+                            } label: {
+                                Label(column.title, systemImage: sortColumnID == column.id ? "checkmark" : column.valueKind.systemImage)
+                            }
+                        }
+                    } label: {
+                        Label(sortLabel(for: collection), systemImage: "arrow.up.arrow.down")
+                    }
+                    .menuStyle(.button)
+
+                    Button {
+                        sortAscending.toggle()
+                    } label: {
+                        Image(systemName: sortAscending ? "arrow.up" : "arrow.down")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(sortColumnID == nil)
+                    .help(sortAscending ? "Ascending" : "Descending")
+
+                    Menu {
+                        ForEach(collection.columns) { column in
+                            let isVisible = !column.isHidden
+                            let isLastVisibleColumn = isVisible && visibleColumnCount <= 1
+                            Button {
+                                model.setCollectionColumnHidden(
+                                    collectionID: collection.id,
+                                    columnID: column.id,
+                                    hidden: isVisible
+                                )
+                            } label: {
+                                Label(column.title, systemImage: isVisible ? "checkmark.circle.fill" : "circle")
+                            }
+                            .disabled(isLastVisibleColumn)
+                        }
+                    } label: {
+                        Label("Columns", systemImage: "rectangle.3.group")
+                    }
+                    .menuStyle(.button)
+
+                    Button {
+                        let selectedPapers = model.papers(in: collection, rowIDs: selectedRowIDs.isEmpty ? nil : selectedRowIDs)
+                        model.openPapersForChat(selectedPapers.map(\.id))
+                    } label: {
+                        Label(selectedRowIDs.isEmpty ? "Chat All" : "Chat \(selectedRowIDs.count)", systemImage: "text.bubble")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(collection.rows.isEmpty)
+
+                    if !selectedRowIDs.isEmpty {
+                        Button {
+                            selectedRowIDs.removeAll()
+                        } label: {
+                            Label("Clear", systemImage: "xmark.circle")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    Label("Codex can edit the JSON source directly", systemImage: "checkmark.seal")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-
-                Spacer()
-
-                Label("Codex can edit the JSON source directly", systemImage: "checkmark.seal")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
             .controlSize(.small)
         }
@@ -291,27 +388,117 @@ struct CollectionView: View {
     private func navButton(title: String, systemImage: String, selected: Bool = false, action: @escaping () -> Void) -> some View {
         SidebarRowButton(title: title, systemImage: systemImage, selected: selected, action: action)
     }
+
+    private var normalizedFilterText: String {
+        filterText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func visibleColumns(for collection: PaperCollectionDocument) -> [PaperCollectionColumn] {
+        let visibleColumns = collection.columns.filter { !$0.isHidden }
+        return visibleColumns.isEmpty ? Array(collection.columns.prefix(1)) : visibleColumns
+    }
+
+    private func displayedRows(for collection: PaperCollectionDocument) -> [PaperCollectionRow] {
+        let query = normalizedFilterText
+        var rows = query.isEmpty ? collection.rows : collection.rows.filter { row in
+            rowMatchesFilter(row, query: query)
+        }
+        if let sortColumnID,
+           let sortColumn = collection.columns.first(where: { $0.id == sortColumnID }) {
+            rows = rows.sorted { left, right in
+                let leftValue = left.values[sortColumn.id, default: ""]
+                let rightValue = right.values[sortColumn.id, default: ""]
+                let leftIsEmpty = leftValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                let rightIsEmpty = rightValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                if leftIsEmpty != rightIsEmpty {
+                    return !leftIsEmpty
+                }
+                let comparison = compareCollectionValues(
+                    leftValue,
+                    rightValue,
+                    kind: sortColumn.valueKind
+                )
+                if comparison == .orderedSame {
+                    return left.values["paper_title", default: ""]
+                        .localizedStandardCompare(right.values["paper_title", default: ""]) == .orderedAscending
+                }
+                return sortAscending ? comparison == .orderedAscending : comparison == .orderedDescending
+            }
+        }
+        return rows
+    }
+
+    private func rowMatchesFilter(_ row: PaperCollectionRow, query: String) -> Bool {
+        row.paperID.localizedCaseInsensitiveContains(query)
+            || row.values.values.contains { value in
+                value.localizedCaseInsensitiveContains(query)
+            }
+    }
+
+    private func compareCollectionValues(_ left: String, _ right: String, kind: PaperCollectionColumnValueKind) -> ComparisonResult {
+        let leftValue = left.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rightValue = right.trimmingCharacters(in: .whitespacesAndNewlines)
+        if leftValue.isEmpty && rightValue.isEmpty {
+            return .orderedSame
+        }
+        if leftValue.isEmpty {
+            return .orderedDescending
+        }
+        if rightValue.isEmpty {
+            return .orderedAscending
+        }
+        if (kind == .number || kind == .year),
+           let leftNumber = collectionNumberValue(leftValue),
+           let rightNumber = collectionNumberValue(rightValue) {
+            if leftNumber == rightNumber {
+                return .orderedSame
+            }
+            return leftNumber < rightNumber ? .orderedAscending : .orderedDescending
+        }
+        return leftValue.localizedStandardCompare(rightValue)
+    }
+
+    private func collectionNumberValue(_ value: String) -> Double? {
+        Double(value.replacingOccurrences(of: ",", with: ""))
+    }
+
+    private func rowCountTitle(displayRows: Int, totalRows: Int) -> String {
+        normalizedFilterText.isEmpty ? "\(totalRows) papers" : "\(displayRows)/\(totalRows) papers"
+    }
+
+    private func sortLabel(for collection: PaperCollectionDocument) -> String {
+        guard let sortColumnID,
+              let column = collection.columns.first(where: { $0.id == sortColumnID }) else {
+            return "Sort"
+        }
+        return column.title
+    }
 }
 
 private struct CollectionSpreadsheet: View {
-    var collection: PaperCollectionDocument
+    var rows: [PaperCollectionRow]
+    var columns: [PaperCollectionColumn]
     @Binding var selectedRowIDs: Set<String>
+    var sortColumnID: String?
+    var sortAscending: Bool
+    var onSortColumn: (String, Bool) -> Void
+    var onHideColumn: (String) -> Void
     var onCellCommit: (String, String, String) -> Void
     var onOpenPaper: (String) -> Void
 
     private var totalWidth: CGFloat {
-        72 + collection.columns.reduce(CGFloat(0)) { $0 + CGFloat($1.width) }
+        72 + columns.reduce(CGFloat(0)) { $0 + CGFloat($1.width) }
     }
 
     var body: some View {
         ScrollView([.horizontal, .vertical]) {
             VStack(alignment: .leading, spacing: 0) {
                 header
-                ForEach(Array(collection.rows.enumerated()), id: \.element.id) { index, row in
+                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                     CollectionTableRow(
                         index: index,
                         row: row,
-                        columns: collection.columns,
+                        columns: columns,
                         isSelected: selectedRowIDs.contains(row.id),
                         onToggleSelection: {
                             toggle(row.id)
@@ -331,11 +518,25 @@ private struct CollectionSpreadsheet: View {
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
+    private var selectedDisplayedCount: Int {
+        rows.filter { selectedRowIDs.contains($0.id) }.count
+    }
+
+    private var selectionIcon: String {
+        if selectedDisplayedCount == 0 {
+            return "circle"
+        }
+        if selectedDisplayedCount == rows.count {
+            return "checkmark.circle.fill"
+        }
+        return "minus.circle.fill"
+    }
+
     private var header: some View {
         HStack(spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: selectedRowIDs.isEmpty ? "circle" : "checkmark.circle.fill")
-                    .foregroundStyle(selectedRowIDs.isEmpty ? Color.secondary : Color.accentColor)
+                Image(systemName: selectionIcon)
+                    .foregroundStyle(selectedDisplayedCount == 0 ? Color.secondary : Color.accentColor)
                 Text("#")
                     .font(.paperCodexSystem(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -345,33 +546,66 @@ private struct CollectionSpreadsheet: View {
             .background(CollectionTableStyle.headerBackground)
             .overlay(CollectionGridLine(), alignment: .trailing)
             .onTapGesture {
-                if selectedRowIDs.count == collection.rows.count {
-                    selectedRowIDs.removeAll()
-                } else {
-                    selectedRowIDs = Set(collection.rows.map(\.id))
-                }
+                toggleDisplayedRows()
             }
 
-            ForEach(collection.columns) { column in
-                HStack(spacing: 7) {
-                    Image(systemName: column.valueKind.systemImage)
-                        .foregroundStyle(column.isLocked ? Color.secondary : Color.accentColor)
-                    Text(column.title)
-                        .lineLimit(1)
-                    if column.isLocked {
-                        Image(systemName: "lock.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary.opacity(0.75))
+            ForEach(columns) { column in
+                Menu {
+                    Button {
+                        onSortColumn(column.id, true)
+                    } label: {
+                        Label("Sort Ascending", systemImage: "arrow.up")
                     }
+                    Button {
+                        onSortColumn(column.id, false)
+                    } label: {
+                        Label("Sort Descending", systemImage: "arrow.down")
+                    }
+                    Divider()
+                    Button {
+                        onHideColumn(column.id)
+                    } label: {
+                        Label("Hide Column", systemImage: "eye.slash")
+                    }
+                    .disabled(columns.count <= 1)
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: column.valueKind.systemImage)
+                            .foregroundStyle(Color.accentColor)
+                        Text(column.title)
+                            .lineLimit(1)
+                        if sortColumnID == column.id {
+                            Image(systemName: sortAscending ? "arrow.up" : "arrow.down")
+                                .font(.caption2)
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.paperCodexSystem(size: 12.5, weight: .semibold))
+                    .frame(width: CGFloat(column.width), height: 36, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .background(CollectionTableStyle.headerBackground)
+                    .overlay(CollectionGridLine(), alignment: .trailing)
                 }
-                .font(.paperCodexSystem(size: 12.5, weight: .semibold))
-                .frame(width: CGFloat(column.width), height: 36, alignment: .leading)
-                .padding(.horizontal, 10)
-                .background(CollectionTableStyle.headerBackground)
-                .overlay(CollectionGridLine(), alignment: .trailing)
+                .menuStyle(.borderlessButton)
             }
         }
         .overlay(CollectionGridLine(), alignment: .bottom)
+    }
+
+    private func toggleDisplayedRows() {
+        let displayedIDs = Set(rows.map(\.id))
+        guard !displayedIDs.isEmpty else {
+            return
+        }
+        if displayedIDs.isSubset(of: selectedRowIDs) {
+            selectedRowIDs.subtract(displayedIDs)
+        } else {
+            selectedRowIDs.formUnion(displayedIDs)
+        }
     }
 
     private func toggle(_ rowID: String) {
@@ -446,73 +680,42 @@ private struct CollectionTableCell: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        Group {
-            if column.isLocked {
-                lockedContent
-            } else {
-                TextField(column.title, text: $draft)
-                    .textFieldStyle(.plain)
-                    .font(.paperCodexSystem(size: 13))
-                    .focused($isFocused)
-                    .onAppear {
-                        draft = value
-                    }
-                    .onChange(of: value) { _, newValue in
-                        if !isFocused {
-                            draft = newValue
-                        }
-                    }
-                    .onChange(of: isFocused) { _, focused in
-                        if !focused, draft != value {
-                            onCommit(draft)
-                        }
-                    }
-                    .onSubmit {
-                        onCommit(draft)
-                    }
+        HStack(spacing: 6) {
+            if let onOpenPaper {
+                Button(action: onOpenPaper) {
+                    Image(systemName: "arrow.up.right.square")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+                .help("Open Paper")
             }
-        }
-    }
-
-    @ViewBuilder
-    private var lockedContent: some View {
-        if column.valueKind == .tags || column.valueKind == .categories {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 5) {
-                    ForEach(splitChips(value), id: \.self) { chip in
-                        Text(chip)
-                            .font(.paperCodexSystem(size: 11.5, weight: .medium))
-                            .lineLimit(1)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 5))
+            TextField(column.title, text: $draft)
+                .textFieldStyle(.plain)
+                .font(.paperCodexSystem(size: 13, weight: column.id == "paper_title" ? .medium : .regular))
+                .focused($isFocused)
+                .onAppear {
+                    draft = value
+                }
+                .onChange(of: value) { _, newValue in
+                    if !isFocused {
+                        draft = newValue
                     }
                 }
-            }
-        } else if column.id == "paper_title", let onOpenPaper {
-            Button(action: onOpenPaper) {
-                Text(value.isEmpty ? "Untitled" : value)
-                    .font(.paperCodexSystem(size: 13, weight: .medium))
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
-            .help("Open Paper")
-        } else {
-            Text(value.isEmpty ? " " : value)
-                .font(.paperCodexSystem(size: 13))
-                .foregroundStyle(value.isEmpty ? .secondary : .primary)
-                .lineLimit(1)
-                .truncationMode(.tail)
+                .onChange(of: isFocused) { _, focused in
+                    if !focused {
+                        commitDraft()
+                    }
+                }
+                .onSubmit {
+                    commitDraft()
+                }
         }
     }
 
-    private func splitChips(_ value: String) -> [String] {
-        value
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+    private func commitDraft() {
+        if draft != value {
+            onCommit(draft)
+        }
     }
 }
 

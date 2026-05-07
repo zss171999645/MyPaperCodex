@@ -20,19 +20,51 @@ public struct PaperCollectionColumn: Codable, Equatable, Identifiable, Sendable 
     public var valueKind: PaperCollectionColumnValueKind
     public var width: Double
     public var isLocked: Bool
+    public var isHidden: Bool
 
     public init(
         id: String,
         title: String,
         valueKind: PaperCollectionColumnValueKind,
         width: Double,
-        isLocked: Bool = false
+        isLocked: Bool = false,
+        isHidden: Bool = false
     ) {
         self.id = id
         self.title = title
         self.valueKind = valueKind
         self.width = width
         self.isLocked = isLocked
+        self.isHidden = isHidden
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case valueKind
+        case width
+        case isLocked
+        case isHidden
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        valueKind = try container.decode(PaperCollectionColumnValueKind.self, forKey: .valueKind)
+        width = try container.decode(Double.self, forKey: .width)
+        isLocked = try container.decodeIfPresent(Bool.self, forKey: .isLocked) ?? false
+        isHidden = try container.decodeIfPresent(Bool.self, forKey: .isHidden) ?? false
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(valueKind, forKey: .valueKind)
+        try container.encode(width, forKey: .width)
+        try container.encode(isLocked, forKey: .isLocked)
+        try container.encode(isHidden, forKey: .isHidden)
     }
 }
 
@@ -233,6 +265,14 @@ public struct PaperCollectionDocument: Codable, Equatable, Identifiable, Sendabl
         self.updatedAt = updatedAt
     }
 
+    public mutating func setColumnHidden(_ columnID: String, hidden: Bool, updatedAt: Date = Date()) {
+        guard let columnIndex = columns.firstIndex(where: { $0.id == columnID }) else {
+            return
+        }
+        columns[columnIndex].isHidden = hidden
+        self.updatedAt = updatedAt
+    }
+
     public mutating func refreshPaperMetadata(_ papers: [PaperCollectionSeedPaper], updatedAt: Date = Date()) {
         let papersByID = Dictionary(uniqueKeysWithValues: papers.map { ($0.paperID, $0) })
         for index in rows.indices {
@@ -261,7 +301,7 @@ public struct PaperCollectionDocument: Codable, Equatable, Identifiable, Sendabl
         - Do not change schemaVersion, collection id, row ids, paperID values, or locked metadata column ids.
         - You may update rows[].values for analysis, classification, summaries, tags, decisions, and notes requested by the user.
         - You may append new unlocked columns to columns when the user asks for a new comparison axis. Column ids must be lowercase snake_case and unique.
-        - Every new column must include id, title, valueKind, width, and isLocked. Set isLocked to false for user/Codex columns.
+        - Every new column must include id, title, valueKind, width, isLocked, and isHidden. Set isLocked to false for user/Codex columns. Set isHidden to false unless the user explicitly asks to hide it.
         - valueKind must be one of: text, long_text, badge, number, date.
         - For every new column id, add a string value for every row in rows[].values.
         - Every row value must be a string. Use an empty string when the value is unknown.

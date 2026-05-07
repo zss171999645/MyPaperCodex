@@ -800,10 +800,22 @@ final class AppModel: ObservableObject {
                 throw AppModelError.collectionNotFound(collectionID)
             }
             var collection = collections[collectionIndex]
-            guard collection.columns.first(where: { $0.id == columnID })?.isLocked == false else {
-                return
-            }
             collection.updateCell(rowID: rowID, columnID: columnID, value: value)
+            try collectionStore.save(collection)
+            collections[collectionIndex] = collection
+            selectedCollectionID = collectionID
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func setCollectionColumnHidden(collectionID: String, columnID: String, hidden: Bool) {
+        do {
+            guard let collectionIndex = collections.firstIndex(where: { $0.id == collectionID }) else {
+                throw AppModelError.collectionNotFound(collectionID)
+            }
+            var collection = collections[collectionIndex]
+            collection.setColumnHidden(columnID, hidden: hidden)
             try collectionStore.save(collection)
             collections[collectionIndex] = collection
             selectedCollectionID = collectionID
@@ -901,7 +913,7 @@ final class AppModel: ObservableObject {
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
-            guard var collection = collections.first(where: { $0.id == collectionID }) else {
+            guard let collection = collections.first(where: { $0.id == collectionID }) else {
                 throw AppModelError.collectionNotFound(collectionID)
             }
             activeRunKey = runKey
@@ -913,8 +925,6 @@ final class AppModel: ObservableObject {
 
             let paperIDs = uniqueIDs(collection.rows.map(\.paperID))
             let collectionPapers = try repository.fetchPapers(ids: paperIDs).filter { !$0.isArxivImportPlaceholder }
-            let seedPapers = try collectionSeedPapers(for: collectionPapers.map(\.id))
-            collection.refreshPaperMetadata(seedPapers)
             try collectionStore.save(collection)
 
             let workspaceURL = collectionStore
@@ -1044,7 +1054,7 @@ final class AppModel: ObservableObject {
             )
         )
         let columns = collection.columns.map { column in
-            "- \(column.id): \(column.title) (\(column.valueKind.rawValue), locked: \(column.isLocked))"
+            "- \(column.id): \(column.title) (\(column.valueKind.rawValue), locked: \(column.isLocked), hidden: \(column.isHidden))"
         }.joined(separator: "\n")
         return """
         \(paperPrompt)

@@ -200,6 +200,7 @@ func runCollectionChecks() throws {
     try check(document.rows[0].paperID == "paper-a", "collection row should preserve paper id")
     try check(document.rows[0].values["paper_title"] == "Representation Autoencoders", "collection row should copy existing title metadata")
     try check(document.rows[0].values["tags"] == "vae, diffusion", "collection row should copy existing tag metadata")
+    try check(document.columns.allSatisfy { !$0.isHidden }, "collection columns should be visible by default")
 
     var edited = document
     let customColumn = PaperCollectionColumn(
@@ -225,6 +226,8 @@ func runCollectionChecks() throws {
     try check(edited.rows.count == 2, "collection should append new paper rows")
     try check(edited.rows[0].values[customColumn.id] == "latent", "adding papers should preserve existing custom cells")
     try check(edited.rows[1].values[customColumn.id] == "", "new rows should initialize custom cells")
+    edited.setColumnHidden("authors", hidden: true, updatedAt: now.addingTimeInterval(90))
+    try check(edited.columns.first { $0.id == "authors" }?.isHidden == true, "collection columns should support persistent hiding")
 
     let tempRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("paper-codex-collections-\(UUID().uuidString)", isDirectory: true)
@@ -238,6 +241,7 @@ func runCollectionChecks() throws {
     let contract = PaperCollectionDocument.codexEditingContract(collectionJSONPath: "/tmp/collection.json")
     try check(contract.contains("collection.json"), "collection codex contract should name the editable JSON source")
     try check(contract.contains("Do not change"), "collection codex contract should protect stable ids")
+    try check(contract.contains("isHidden"), "collection codex contract should include hidden-column state")
 }
 
 func runCollectionSourceChecks() throws {
@@ -576,6 +580,17 @@ func runUILayoutSourceChecks() throws {
         collectionSource.contains("model.addColumn(toCollectionID:")
             && collectionSource.contains("model.updateCollectionCell("),
         "CollectionView should support user-added columns and editable custom cells"
+    )
+    try check(
+        collectionSource.contains("@State private var filterText")
+            && collectionSource.contains("@State private var sortColumnID")
+            && collectionSource.contains("model.setCollectionColumnHidden"),
+        "CollectionView should support filtering, sorting, and hiding columns"
+    )
+    try check(
+        !collectionSource.contains("lock.fill")
+            && !appModelSource.contains("collection.columns.first(where: { $0.id == columnID })?.isLocked == false"),
+        "Collection table cells should stay editable even for metadata columns"
     )
     try check(
         collectionSource.contains("model.addCategory(category.id, toCollectionID: collection.id)")
