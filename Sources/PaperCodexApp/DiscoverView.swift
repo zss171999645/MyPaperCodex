@@ -15,6 +15,7 @@ struct DiscoverView: View {
     @State private var previewPaper: ArxivFeedPaper?
     @State private var discoverRowHeights: [Int: CGFloat] = [:]
     @State private var isShowingProcessSelection = false
+    @State private var isDiscoverScrollTrackingEnabled = false
 
     private var papers: [ArxivFeedPaper] {
         var result = model.arxivFeed?.papers ?? []
@@ -321,17 +322,18 @@ struct DiscoverView: View {
                             .onChange(of: layoutSignature) { _, _ in
                                 discoverRowHeights = [:]
                             }
+                            .onPreferenceChange(DiscoverVisiblePaperPreferenceKey.self) { positions in
+                                recordDiscoverVisiblePaper(positions)
+                            }
                             .task(id: "\(layoutSignature):\(imagePreloadURLs.count)") {
                                 await warmDiscoverLocalImages(imagePreloadURLs)
                             }
                         }
+                        .coordinateSpace(name: DiscoverScrollCoordinateSpace.name)
                         .onAppear {
                             restoreDiscoverScrollPosition(scrollProxy)
                         }
                         .onChange(of: layoutSignature) { _, _ in
-                            restoreDiscoverScrollPosition(scrollProxy)
-                        }
-                        .onChange(of: model.discoverReturnPaperID) { _, _ in
                             restoreDiscoverScrollPosition(scrollProxy)
                         }
                     }
@@ -393,24 +395,56 @@ struct DiscoverView: View {
                 paperPendingSave = paper
             },
             onOpen: {
-                model.discoverReturnPaperID = paper.id
+                model.recordDiscoverScrollPosition(paper.id)
                 Task {
                     await model.openArxivPaper(paper)
                 }
             }
         )
         .background(DiscoverCardHeightReporter(rowIndex: rowIndex))
+        .background(DiscoverVisiblePaperReporter(paperID: paper.id))
     }
 
     private func restoreDiscoverScrollPosition(_ proxy: ScrollViewProxy) {
-        guard let paperID = model.discoverReturnPaperID,
+        isDiscoverScrollTrackingEnabled = false
+        guard let paperID = model.discoverScrollPositionPaperID,
               papers.contains(where: { $0.id == paperID }) else {
+            isDiscoverScrollTrackingEnabled = true
             return
         }
         DispatchQueue.main.async {
             withAnimation(.easeOut(duration: 0.18)) {
-                proxy.scrollTo(paperID, anchor: .center)
+                proxy.scrollTo(paperID, anchor: .top)
             }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                isDiscoverScrollTrackingEnabled = true
+            }
+        }
+    }
+
+    private func recordDiscoverVisiblePaper(_ positions: [String: CGFloat]) {
+        guard isDiscoverScrollTrackingEnabled, !positions.isEmpty else {
+            return
+        }
+        let ordered = papers.enumerated().compactMap { index, paper -> (index: Int, paperID: String, minY: CGFloat)? in
+            guard let minY = positions[paper.id] else {
+                return nil
+            }
+            return (index, paper.id, minY)
+        }
+        guard !ordered.isEmpty else {
+            return
+        }
+        let candidate = ordered.min { left, right in
+            let leftDistance = abs(left.minY)
+            let rightDistance = abs(right.minY)
+            if abs(leftDistance - rightDistance) > 0.5 {
+                return leftDistance < rightDistance
+            }
+            return left.index < right.index
+        }
+        if let candidate {
+            model.recordDiscoverScrollPosition(candidate.paperID)
         }
     }
 
@@ -1530,6 +1564,33 @@ private struct DiscoverCardHeightReporter: View {
                 key: DiscoverRowHeightPreferenceKey.self,
                 value: [rowIndex: proxy.size.height]
             )
+        }
+    }
+}
+
+private enum DiscoverScrollCoordinateSpace {
+    static let name = "discover-scroll"
+}
+
+private struct DiscoverVisiblePaperReporter: View {
+    var paperID: String
+
+    var body: some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: DiscoverVisiblePaperPreferenceKey.self,
+                value: [paperID: proxy.frame(in: .named(DiscoverScrollCoordinateSpace.name)).minY]
+            )
+        }
+    }
+}
+
+private struct DiscoverVisiblePaperPreferenceKey: PreferenceKey {
+    static let defaultValue: [String: CGFloat] = [:]
+
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        for (paperID, minY) in nextValue() {
+            value[paperID] = minY
         }
     }
 }

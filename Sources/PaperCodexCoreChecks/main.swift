@@ -1073,6 +1073,15 @@ func runUILayoutSourceChecks() throws {
         "Discover cards should show per-paper processing and cache state"
     )
     try check(
+        appModelSource.contains("discoverScrollPositionPaperID")
+            && appModelSource.contains("recordDiscoverScrollPosition")
+            && discoverSource.contains("DiscoverVisiblePaperPreferenceKey")
+            && discoverSource.contains(".coordinateSpace(name: DiscoverScrollCoordinateSpace.name)")
+            && discoverSource.contains("restoreDiscoverScrollPosition(scrollProxy)")
+            && !discoverSource.contains("discoverReturnPaperID"),
+        "Discover should record the current visible paper and restore that scroll position when returning from Reader or other app sections"
+    )
+    try check(
         discoverSource.contains("DatePicker(") && discoverSource.contains(".datePickerStyle(.compact)"),
         "Discover date range controls should open native date picker popovers instead of relying on typed text fields"
     )

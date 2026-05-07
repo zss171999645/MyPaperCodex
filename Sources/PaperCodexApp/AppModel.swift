@@ -166,6 +166,7 @@ private let embeddingProviderAPIKeyAccount = "default"
 private let arxivSaveOrganizationDefaultsKey = "PaperCodexArxivSaveOrganization"
 private let quickPromptsDefaultsKey = "PaperCodexQuickPrompts"
 private let librarySidebarWidthDefaultsKey = "PaperCodexLibrarySidebarWidth"
+private let discoverScrollPositionPaperIDDefaultsKey = "PaperCodexDiscoverScrollPositionPaperID"
 private let defaultDiscoverCodexConcurrency = 10
 
 private func loadDiscoverCodexConcurrencyFromDefaults() -> Int {
@@ -190,6 +191,12 @@ private func saveQuickPromptsToDefaults(_ prompts: [QuickPrompt]) {
     if let data = try? JSONEncoder().encode(prompts) {
         UserDefaults.standard.set(data, forKey: quickPromptsDefaultsKey)
     }
+}
+
+private func loadDiscoverScrollPositionPaperIDFromDefaults() -> String? {
+    let value = UserDefaults.standard.string(forKey: discoverScrollPositionPaperIDDefaultsKey)?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    return value?.isEmpty == false ? value : nil
 }
 
 private func loadCodexSystemPromptFromDefaults(languageMode: PaperCodexLanguageMode) -> String {
@@ -308,7 +315,6 @@ final class AppModel: ObservableObject {
     @Published var librarySelectedCategoryID: String?
     @Published var librarySelectedTagID: String?
     @Published var readerReturnRoute: AppRoute = .library
-    @Published var discoverReturnPaperID: String?
     @Published var selectedPaper: Paper?
     @Published var readerTabState = ReaderTabState()
     @Published var selectedSession: PaperSession?
@@ -364,6 +370,7 @@ final class AppModel: ObservableObject {
     @Published var arxivAssetURLs: [String: URL] = [:]
     @Published var arxivPDFThumbnailURLsByID: [String: [URL]] = [:]
     @Published var discoverPaperInteractionStateByID: [String: DiscoverPaperInteractionState] = [:]
+    @Published var discoverScrollPositionPaperID: String? = loadDiscoverScrollPositionPaperIDFromDefaults()
     @Published var isLoadingArxivFeed = false
     @Published var isRefreshingArxivDates = false
     @Published var isPreloadingArxivAssets = false
@@ -797,6 +804,20 @@ final class AppModel: ObservableObject {
     func showDiscover() {
         route = .discover
         clearReaderContext()
+    }
+
+    func recordDiscoverScrollPosition(_ paperID: String?) {
+        let trimmed = paperID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let normalized = trimmed.isEmpty ? nil : trimmed
+        guard discoverScrollPositionPaperID != normalized else {
+            return
+        }
+        discoverScrollPositionPaperID = normalized
+        if let normalized {
+            UserDefaults.standard.set(normalized, forKey: discoverScrollPositionPaperIDDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: discoverScrollPositionPaperIDDefaultsKey)
+        }
     }
 
     func showSettings() {
