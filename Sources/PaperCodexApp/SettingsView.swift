@@ -132,7 +132,7 @@ struct SettingsView: View {
         } content: {
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
+                    LazyVStack(alignment: .leading, spacing: 22) {
                         header
                         globalLanguageSettings.id(SettingsSectionAnchor.language)
                         arxivFeedSettings.id(SettingsSectionAnchor.arxiv)
@@ -173,9 +173,6 @@ struct SettingsView: View {
         .onAppear {
             syncLocalDrafts()
             model.refreshCacheStorageSummary()
-            Task {
-                await model.refreshAvailableCodexModels()
-            }
         }
         .onChange(of: model.localDiscoverPreferences) { _, _ in
             syncLocalDrafts()
@@ -294,7 +291,7 @@ struct SettingsView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 ScrollView(.vertical) {
-                    VStack(alignment: .leading, spacing: 6) {
+                    LazyVStack(alignment: .leading, spacing: 6) {
                         ForEach(model.categories) { category in
                             similarityCategoryRow(category)
                         }
@@ -463,6 +460,8 @@ struct SettingsView: View {
                             .stroke(Color.black.opacity(0.08), lineWidth: 1)
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .accessibilityLabel("System prompt template editor")
+                    .accessibilityValue("\(draftCodexSystemPrompt.count) characters")
 
                 HStack {
                     Button {
@@ -597,6 +596,8 @@ struct SettingsView: View {
                     .scrollContentBackground(.hidden)
                     .background(Color(nsColor: .controlBackgroundColor))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .accessibilityLabel("New quick prompt editor")
+                    .accessibilityValue("\(newPromptContent.count) characters")
                 Button {
                     model.addQuickPrompt(title: newPromptTitle, content: newPromptContent)
                     if model.errorMessage == nil {
@@ -696,6 +697,8 @@ struct SettingsView: View {
                 .scrollContentBackground(.hidden)
                 .background(Color(nsColor: .controlBackgroundColor))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .accessibilityLabel("Quick prompt editor")
+                .accessibilityValue("\(editingPromptContent.count) characters")
             HStack {
                 Spacer()
                 Button("Cancel") {

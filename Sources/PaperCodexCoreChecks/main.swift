@@ -1401,6 +1401,31 @@ func runUILayoutSourceChecks() throws {
         "settings should expose section anchors in the sidebar"
     )
     try check(
+        settingsViewSource.contains("LazyVStack(alignment: .leading, spacing: 22)")
+            && settingsViewSource.contains("LazyVStack(alignment: .leading, spacing: 6)")
+            && !settingsViewSource.contains(".onAppear {\n            syncLocalDrafts()\n            model.refreshCacheStorageSummary()\n            Task {\n                await model.refreshAvailableCodexModels()\n            }\n        }"),
+        "settings should lazily build offscreen sections and should not refresh Codex models on every route entry"
+    )
+    try check(
+        settingsViewSource.contains(".accessibilityLabel(\"System prompt template editor\")")
+            && settingsViewSource.contains(".accessibilityValue(\"\\(draftCodexSystemPrompt.count) characters\")")
+            && settingsViewSource.contains(".accessibilityLabel(\"New quick prompt editor\")"),
+        "settings should avoid exposing full long prompt editor contents as route-level accessibility text"
+    )
+    try check(
+        appModelSource.contains("@Published var embeddingProviderAPIKey: String = \"\"")
+            && appModelSource.contains("private var embeddingProviderAPIKeyLoadTask: Task<Void, Never>?")
+            && appModelSource.contains("Task.detached(priority: .utility) {\n                loadEmbeddingProviderAPIKeyFromKeychain()")
+            && !appModelSource.contains("@Published var embeddingProviderAPIKey: String = loadEmbeddingProviderAPIKeyFromKeychain()"),
+        "embedding API key should not be read from Keychain during main-actor AppModel initialization"
+    )
+    try check(
+        appModelSource.contains("private var embeddingProviderAPIKeySaveTask: Task<Void, Never>?")
+            && appModelSource.contains("Task.detached(priority: .utility) {\n                    try saveEmbeddingProviderAPIKeyToKeychain(trimmedAPIKey)")
+            && !appModelSource.contains("try saveEmbeddingProviderAPIKeyToKeychain(trimmedAPIKey)\n            embeddingProviderAPIKey = trimmedAPIKey"),
+        "embedding API key saves should not block settings interactions on the main actor"
+    )
+    try check(
         settingsViewSource.contains("navButton(")
             && settingsViewSource.contains("title: anchor.title")
             && settingsViewSource.contains("systemImage: anchor.systemImage"),

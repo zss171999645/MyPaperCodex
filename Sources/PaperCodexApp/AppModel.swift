@@ -355,7 +355,7 @@ final class AppModel: ObservableObject {
     @Published var isRefreshingCodexModels = false
     @Published var isScanningWatchedFolders = false
     @Published var localDiscoverPreferences: LocalDiscoverPreferences = loadLocalDiscoverPreferencesFromDefaults()
-    @Published var embeddingProviderAPIKey: String = loadEmbeddingProviderAPIKeyFromKeychain()
+    @Published var embeddingProviderAPIKey: String = ""
     @Published var arxivSaveOrganization: ArxivSaveOrganization = {
         let stored = UserDefaults.standard.string(forKey: arxivSaveOrganizationDefaultsKey)
         return stored.flatMap(ArxivSaveOrganization.init(rawValue:)) ?? .primaryCategory
@@ -417,6 +417,8 @@ final class AppModel: ObservableObject {
     private var cacheStorageSummaryTask: Task<Void, Never>?
     private var libraryThumbnailRefreshTask: Task<Void, Never>?
     private var readerContextCleanupTask: Task<Void, Never>?
+    private var embeddingProviderAPIKeyLoadTask: Task<Void, Never>?
+    private var embeddingProviderAPIKeySaveTask: Task<Void, Never>?
     private var activeCodexRunHandlesBySessionID: [String: CodexRunHandle] = [:]
     private var activeDiscoverCodexRunHandles: [CodexRunHandle] = []
     private var cancellingCodexRunSessionIDs: Set<String> = []
@@ -537,6 +539,7 @@ final class AppModel: ObservableObject {
             try store.migrate()
             repository = store
             try reloadLibrary()
+            loadEmbeddingProviderAPIKey()
             startDiscoverCacheWarmupIfNeeded()
             refreshCacheStorageSummary()
             Task {
@@ -557,6 +560,8 @@ final class AppModel: ObservableObject {
         cacheStorageSummaryTask?.cancel()
         libraryThumbnailRefreshTask?.cancel()
         readerContextCleanupTask?.cancel()
+        embeddingProviderAPIKeyLoadTask?.cancel()
+        embeddingProviderAPIKeySaveTask?.cancel()
     }
 
     func postNotice(
@@ -584,6 +589,20 @@ final class AppModel: ObservableObject {
 
     func dismissNotice(id: InteractionNotice.ID) {
         notices.removeAll { $0.id == id }
+    }
+
+    private func loadEmbeddingProviderAPIKey() {
+        embeddingProviderAPIKeyLoadTask?.cancel()
+        embeddingProviderAPIKeyLoadTask = Task { [weak self] in
+            let value = await Task.detached(priority: .utility) {
+                loadEmbeddingProviderAPIKeyFromKeychain()
+            }.value
+            guard !Task.isCancelled else {
+                return
+            }
+            self?.embeddingProviderAPIKey = value
+            self?.embeddingProviderAPIKeyLoadTask = nil
+        }
     }
 
     func refreshCacheStorageSummary() {
@@ -1020,17 +1039,32 @@ final class AppModel: ObservableObject {
     }
 
     func setEmbeddingProviderSettings(enabled: Bool, baseURL: String, apiKey: String, model: String) {
-        do {
-            let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            try saveEmbeddingProviderAPIKeyToKeychain(trimmedAPIKey)
-            embeddingProviderAPIKey = trimmedAPIKey
-            var preferences = localDiscoverPreferences
-            preferences.embedding = EmbeddingProviderSettings(enabled: enabled, baseURL: baseURL, model: model)
-            localDiscoverPreferences = preferences.normalized
-            saveLocalDiscoverPreferencesToDefaults(localDiscoverPreferences)
-            postNotice(kind: .success, title: "Embedding Provider Saved")
-        } catch {
-            errorMessage = String(describing: error)
+        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        var preferences = localDiscoverPreferences
+        preferences.embedding = EmbeddingProviderSettings(enabled: enabled, baseURL: baseURL, model: model)
+        let normalizedPreferences = preferences.normalized
+
+        embeddingProviderAPIKeySaveTask?.cancel()
+        embeddingProviderAPIKeySaveTask = Task { [weak self] in
+            do {
+                try await Task.detached(priority: .utility) {
+                    try saveEmbeddingProviderAPIKeyToKeychain(trimmedAPIKey)
+                }.value
+                guard !Task.isCancelled else {
+                    return
+                }
+                self?.embeddingProviderAPIKey = trimmedAPIKey
+                self?.localDiscoverPreferences = normalizedPreferences
+                saveLocalDiscoverPreferencesToDefaults(normalizedPreferences)
+                self?.postNotice(kind: .success, title: "Embedding Provider Saved")
+                self?.embeddingProviderAPIKeySaveTask = nil
+            } catch {
+                guard !Task.isCancelled else {
+                    return
+                }
+                self?.errorMessage = String(describing: error)
+                self?.embeddingProviderAPIKeySaveTask = nil
+            }
         }
     }
 
