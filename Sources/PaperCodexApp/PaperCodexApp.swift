@@ -75,6 +75,7 @@ struct RootView: View {
                     RouteVisibilityHost(route: route, activeRoute: navigation.route) {
                         routedContent(for: route)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
 
@@ -154,6 +155,7 @@ private struct RouteVisibilityHost<Content: View>: View {
 
     var body: some View {
         content()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .opacity(route == activeRoute ? 1 : 0)
             .allowsHitTesting(route == activeRoute)
             .accessibilityHidden(route != activeRoute)

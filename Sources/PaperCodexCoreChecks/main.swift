@@ -543,6 +543,8 @@ func runUILayoutSourceChecks() throws {
             && appSource.contains("mountedRoutes.contains(navigation.route)")
             && appSource.contains("scheduleRouteMount")
             && appSource.contains("scheduleRouteCacheWarmup")
+            && appSource.contains("RouteVisibilityHost(route: route, activeRoute: navigation.route) {\n                        routedContent(for: route)\n                    }\n                    .frame(maxWidth: .infinity, maxHeight: .infinity)")
+            && appSource.contains("content()\n            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)\n            .opacity(route == activeRoute ? 1 : 0)")
             && appSource.contains(".allowsHitTesting(route == activeRoute)")
             && appSource.contains(".accessibilityHidden(route != activeRoute)")
             && !appModelSource.contains("scheduleReaderContextClear()"),
