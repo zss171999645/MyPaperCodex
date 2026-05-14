@@ -1,71 +1,6 @@
 import PaperCodexCore
 import SwiftUI
 
-private enum SettingsSectionAnchor: String, CaseIterable, Identifiable {
-    case language
-    case arxiv
-    case ranking
-    case enrichment
-    case prompt
-    case processing
-    case embedding
-    case quickPrompts
-    case storage
-    case cache
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .language:
-            "Language"
-        case .arxiv:
-            "arXiv Feed"
-        case .ranking:
-            "Ranking"
-        case .enrichment:
-            "Enrichment"
-        case .prompt:
-            "Prompt"
-        case .processing:
-            "Processing"
-        case .embedding:
-            "Embedding"
-        case .quickPrompts:
-            "Quick Prompts"
-        case .storage:
-            "Storage"
-        case .cache:
-            "Cache"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .language:
-            "globe"
-        case .arxiv:
-            "network"
-        case .ranking:
-            "slider.horizontal.3"
-        case .enrichment:
-            "sparkles"
-        case .prompt:
-            "text.quote"
-        case .processing:
-            "cpu"
-        case .embedding:
-            "point.3.connected.trianglepath.dotted"
-        case .quickPrompts:
-            "text.bubble"
-        case .storage:
-            "folder.badge.gearshape"
-        case .cache:
-            "internaldrive"
-        }
-    }
-}
-
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var draftArxivCategories = ""
@@ -84,8 +19,8 @@ struct SettingsView: View {
     @State private var draftEmbeddingModel = ""
     @State private var newPromptTitle = ""
     @State private var newPromptContent = ""
-    @State private var sectionToScroll: SettingsSectionAnchor?
     @State private var isConfirmingClearCache = false
+    @State private var isEditingCodexSystemPrompt = false
     @State private var editingPrompt: QuickPrompt?
     @State private var editingPromptTitle = ""
     @State private var editingPromptContent = ""
@@ -118,7 +53,7 @@ struct SettingsView: View {
         return draftEmbeddingEnabled != embedding.enabled
             || draftEmbeddingBaseURL.trimmingCharacters(in: .whitespacesAndNewlines) != embedding.baseURL
             || draftEmbeddingModel.trimmingCharacters(in: .whitespacesAndNewlines) != embedding.model
-            || draftEmbeddingAPIKey.trimmingCharacters(in: .whitespacesAndNewlines) != model.embeddingProviderAPIKey
+            || !draftEmbeddingAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var codexDefaultModelLabel: String {
@@ -130,32 +65,22 @@ struct SettingsView: View {
         SidebarSplitLayout(minContentWidth: 760) {
             sidebar
         } content: {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 22) {
-                        header
-                        globalLanguageSettings.id(SettingsSectionAnchor.language)
-                        arxivFeedSettings.id(SettingsSectionAnchor.arxiv)
-                        localRankingSettings.id(SettingsSectionAnchor.ranking)
-                        codexEnrichmentSettings.id(SettingsSectionAnchor.enrichment)
-                        codexSystemPromptSettings.id(SettingsSectionAnchor.prompt)
-                        discoverCodexProcessingSettings.id(SettingsSectionAnchor.processing)
-                        embeddingProviderSettings.id(SettingsSectionAnchor.embedding)
-                        quickPromptSettings.id(SettingsSectionAnchor.quickPrompts)
-                        storageRules.id(SettingsSectionAnchor.storage)
-                        cacheControls.id(SettingsSectionAnchor.cache)
-                    }
-                    .padding(28)
-                    .frame(maxWidth: 820, alignment: .leading)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 22) {
+                    header
+                    globalLanguageSettings
+                    arxivFeedSettings
+                    localRankingSettings
+                    codexEnrichmentSettings
+                    codexSystemPromptSettings
+                    discoverCodexProcessingSettings
+                    embeddingProviderSettings
+                    quickPromptSettings
+                    storageRules
+                    cacheControls
                 }
-                .onChange(of: sectionToScroll) { _, anchor in
-                    guard let anchor else {
-                        return
-                    }
-                    withAnimation(.easeOut(duration: 0.22)) {
-                        proxy.scrollTo(anchor, anchor: .top)
-                    }
-                }
+                .padding(28)
+                .frame(maxWidth: 820, alignment: .leading)
             }
             .frame(minWidth: 0)
         }
@@ -169,6 +94,9 @@ struct SettingsView: View {
         }
         .sheet(item: $editingPrompt) { prompt in
             quickPromptEditSheet(prompt)
+        }
+        .sheet(isPresented: $isEditingCodexSystemPrompt) {
+            codexSystemPromptEditSheet
         }
         .onAppear {
             syncLocalDrafts()
@@ -191,25 +119,6 @@ struct SettingsView: View {
                 .font(.paperCodexSystem(size: 24, weight: .semibold))
 
             PrimaryNavigationSection()
-
-            Divider()
-
-            Label("Settings Sections", systemImage: "gearshape")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(SettingsSectionAnchor.allCases) { anchor in
-                    navButton(
-                        title: anchor.title,
-                        systemImage: anchor.systemImage,
-                        selected: sectionToScroll == anchor
-                    ) {
-                        sectionToScroll = anchor
-                    }
-                    .help("Jump to \(anchor.title)")
-                }
-            }
 
             Spacer()
         }
@@ -440,37 +349,29 @@ struct SettingsView: View {
     private var codexSystemPromptSettings: some View {
         settingsSection(title: "Codex System Prompt", systemImage: "text.quote") {
             VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("Template")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text("Workspace placeholder: \(PromptBuilder.workspacePathPlaceholder)")
-                        .font(.caption.monospaced())
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Template")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("Workspace placeholder: \(PromptBuilder.workspacePathPlaceholder)")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("\(model.codexSystemPrompt.count) characters")
+                        .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-
-                TextEditor(text: $draftCodexSystemPrompt)
-                    .font(.paperCodexSystem(size: 13, design: .monospaced))
-                    .frame(height: 240)
-                    .scrollContentBackground(.hidden)
-                    .background(Color(nsColor: .controlBackgroundColor))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.black.opacity(0.08), lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .accessibilityLabel("System prompt template editor")
-                    .accessibilityValue("\(draftCodexSystemPrompt.count) characters")
-
                 HStack {
                     Button {
-                        model.setCodexSystemPrompt(draftCodexSystemPrompt)
+                        draftCodexSystemPrompt = model.codexSystemPrompt
+                        isEditingCodexSystemPrompt = true
                     } label: {
-                        Label("Save", systemImage: "checkmark")
+                        Label("Edit Prompt", systemImage: "pencil")
                     }
                     .buttonStyle(.borderedProminent)
-                    .help("Save System Prompt")
+                    .help("Edit System Prompt")
 
                     Button {
                         model.resetCodexSystemPrompt()
@@ -483,7 +384,7 @@ struct SettingsView: View {
 
                     Spacer()
 
-                    Text(draftCodexSystemPrompt == model.codexSystemPrompt ? "Saved" : "Unsaved")
+                    Text(PromptBuilder.isBuiltInSystemPrompt(model.codexSystemPrompt) ? "Default" : "Custom")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -497,7 +398,7 @@ struct SettingsView: View {
                 .toggleStyle(.checkbox)
             TextField("Base URL", text: $draftEmbeddingBaseURL)
                 .textFieldStyle(.roundedBorder)
-            SecureField("API key", text: $draftEmbeddingAPIKey)
+            SecureField("API key (leave blank to keep saved)", text: $draftEmbeddingAPIKey)
                 .textFieldStyle(.roundedBorder)
             TextField("Model", text: $draftEmbeddingModel)
                 .textFieldStyle(.roundedBorder)
@@ -685,6 +586,52 @@ struct SettingsView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
+    private var codexSystemPromptEditSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label("Edit System Prompt", systemImage: "text.quote")
+                .font(.title3.weight(.semibold))
+            Text("Workspace placeholder: \(PromptBuilder.workspacePathPlaceholder)")
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+            TextEditor(text: $draftCodexSystemPrompt)
+                .font(.paperCodexSystem(size: 13, design: .monospaced))
+                .frame(minHeight: 320)
+                .scrollContentBackground(.hidden)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .accessibilityLabel("System prompt template editor")
+                .accessibilityValue("\(draftCodexSystemPrompt.count) characters")
+            HStack {
+                Text("\(draftCodexSystemPrompt.count) characters")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") {
+                    draftCodexSystemPrompt = model.codexSystemPrompt
+                    isEditingCodexSystemPrompt = false
+                }
+                Button {
+                    model.resetCodexSystemPrompt()
+                    draftCodexSystemPrompt = model.codexSystemPrompt
+                    isEditingCodexSystemPrompt = false
+                } label: {
+                    Label("Default", systemImage: "arrow.counterclockwise")
+                }
+                .buttonStyle(.bordered)
+                Button {
+                    model.setCodexSystemPrompt(draftCodexSystemPrompt)
+                    isEditingCodexSystemPrompt = false
+                } label: {
+                    Label("Save", systemImage: "checkmark")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(draftCodexSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(22)
+        .frame(width: 720, height: 520)
+    }
+
     private func quickPromptEditSheet(_ prompt: QuickPrompt) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             Label("Edit Quick Prompt", systemImage: "pencil")
@@ -738,10 +685,6 @@ struct SettingsView: View {
         }
     }
 
-    private func navButton(title: String, systemImage: String, selected: Bool = false, action: @escaping () -> Void) -> some View {
-        SidebarRowButton(title: title, systemImage: systemImage, selected: selected, action: action)
-    }
-
     private func syncLocalDrafts() {
         let preferences = model.localDiscoverPreferences.normalized
         draftArxivCategories = preferences.categories.joined(separator: ", ")
@@ -757,7 +700,7 @@ struct SettingsView: View {
         draftEmbeddingEnabled = preferences.embedding.enabled
         draftEmbeddingBaseURL = preferences.embedding.baseURL
         draftEmbeddingModel = preferences.embedding.model
-        draftEmbeddingAPIKey = model.embeddingProviderAPIKey
+        draftEmbeddingAPIKey = ""
     }
 
     private func splitDraftList(_ text: String) -> [String] {

@@ -4,9 +4,11 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
-swift build
+configuration="${PAPER_CODEX_BUILD_CONFIGURATION:-release}"
 
-binary_path="$(swift build --show-bin-path)/PaperCodexApp"
+swift build -c "$configuration"
+
+binary_path="$(swift build -c "$configuration" --show-bin-path)/PaperCodexApp"
 app_path="${PAPER_CODEX_APP_PATH:-$HOME/Applications/PaperCodex.app}"
 bundle_identifier="${PAPER_CODEX_BUNDLE_IDENTIFIER:-local.paper-codex.app}"
 codesign_identity="${PAPER_CODEX_CODESIGN_IDENTITY:--}"

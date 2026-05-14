@@ -355,7 +355,6 @@ final class AppModel: ObservableObject {
     @Published var isRefreshingCodexModels = false
     @Published var isScanningWatchedFolders = false
     @Published var localDiscoverPreferences: LocalDiscoverPreferences = loadLocalDiscoverPreferencesFromDefaults()
-    @Published var embeddingProviderAPIKey: String = ""
     @Published var arxivSaveOrganization: ArxivSaveOrganization = {
         let stored = UserDefaults.standard.string(forKey: arxivSaveOrganizationDefaultsKey)
         return stored.flatMap(ArxivSaveOrganization.init(rawValue:)) ?? .primaryCategory
@@ -411,14 +410,15 @@ final class AppModel: ObservableObject {
     private let thumbnailCache: PDFThumbnailCache
     private let workspaceManager = SessionWorkspaceManager()
     private var watchedFolderAutoScanTask: Task<Void, Never>?
+    private var watchedFolderScanTask: Task<Void, Never>?
     private var activeDiscoverSearchTask: Task<Void, Never>?
     private var activeDiscoverPDFCacheTask: Task<Void, Never>?
     private var discoverCacheWarmupTask: Task<Void, Never>?
     private var cacheStorageSummaryTask: Task<Void, Never>?
     private var libraryThumbnailRefreshTask: Task<Void, Never>?
     private var readerContextCleanupTask: Task<Void, Never>?
-    private var embeddingProviderAPIKeyLoadTask: Task<Void, Never>?
     private var embeddingProviderAPIKeySaveTask: Task<Void, Never>?
+    private var cachedEmbeddingProviderAPIKey: String?
     private var activeCodexRunHandlesBySessionID: [String: CodexRunHandle] = [:]
     private var activeDiscoverCodexRunHandles: [CodexRunHandle] = []
     private var cancellingCodexRunSessionIDs: Set<String> = []
@@ -539,11 +539,9 @@ final class AppModel: ObservableObject {
             try store.migrate()
             repository = store
             try reloadLibrary()
-            loadEmbeddingProviderAPIKey()
             startDiscoverCacheWarmupIfNeeded()
             refreshCacheStorageSummary()
             Task {
-                scanWatchedFolders()
                 await refreshCodexDiagnostic()
                 await refreshAvailableCodexModels()
             }
@@ -555,12 +553,12 @@ final class AppModel: ObservableObject {
 
     deinit {
         watchedFolderAutoScanTask?.cancel()
+        watchedFolderScanTask?.cancel()
         activeDiscoverPDFCacheTask?.cancel()
         discoverCacheWarmupTask?.cancel()
         cacheStorageSummaryTask?.cancel()
         libraryThumbnailRefreshTask?.cancel()
         readerContextCleanupTask?.cancel()
-        embeddingProviderAPIKeyLoadTask?.cancel()
         embeddingProviderAPIKeySaveTask?.cancel()
     }
 
@@ -591,18 +589,15 @@ final class AppModel: ObservableObject {
         notices.removeAll { $0.id == id }
     }
 
-    private func loadEmbeddingProviderAPIKey() {
-        embeddingProviderAPIKeyLoadTask?.cancel()
-        embeddingProviderAPIKeyLoadTask = Task { [weak self] in
-            let value = await Task.detached(priority: .utility) {
-                loadEmbeddingProviderAPIKeyFromKeychain()
-            }.value
-            guard !Task.isCancelled else {
-                return
-            }
-            self?.embeddingProviderAPIKey = value
-            self?.embeddingProviderAPIKeyLoadTask = nil
+    private func embeddingProviderAPIKeyValue() async -> String {
+        if let cachedEmbeddingProviderAPIKey {
+            return cachedEmbeddingProviderAPIKey
         }
+        let value = await Task.detached(priority: .utility) {
+            loadEmbeddingProviderAPIKeyFromKeychain()
+        }.value
+        cachedEmbeddingProviderAPIKey = value
+        return value
     }
 
     func refreshCacheStorageSummary() {
@@ -825,29 +820,44 @@ final class AppModel: ObservableObject {
     }
 
     func scanWatchedFolders() {
-        do {
-            guard !isScanningWatchedFolders else {
-                return
+        guard !isScanningWatchedFolders else {
+            return
+        }
+        guard !watchedFolders.isEmpty else {
+            return
+        }
+        isScanningWatchedFolders = true
+        watchedFolderScanTask?.cancel()
+        let databasePath = supportRoot.appendingPathComponent("store.sqlite").path
+        let supportRoot = supportRoot
+        watchedFolderScanTask = Task { [weak self] in
+            do {
+                let results = try await Task.detached(priority: .utility) {
+                    let repository = try PaperRepository(databasePath: databasePath)
+                    return try WatchedFolderScanner(repository: repository, supportRoot: supportRoot)
+                        .scanAllWatchedFolders()
+                }.value
+                guard let self, !Task.isCancelled else {
+                    return
+                }
+                try self.reloadLibrary()
+                let imported = results.flatMap(\.importedPapers).count
+                let existing = results.flatMap(\.existingPapers).count
+                self.postNotice(
+                    kind: imported > 0 ? .success : .info,
+                    title: "Folder Scan Finished",
+                    message: "\(imported) imported · \(existing) already known"
+                )
+                self.isScanningWatchedFolders = false
+                self.watchedFolderScanTask = nil
+            } catch {
+                guard let self, !Task.isCancelled else {
+                    return
+                }
+                self.isScanningWatchedFolders = false
+                self.watchedFolderScanTask = nil
+                self.errorMessage = String(describing: error)
             }
-            guard !watchedFolders.isEmpty else {
-                return
-            }
-            isScanningWatchedFolders = true
-            defer {
-                isScanningWatchedFolders = false
-            }
-
-            let results = try scanAllWatchedFolders()
-            try reloadLibrary()
-            let imported = results.flatMap(\.importedPapers).count
-            let existing = results.flatMap(\.existingPapers).count
-            postNotice(
-                kind: imported > 0 ? .success : .info,
-                title: "Folder Scan Finished",
-                message: "\(imported) imported · \(existing) already known"
-            )
-        } catch {
-            errorMessage = String(describing: error)
         }
     }
 
@@ -1043,7 +1053,13 @@ final class AppModel: ObservableObject {
         var preferences = localDiscoverPreferences
         preferences.embedding = EmbeddingProviderSettings(enabled: enabled, baseURL: baseURL, model: model)
         let normalizedPreferences = preferences.normalized
+        localDiscoverPreferences = normalizedPreferences
+        saveLocalDiscoverPreferencesToDefaults(normalizedPreferences)
 
+        guard !trimmedAPIKey.isEmpty else {
+            postNotice(kind: .success, title: "Embedding Provider Saved")
+            return
+        }
         embeddingProviderAPIKeySaveTask?.cancel()
         embeddingProviderAPIKeySaveTask = Task { [weak self] in
             do {
@@ -1053,9 +1069,7 @@ final class AppModel: ObservableObject {
                 guard !Task.isCancelled else {
                     return
                 }
-                self?.embeddingProviderAPIKey = trimmedAPIKey
-                self?.localDiscoverPreferences = normalizedPreferences
-                saveLocalDiscoverPreferencesToDefaults(normalizedPreferences)
+                self?.cachedEmbeddingProviderAPIKey = trimmedAPIKey
                 self?.postNotice(kind: .success, title: "Embedding Provider Saved")
                 self?.embeddingProviderAPIKeySaveTask = nil
             } catch {
@@ -1079,7 +1093,9 @@ final class AppModel: ObservableObject {
         }
         do {
             let settings = EmbeddingProviderSettings(enabled: true, baseURL: baseURL, model: model)
-            let client = try OpenAICompatibleEmbeddingClient(settings: settings, apiKey: apiKey)
+            let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            let effectiveAPIKey = trimmedAPIKey.isEmpty ? await embeddingProviderAPIKeyValue() : trimmedAPIKey
+            let client = try OpenAICompatibleEmbeddingClient(settings: settings, apiKey: effectiveAPIKey)
             let vectors = try await client.embed(texts: ["Paper Codex embedding connection test."])
             let dimensions = vectors.first?.count ?? 0
             embeddingProviderTestStatus = "Connected · \(dimensions) dimensions"
@@ -4022,7 +4038,7 @@ final class AppModel: ObservableObject {
 
         let embeddingSettings = preferences.embedding
         let model = embeddingSettings.model.trimmingCharacters(in: .whitespacesAndNewlines)
-        let apiKey = embeddingProviderAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiKey = await embeddingProviderAPIKeyValue().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !embeddingSettings.baseURL.isEmpty, !model.isEmpty, !apiKey.isEmpty else {
             errorMessage = "Embedding similarity is enabled, but Base URL, API key, or model is missing."
             return applyLocalDiscoverPreferences(to: feed)
@@ -4483,14 +4499,6 @@ final class AppModel: ObservableObject {
         }
         _ = try WatchedFolderScanner(repository: repository, supportRoot: supportRoot)
             .scan(folder: folder)
-    }
-
-    private func scanAllWatchedFolders() throws -> [WatchedFolderScanResult] {
-        guard let repository else {
-            throw AppModelError.repositoryUnavailable
-        }
-        return try WatchedFolderScanner(repository: repository, supportRoot: supportRoot)
-            .scanAllWatchedFolders()
     }
 
     private func beginCodexRun(sessionID: String, title: String) -> String {

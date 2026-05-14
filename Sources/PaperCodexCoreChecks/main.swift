@@ -676,8 +676,11 @@ func runUILayoutSourceChecks() throws {
         "settings should include a dedicated Codex system prompt section"
     )
     try check(
-        settingsViewSource.contains("TextEditor(text: $draftCodexSystemPrompt)"),
-        "settings should expose the Codex system prompt in an editable text area"
+        settingsViewSource.contains("isEditingCodexSystemPrompt")
+            && settingsViewSource.contains("codexSystemPromptEditSheet")
+            && settingsViewSource.contains("TextEditor(text: $draftCodexSystemPrompt)")
+            && settingsViewSource.contains("Label(\"Edit Prompt\", systemImage: \"pencil\")"),
+        "settings should edit the Codex system prompt in an on-demand sheet instead of loading the editor on route entry"
     )
     try check(
         settingsViewSource.contains("model.resetCodexSystemPrompt()"),
@@ -1397,8 +1400,10 @@ func runUILayoutSourceChecks() throws {
     )
 
     try check(
-        settingsViewSource.contains("SettingsSectionAnchor"),
-        "settings should expose section anchors in the sidebar"
+        !settingsViewSource.contains("SettingsSectionAnchor")
+            && !settingsViewSource.contains("ScrollViewReader")
+            && !settingsViewSource.contains("Settings Sections"),
+        "settings should not add a second navigation rail or force scroll-anchor layout work"
     )
     try check(
         settingsViewSource.contains("LazyVStack(alignment: .leading, spacing: 22)")
@@ -1409,15 +1414,17 @@ func runUILayoutSourceChecks() throws {
     try check(
         settingsViewSource.contains(".accessibilityLabel(\"System prompt template editor\")")
             && settingsViewSource.contains(".accessibilityValue(\"\\(draftCodexSystemPrompt.count) characters\")")
-            && settingsViewSource.contains(".accessibilityLabel(\"New quick prompt editor\")"),
+            && settingsViewSource.contains(".accessibilityLabel(\"New quick prompt editor\")")
+            && !settingsViewSource.contains(".frame(height: 240)"),
         "settings should avoid exposing full long prompt editor contents as route-level accessibility text"
     )
     try check(
-        appModelSource.contains("@Published var embeddingProviderAPIKey: String = \"\"")
-            && appModelSource.contains("private var embeddingProviderAPIKeyLoadTask: Task<Void, Never>?")
-            && appModelSource.contains("Task.detached(priority: .utility) {\n                loadEmbeddingProviderAPIKeyFromKeychain()")
-            && !appModelSource.contains("@Published var embeddingProviderAPIKey: String = loadEmbeddingProviderAPIKeyFromKeychain()"),
-        "embedding API key should not be read from Keychain during main-actor AppModel initialization"
+        appModelSource.contains("private var cachedEmbeddingProviderAPIKey: String?")
+            && appModelSource.contains("private func embeddingProviderAPIKeyValue() async -> String")
+            && appModelSource.contains("Task.detached(priority: .utility) {\n            loadEmbeddingProviderAPIKeyFromKeychain()")
+            && !appModelSource.contains("@Published var embeddingProviderAPIKey")
+            && !appModelSource.contains("loadEmbeddingProviderAPIKey()"),
+        "embedding API key should be loaded from Keychain only on demand, not during startup or settings entry"
     )
     try check(
         appModelSource.contains("private var embeddingProviderAPIKeySaveTask: Task<Void, Never>?")
@@ -1426,14 +1433,10 @@ func runUILayoutSourceChecks() throws {
         "embedding API key saves should not block settings interactions on the main actor"
     )
     try check(
-        settingsViewSource.contains("navButton(")
-            && settingsViewSource.contains("title: anchor.title")
-            && settingsViewSource.contains("systemImage: anchor.systemImage"),
-        "settings section shortcuts should use the same sidebar row button treatment as primary navigation"
-    )
-    try check(
-        settingsViewSource.contains("selected: sectionToScroll == anchor"),
-        "settings section shortcuts should show selection using the shared sidebar row selected state"
+        appModelSource.contains("private var watchedFolderScanTask: Task<Void, Never>?")
+            && appModelSource.contains("Task.detached(priority: .utility) {\n                    let repository = try PaperRepository(databasePath: databasePath)")
+            && !appModelSource.contains("Task {\n                scanWatchedFolders()\n                await refreshCodexDiagnostic()"),
+        "startup should not immediately scan watched folders or run folder enumeration on the main actor"
     )
     try check(
         settingsViewSource.contains("isArxivFeedDirty"),
@@ -2792,6 +2795,12 @@ func runBundleChecks() throws {
     let insecureHTTPKey = "NSExceptionAllows" + "InsecureHTTPLoads"
     try check(!script.contains(oldHost), "app bundle should not keep the old remote feed host")
     try check(!script.contains(insecureHTTPKey), "app bundle should not allow insecure HTTP for old feed hosts")
+    try check(
+        script.contains("configuration=\"${PAPER_CODEX_BUILD_CONFIGURATION:-release}\"")
+            && script.contains("swift build -c \"$configuration\"")
+            && script.contains("swift build -c \"$configuration\" --show-bin-path"),
+        "installed app bundle should default to a Release build while keeping an explicit configuration override"
+    )
 }
 
 func runFixtureLibraryChecks() throws {
