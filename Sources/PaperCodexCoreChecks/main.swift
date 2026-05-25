@@ -445,6 +445,14 @@ func runUILayoutSourceChecks() throws {
         "library category rows should have a dedicated hoverable row component"
     )
     try check(
+        librarySource.contains("LibraryRootFolderRow")
+            && librarySource.contains("FolderBreadcrumbBar")
+            && librarySource.contains("folderBreadcrumbPath(for:")
+            && librarySource.contains("This folder")
+            && librarySource.contains("All levels"),
+        "library folders should read as a Finder-style tree with a root row, breadcrumb path, and explicit folder scope labels"
+    )
+    try check(
         librarySource.contains("private var sidebarLists: some View") &&
             librarySource.contains("ScrollView(.vertical") &&
             librarySource.contains("sidebarLists"),
@@ -592,6 +600,7 @@ func runUILayoutSourceChecks() throws {
     let chatViewURL = root.appendingPathComponent("Sources/PaperCodexApp/ChatView.swift")
     let chatSource = try String(contentsOf: chatViewURL)
     let saveToLibrarySource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/SaveToLibrarySheet.swift"))
+    let readerViewSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/ReaderView.swift"))
     let libraryFeatureStoreSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/LibraryFeatureStore.swift"))
     let readerFeatureStoreSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/ReaderFeatureStore.swift"))
     let discoverFeatureStoreSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/DiscoverFeatureStore.swift"))
@@ -799,6 +808,20 @@ func runUILayoutSourceChecks() throws {
             && chatSource.contains("PaperCodexToolbarButton")
             && !discoverSource.contains("private struct ToolbarActionButton"),
         "common toolbar and icon actions should use shared Paper Codex controls instead of local duplicates"
+    )
+    try check(
+        saveToLibrarySource.contains("SaveToLibraryDestinationHeader")
+            && saveToLibrarySource.contains("SaveToLibraryFolderPathChip")
+            && saveToLibrarySource.contains("Choose destination")
+            && saveToLibrarySource.contains("New root folder"),
+        "save-to-library should present folder destination selection as a clear tree picker with selected path chips"
+    )
+    try check(
+        readerViewSource.contains("ReaderPaperTabChip")
+            && readerViewSource.contains("ReaderPaperTabStrip")
+            && readerViewSource.contains("paperTabAccent")
+            && readerViewSource.contains("Close Paper Tab"),
+        "reader papers should render as stable tabs with clear active state and quiet close affordances"
     )
     try check(
         settingsViewSource.contains("Similarity categories")
@@ -1321,7 +1344,8 @@ func runUILayoutSourceChecks() throws {
         "reader navigation should preserve PDF and chat context so route switches can keep reading position"
     )
     try check(
-        readerSource.contains("ReaderSessionPaperBar")
+        readerSource.contains("ReaderPaperTabStrip")
+            && readerSource.contains("ReaderPaperTabChip")
             && readerSource.contains("AddPaperToSessionSheet")
             && readerSource.contains("model.addPaperToCurrentSession")
             && readerSource.contains("model.removePaperFromCurrentSession"),

@@ -49,7 +49,7 @@ struct SaveToLibrarySheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
-            selectedFolders
+            destinationHeader
             folderPicker
             Divider()
             actionRow
@@ -82,49 +82,26 @@ struct SaveToLibrarySheet: View {
     }
 
     @ViewBuilder
-    private var selectedFolders: some View {
-        let folders = selectedFolderSummaries
-        if !folders.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Selected Folders")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 142), spacing: 6)], alignment: .leading, spacing: 6) {
-                    ForEach(folders) { folder in
-                        Button {
-                            toggleSelection(folder.id)
-                        } label: {
-                            HStack(spacing: 5) {
-                                Text(folder.path)
-                                    .lineLimit(1)
-                                Image(systemName: "xmark")
-                                    .font(.paperCodexSystem(size: 9, weight: .bold))
-                            }
-                            .font(.caption)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .frame(maxWidth: .infinity)
-                            .background(Color.accentColor.opacity(0.12))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+    private var destinationHeader: some View {
+        SaveToLibraryDestinationHeader(
+            folders: selectedFolderSummaries,
+            onRemove: { folderID in
+                toggleSelection(folderID)
             }
-        }
+        )
     }
 
     private var folderPicker: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Label("Folders", systemImage: "folder")
+                Label("Choose destination", systemImage: "folder")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button {
                     beginNewCategory(parentID: nil)
                 } label: {
-                    Label("Add Folder", systemImage: "folder.badge.plus")
+                    Label("New root folder", systemImage: "folder.badge.plus")
                 }
                 .buttonStyle(.borderless)
             }
@@ -459,7 +436,134 @@ private struct SaveToLibrarySelectedFolderSummary: Identifiable {
     var path: String
 }
 
+private struct SaveToLibraryDestinationHeader: View {
+    var folders: [SaveToLibrarySelectedFolderSummary]
+    var onRemove: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Label("Destination", systemImage: "target")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(folders.isEmpty ? "Choose destination" : "\(folders.count) selected")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+            if folders.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "folder.badge.questionmark")
+                        .foregroundStyle(.secondary)
+                    Text("No folder selected")
+                        .font(.paperCodexSystem(size: 12.5))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                SaveToLibraryFlowLayout(spacing: 6) {
+                    ForEach(folders) { folder in
+                        SaveToLibraryFolderPathChip(folder: folder) {
+                            onRemove(folder.id)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct SaveToLibraryFolderPathChip: View {
+    var folder: SaveToLibrarySelectedFolderSummary
+    var onRemove: () -> Void
+
+    var body: some View {
+        Button(action: onRemove) {
+            HStack(spacing: 5) {
+                Image(systemName: "folder.fill")
+                    .font(.paperCodexSystem(size: 10.5, weight: .semibold))
+                Text(folder.path)
+                    .lineLimit(1)
+                Image(systemName: "xmark")
+                    .font(.paperCodexSystem(size: 8.5, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Color.accentColor.opacity(0.12))
+            .foregroundStyle(Color.primary)
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .help("Remove \(folder.path)")
+    }
+}
+
+private struct SaveToLibraryFlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        layout(proposal: proposal, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let rows = layout(proposal: ProposedViewSize(width: bounds.width, height: proposal.height), subviews: subviews).rows
+        for row in rows {
+            for item in row.items {
+                subviews[item.index].place(
+                    at: CGPoint(x: bounds.minX + item.origin.x, y: bounds.minY + item.origin.y),
+                    proposal: ProposedViewSize(width: item.size.width, height: item.size.height)
+                )
+            }
+        }
+    }
+
+    private func layout(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, rows: [SaveToLibraryFlowRow]) {
+        let maxWidth = proposal.width ?? 520
+        var rows: [SaveToLibraryFlowRow] = []
+        var currentItems: [SaveToLibraryFlowItem] = []
+        var currentX: CGFloat = 0
+        var currentY: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            if currentX > 0, currentX + size.width > maxWidth {
+                rows.append(SaveToLibraryFlowRow(items: currentItems))
+                currentY += rowHeight + spacing
+                currentItems = []
+                currentX = 0
+                rowHeight = 0
+            }
+            currentItems.append(SaveToLibraryFlowItem(index: index, origin: CGPoint(x: currentX, y: currentY), size: size))
+            currentX += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        if !currentItems.isEmpty {
+            rows.append(SaveToLibraryFlowRow(items: currentItems))
+        }
+        let height = rows.last?.items.map { $0.origin.y + $0.size.height }.max() ?? 0
+        return (CGSize(width: maxWidth, height: height), rows)
+    }
+}
+
+private struct SaveToLibraryFlowRow {
+    var items: [SaveToLibraryFlowItem]
+}
+
+private struct SaveToLibraryFlowItem {
+    var index: Int
+    var origin: CGPoint
+    var size: CGSize
+}
+
 private struct SaveToLibraryFolderRow: View {
+    @State private var isHovering = false
+
     var item: SaveToLibraryFolderItem
     var isSelected: Bool
     var isExpanded: Bool
@@ -487,11 +591,11 @@ private struct SaveToLibraryFolderRow: View {
 
             Button(action: onToggleSelected) {
                 HStack(spacing: 8) {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                     Image(systemName: item.node.isNew ? "folder.badge.plus" : "folder")
-                        .foregroundStyle(item.node.isNew ? Color.accentColor : Color.secondary)
+                        .frame(width: 17)
+                        .foregroundStyle(isSelected || item.node.isNew ? Color.accentColor : Color.secondary)
                     Text(item.node.name)
+                        .font(.paperCodexSystem(size: 12.5, weight: isSelected ? .semibold : .medium))
                         .lineLimit(1)
                     if item.node.isNew {
                         Text("New")
@@ -499,13 +603,18 @@ private struct SaveToLibraryFolderRow: View {
                             .foregroundStyle(Color.accentColor)
                     }
                     Spacer(minLength: 0)
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.65))
                 }
-                .font(.paperCodexSystem(size: 12, weight: .medium))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(isSelected ? Color.accentColor.opacity(0.10) : Color(nsColor: .controlBackgroundColor))
+                .background(isSelected ? Color.accentColor.opacity(0.11) : (isHovering ? Color.primary.opacity(0.045) : Color(nsColor: .controlBackgroundColor)))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(isSelected ? Color.accentColor.opacity(0.25) : Color.clear, lineWidth: 1)
+                )
             }
             .buttonStyle(.plain)
 
@@ -526,6 +635,11 @@ private struct SaveToLibraryFolderRow: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .help("Remove new folder")
+            }
+        }
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isHovering = hovering
             }
         }
     }

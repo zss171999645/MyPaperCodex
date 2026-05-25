@@ -77,7 +77,7 @@ struct ReaderView: View {
                         onReturn: { model.returnFromCitationJump() },
                         onToggleSplit: { togglePDFSplit() }
                     )
-                    ReaderSessionPaperBar(
+                    ReaderPaperTabStrip(
                         papers: model.currentSessionPapers,
                         activePaperID: model.selectedPaper?.id,
                         onSelect: { paper in
@@ -195,7 +195,7 @@ private enum ReaderPDFLayout {
     static let minimumSplitPaneHeight: CGFloat = 220
 }
 
-private struct ReaderSessionPaperBar: View {
+private struct ReaderPaperTabStrip: View {
     var papers: [Paper]
     var activePaperID: String?
     var onSelect: (Paper) -> Void
@@ -203,16 +203,20 @@ private struct ReaderSessionPaperBar: View {
     var onRemove: (String) -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Label("\(papers.count)", systemImage: papers.count > 1 ? "square.stack.3d.up.fill" : "doc.text")
+                .labelStyle(.iconOnly)
                 .font(.paperCodexSystem(size: 12.5, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 42, alignment: .leading)
+                .frame(width: 28, height: 30)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+                .help("\(papers.count) papers in this reading set")
 
             ScrollView(.horizontal) {
-                HStack(spacing: 7) {
+                HStack(spacing: 5) {
                     ForEach(papers) { paper in
-                        ReaderSessionPaperChip(
+                        ReaderPaperTabChip(
                             paper: paper,
                             isActive: paper.id == activePaperID,
                             canRemove: papers.count > 1,
@@ -230,19 +234,28 @@ private struct ReaderSessionPaperBar: View {
 
             Button(action: onAdd) {
                 Image(systemName: "plus")
-                    .frame(width: 24, height: 22)
+                    .font(.paperCodexSystem(size: 12, weight: .semibold))
+                    .frame(width: 28, height: 28)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .buttonStyle(.plain)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            )
             .help("Add Paper")
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.top, 7)
+        .padding(.bottom, 0)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 
-private struct ReaderSessionPaperChip: View {
+private struct ReaderPaperTabChip: View {
+    @State private var isHovering = false
+
     var paper: Paper
     var isActive: Bool
     var canRemove: Bool
@@ -250,16 +263,22 @@ private struct ReaderSessionPaperChip: View {
     var onRemove: () -> Void
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 0) {
             Button(action: onSelect) {
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     Image(systemName: isActive ? "doc.text.fill" : "doc.text")
+                        .font(.paperCodexSystem(size: 12.5, weight: .semibold))
                         .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
                     Text(paper.title)
                         .font(.paperCodexSystem(size: 12.5, weight: isActive ? .semibold : .medium))
+                        .foregroundStyle(isActive ? Color.primary : Color.secondary)
                         .lineLimit(1)
+                        .truncationMode(.tail)
                 }
+                .padding(.leading, 10)
+                .padding(.trailing, canRemove ? 5 : 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help(paper.title)
@@ -268,22 +287,66 @@ private struct ReaderSessionPaperChip: View {
                 Button(action: onRemove) {
                     Image(systemName: "xmark")
                         .font(.paperCodexSystem(size: 9.5, weight: .bold))
-                        .frame(width: 16, height: 16)
+                        .frame(width: 18, height: 18)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Remove Paper")
+                .foregroundStyle(isActive ? Color.secondary : Color.secondary.opacity(0.62))
+                .opacity(isActive || isHovering ? 1 : 0.42)
+                .padding(.trailing, 6)
+                .help("Close Paper Tab")
             }
         }
-        .padding(.leading, 8)
-        .padding(.trailing, canRemove ? 5 : 8)
-        .frame(width: isActive ? 220 : 180, height: 28)
-        .background(isActive ? Color.accentColor.opacity(0.12) : Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .frame(width: isActive ? 238 : 188, height: 34)
+        .background(paperTabBackground)
+        .overlay(alignment: .top) {
+            paperTabAccent
+        }
         .overlay(
-            RoundedRectangle(cornerRadius: 7)
-                .stroke(isActive ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(paperTabBorder, lineWidth: isActive ? 1.1 : 0.8)
         )
+        .clipShape(
+            UnevenRoundedRectangle(
+                topLeadingRadius: 8,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 0,
+                topTrailingRadius: 8
+            )
+        )
+        .shadow(
+            color: isActive ? Color.black.opacity(0.09) : Color.clear,
+            radius: 4,
+            x: 0,
+            y: 1
+        )
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isHovering = hovering
+            }
+        }
+    }
+
+    private var paperTabAccent: some View {
+        Capsule()
+            .fill(isActive ? Color.accentColor : Color.clear)
+            .frame(height: 3)
+            .padding(.horizontal, 10)
+            .padding(.top, 2)
+    }
+
+    private var paperTabBackground: Color {
+        if isActive {
+            return Color(nsColor: .textBackgroundColor)
+        }
+        return isHovering ? Color(nsColor: .controlBackgroundColor) : Color(nsColor: .windowBackgroundColor)
+    }
+
+    private var paperTabBorder: Color {
+        if isActive {
+            return Color.accentColor.opacity(0.36)
+        }
+        return isHovering ? Color.primary.opacity(0.14) : Color.primary.opacity(0.07)
     }
 }
 

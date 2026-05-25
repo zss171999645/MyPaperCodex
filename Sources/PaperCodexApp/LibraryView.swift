@@ -325,12 +325,11 @@ struct LibraryView: View {
 
     private var categorySidebarSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sidebarHeader("Categories", systemImage: "folder") {
+            sidebarHeader("Folders", systemImage: "folder") {
                 startCreatingCategory(parentID: selectedCategoryID)
             }
-            filterButton(
-                title: "All Papers",
-                systemImage: selectedCategoryID == nil && selectedTagID == nil ? "tray.full.fill" : "tray.full",
+            LibraryRootFolderRow(
+                countText: "\(model.papers.count)",
                 isSelected: selectedLibrarySurface == .papers && selectedCategoryID == nil && selectedTagID == nil
             ) {
                 selectedLibrarySurface = .papers
@@ -599,29 +598,31 @@ struct LibraryView: View {
     }
 
     private func folderConversationActions(for category: PaperCodexCore.Category) -> some View {
-        HStack(spacing: 10) {
-            Label(category.name, systemImage: "folder.fill")
-                .font(.paperCodexSystem(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Text("\(selectedCategoryPaperIDsInOrder.count) papers")
-                .font(.paperCodexSystem(size: 12.5))
-                .foregroundStyle(.tertiary)
-            Spacer()
-            categoryScopeToggle
-            Button {
-                model.openPapersForReading(selectedCategoryPaperIDsInOrder)
-            } label: {
-                Label("Read", systemImage: "book")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                FolderBreadcrumbBar(path: folderBreadcrumbPath(for: category))
+                Spacer()
+                Text("\(selectedCategoryPaperIDsInOrder.count) papers")
+                    .font(.paperCodexSystem(size: 12.5))
+                    .foregroundStyle(.tertiary)
             }
-            .disabled(selectedCategoryPaperIDsInOrder.isEmpty)
-            Button {
-                model.openPapersForChat(selectedCategoryPaperIDsInOrder)
-            } label: {
-                Label("Chat", systemImage: "text.bubble")
+            HStack(spacing: 10) {
+                categoryScopeToggle
+                Spacer()
+                Button {
+                    model.openPapersForReading(selectedCategoryPaperIDsInOrder)
+                } label: {
+                    Label("Read", systemImage: "book")
+                }
+                .disabled(selectedCategoryPaperIDsInOrder.isEmpty)
+                Button {
+                    model.openPapersForChat(selectedCategoryPaperIDsInOrder)
+                } label: {
+                    Label("Chat", systemImage: "text.bubble")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selectedCategoryPaperIDsInOrder.isEmpty)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(selectedCategoryPaperIDsInOrder.isEmpty)
         }
         .buttonStyle(.bordered)
         .padding(.horizontal, 12)
@@ -640,7 +641,7 @@ struct LibraryView: View {
         Button {
             libraryIncludeSubfolders.toggle()
         } label: {
-            Label(libraryIncludeSubfolders ? "Subfolders" : "Current", systemImage: libraryIncludeSubfolders ? "folder.badge.gearshape" : "folder")
+            Label(libraryIncludeSubfolders ? "All levels" : "This folder", systemImage: libraryIncludeSubfolders ? "folder.badge.gearshape" : "folder")
         }
         .buttonStyle(.bordered)
         .help(libraryIncludeSubfolders ? "Showing current folder and subfolders" : "Showing current folder only")
@@ -1119,6 +1120,20 @@ struct LibraryView: View {
         return model.categories.filter { ids.contains($0.id) }
     }
 
+    private func folderBreadcrumbPath(for category: PaperCodexCore.Category) -> [String] {
+        var path = [category.name]
+        var visited: Set<String> = [category.id]
+        var parentID = category.parentID
+        while let id = parentID,
+              !visited.contains(id),
+              let parent = model.categories.first(where: { $0.id == id }) {
+            path.append(parent.name)
+            visited.insert(parent.id)
+            parentID = parent.parentID
+        }
+        return ["All Papers"] + path.reversed()
+    }
+
     private func presentPDFImportPanel() {
         let panel = NSOpenPanel()
         panel.title = "Import PDF"
@@ -1334,6 +1349,67 @@ private struct CategoryListItem: Identifiable {
     var depth: Int
 
     var id: String { category.id }
+}
+
+private struct LibraryRootFolderRow: View {
+    var countText: String
+    var isSelected: Bool
+    var onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 8) {
+                Image(systemName: isSelected ? "tray.full.fill" : "tray.full")
+                    .frame(width: 18)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                Text("All Papers")
+                    .font(.paperCodexSystem(size: 13, weight: isSelected ? .semibold : .medium))
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text(countText)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isSelected ? Color.accentColor.opacity(0.13) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isSelected ? Color.accentColor.opacity(0.22) : Color.clear, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Show all papers")
+    }
+}
+
+private struct FolderBreadcrumbBar: View {
+    var path: [String]
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(Array(path.enumerated()), id: \.offset) { index, name in
+                if index > 0 {
+                    Image(systemName: "chevron.right")
+                        .font(.paperCodexSystem(size: 8, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                }
+                Label {
+                    Text(name)
+                        .lineLimit(1)
+                } icon: {
+                    Image(systemName: index == 0 ? "tray.full" : "folder.fill")
+                }
+                .labelStyle(.titleAndIcon)
+                .font(.paperCodexSystem(size: 12.5, weight: index == path.count - 1 ? .semibold : .medium))
+                .foregroundStyle(index == path.count - 1 ? Color.primary : Color.secondary)
+            }
+        }
+        .frame(minHeight: 24, alignment: .leading)
+    }
 }
 
 private struct LibraryPaperRowClick: Equatable {
@@ -2170,26 +2246,42 @@ private struct CategorySidebarRow: View {
         ZStack(alignment: .trailing) {
             HStack(spacing: 4) {
                 CategoryDepthGuide(depth: depth)
-                if hasChildren {
-                    Button(action: onToggle) {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.paperCodexSystem(size: 9, weight: .bold))
-                            .frame(width: 16, height: 24)
+                Button {
+                    if hasChildren {
+                        onToggle()
                     }
-                    .buttonStyle(.plain)
-                    .help(isExpanded ? "Collapse" : "Expand")
-                } else {
-                    Color.clear
-                        .frame(width: 16, height: 24)
+                } label: {
+                    Image(systemName: hasChildren ? (isExpanded ? "chevron.down" : "chevron.right") : "chevron.right")
+                        .font(.paperCodexSystem(size: 9, weight: .bold))
+                        .frame(width: 16, height: 26)
+                        .opacity(hasChildren ? 0.78 : 0)
                 }
-                SidebarRowButton(
-                    title: title,
-                    systemImage: systemImage,
-                    selected: isSelected,
-                    depth: 0,
-                    trailingReserve: 70,
-                    action: onSelect
-                )
+                .buttonStyle(.plain)
+                .help(hasChildren ? (isExpanded ? "Collapse" : "Expand") : "")
+
+                Button(action: onSelect) {
+                    HStack(spacing: 8) {
+                        Image(systemName: systemImage)
+                            .frame(width: 17)
+                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                        Text(title)
+                            .font(.paperCodexSystem(size: 13, weight: isSelected ? .semibold : .medium))
+                            .lineLimit(1)
+                        Spacer(minLength: 58)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 7)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(isSelected ? Color.accentColor.opacity(0.13) : (isHovering ? Color.primary.opacity(0.045) : Color.clear))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(isSelected ? Color.accentColor.opacity(0.22) : Color.clear, lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+                .help(title)
             }
 
             if isDropActive {
