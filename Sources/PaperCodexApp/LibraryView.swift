@@ -1560,8 +1560,26 @@ private enum LibraryLayout {
     static let paperRowThumbnailMaxPixelSize = 128
     static let categoryTreeRowSpacing: CGFloat = 0
     static let categoryTreeConnectorHeight: CGFloat = 40
+    static let categoryTreeIndentWidth: CGFloat = 20
+    static let categoryTreeChevronWidth: CGFloat = 16
+    static let categoryTreeChevronIconSpacing: CGFloat = 4
+    static let categoryTreeFolderButtonLeadingPadding: CGFloat = 8
+    static let categoryTreeFolderIconWidth: CGFloat = 17
+    static let categoryTreeConnectorLineWidth: CGFloat = 1.1
+    static let categoryTreeConnectorOpacity = 0.24
     static let categoryDropContentTypes: [UTType] = [.plainText]
     static let categoryDragPayloadPrefix = "papercodex-category-id:"
+
+    static var categoryTreeFolderIconCenterX: CGFloat {
+        categoryTreeChevronWidth
+            + categoryTreeChevronIconSpacing
+            + categoryTreeFolderButtonLeadingPadding
+            + categoryTreeFolderIconWidth / 2
+    }
+
+    static func categoryTreeFolderIconCenterX(depth: Int) -> CGFloat {
+        categoryTreeFolderIconCenterX + CGFloat(depth) * categoryTreeIndentWidth
+    }
 
     static func droppedCategoryID(from payload: String) -> String? {
         guard payload.hasPrefix(categoryDragPayloadPrefix) else {
@@ -2386,7 +2404,6 @@ private struct CategorySidebarRow: View {
     var body: some View {
         ZStack(alignment: .trailing) {
             HStack(spacing: 4) {
-                CategoryTreeConnector(connectorContinuations: connectorContinuations)
                 Button {
                     if hasChildren {
                         onToggle()
@@ -2423,6 +2440,15 @@ private struct CategorySidebarRow: View {
                 }
                 .buttonStyle(.plain)
                 .help(title)
+            }
+            .padding(.leading, CGFloat(depth) * LibraryLayout.categoryTreeIndentWidth)
+            .frame(minHeight: LibraryLayout.categoryTreeConnectorHeight)
+            .background(alignment: .leading) {
+                CategoryTreeConnector(
+                    depth: depth,
+                    connectorContinuations: connectorContinuations
+                )
+                .allowsHitTesting(false)
             }
 
             if isDropActive {
@@ -2528,50 +2554,59 @@ private struct CategorySidebarRow: View {
 }
 
 private struct CategoryTreeConnector: View {
+    var depth: Int
     var connectorContinuations: [Bool]
 
     var body: some View {
-        if connectorContinuations.isEmpty {
+        if depth == 0 || connectorContinuations.isEmpty {
             Color.clear
-                .frame(width: 0, height: 28)
+                .frame(height: LibraryLayout.categoryTreeConnectorHeight)
         } else {
-            HStack(spacing: 0) {
-                ForEach(Array(connectorContinuations.enumerated()), id: \.offset) { index, continues in
-                    TreeConnectorLevel(
-                        isCurrentLevel: index == connectorContinuations.count - 1,
-                        isCurrentBranchContinuation: continues
-                    )
-                    .stroke(
-                        Color.primary.opacity(index == connectorContinuations.count - 1 ? 0.34 : 0.18),
-                        style: StrokeStyle(lineWidth: 1.35, lineCap: .round, lineJoin: .round)
-                    )
-                    .frame(width: 16, height: LibraryLayout.categoryTreeConnectorHeight)
-                }
-            }
+            TreeConnectorLevel(
+                depth: depth,
+                connectorContinuations: connectorContinuations
+            )
+            .stroke(
+                Color.primary.opacity(LibraryLayout.categoryTreeConnectorOpacity),
+                style: StrokeStyle(
+                    lineWidth: LibraryLayout.categoryTreeConnectorLineWidth,
+                    lineCap: .round,
+                    lineJoin: .round
+                )
+            )
+            .frame(
+                width: LibraryLayout.categoryTreeFolderIconCenterX(depth: depth) + 1,
+                height: LibraryLayout.categoryTreeConnectorHeight
+            )
         }
     }
 }
 
 private struct TreeConnectorLevel: Shape {
-    var isCurrentLevel: Bool
-    var isCurrentBranchContinuation: Bool
+    var depth: Int
+    var connectorContinuations: [Bool]
 
     func path(in rect: CGRect) -> Path {
         Path { path in
-            let columnX = rect.midX
             let midY = rect.midY
-            if isCurrentLevel {
-                path.move(to: CGPoint(x: columnX, y: rect.minY))
-                path.addLine(to: CGPoint(x: columnX, y: midY))
-                if isCurrentBranchContinuation {
-                    path.addLine(to: CGPoint(x: columnX, y: rect.maxY))
+            let currentIconX = LibraryLayout.categoryTreeFolderIconCenterX(depth: depth)
+            let parentIconX = LibraryLayout.categoryTreeFolderIconCenterX(depth: depth - 1)
+            let currentBranchContinues = connectorContinuations.indices.contains(depth - 1)
+                ? connectorContinuations[depth - 1]
+                : false
+
+            if depth > 1 {
+                for level in 0..<(depth - 1) where connectorContinuations.indices.contains(level) && connectorContinuations[level] {
+                    let ancestorIconX = LibraryLayout.categoryTreeFolderIconCenterX(depth: level)
+                    path.move(to: CGPoint(x: ancestorIconX, y: rect.minY))
+                    path.addLine(to: CGPoint(x: ancestorIconX, y: rect.maxY))
                 }
-                path.move(to: CGPoint(x: columnX, y: midY))
-                path.addLine(to: CGPoint(x: rect.maxX, y: midY))
-            } else if isCurrentBranchContinuation {
-                path.move(to: CGPoint(x: columnX, y: rect.minY))
-                path.addLine(to: CGPoint(x: columnX, y: rect.maxY))
             }
+
+            path.move(to: CGPoint(x: parentIconX, y: rect.minY))
+            path.addLine(to: CGPoint(x: parentIconX, y: currentBranchContinues ? rect.maxY : midY))
+            path.move(to: CGPoint(x: parentIconX, y: midY))
+            path.addLine(to: CGPoint(x: currentIconX, y: midY))
         }
     }
 }

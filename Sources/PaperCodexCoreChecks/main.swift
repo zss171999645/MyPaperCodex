@@ -1235,13 +1235,20 @@ func runUILayoutSourceChecks() throws {
         librarySource.contains("CategoryTreeConnector")
             && librarySource.contains("TreeConnectorLevel")
             && librarySource.contains("connectorContinuations")
-            && librarySource.contains("isCurrentBranchContinuation")
             && librarySource.contains("categoryTreeRowSpacing: CGFloat = 0")
             && librarySource.contains("categoryTreeConnectorHeight")
+            && librarySource.contains("categoryTreeIndentWidth")
+            && librarySource.contains("categoryTreeFolderIconCenterX")
+            && librarySource.contains("categoryTreeConnectorLineWidth")
+            && librarySource.contains("categoryTreeConnectorOpacity")
             && librarySource.contains("ancestorContinuations + [!isLast]")
-            && librarySource.contains("path.addLine(to: CGPoint(x: columnX, y: rect.maxY))")
+            && librarySource.contains("Color.primary.opacity(LibraryLayout.categoryTreeConnectorOpacity)")
+            && librarySource.contains("lineWidth: LibraryLayout.categoryTreeConnectorLineWidth")
+            && librarySource.contains("currentIconX")
+            && librarySource.contains("parentIconX")
+            && !librarySource.contains("index == connectorContinuations.count - 1 ? 0.34 : 0.18")
             && !librarySource.contains("CategoryDepthGuide"),
-        "library folder hierarchy should render continuous tree connectors driven by sibling continuity, not standalone elbow icons"
+        "library folder hierarchy should render continuous, uniform connectors aligned from folder icon column to folder icon column"
     )
     try check(
         (librarySource.contains("LibraryPaperList(papers: visiblePapers)")
