@@ -2370,7 +2370,7 @@ private struct CategorySidebarRow: View {
     var body: some View {
         ZStack(alignment: .trailing) {
             HStack(spacing: 4) {
-                CategoryDepthGuide(depth: depth)
+                CategoryTreeConnector(depth: depth)
                 Button {
                     if hasChildren {
                         onToggle()
@@ -2511,18 +2511,33 @@ private struct CategorySidebarRow: View {
     }
 }
 
-private struct CategoryDepthGuide: View {
+private struct CategoryTreeConnector: View {
     var depth: Int
 
     var body: some View {
-        HStack(spacing: 5) {
-            ForEach(0..<max(depth, 0), id: \.self) { level in
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(Color.primary.opacity(level == depth - 1 ? 0.22 : 0.10))
-                    .frame(width: 2, height: 24)
-            }
+        if depth > 0 {
+            TreeElbowShape()
+                .stroke(
+                    Color.primary.opacity(0.24),
+                    style: StrokeStyle(lineWidth: 1.35, lineCap: .round, lineJoin: .round)
+                )
+                .frame(width: CGFloat(depth) * 16, height: 28)
+        } else {
+            Color.clear
+                .frame(width: 0, height: 28)
         }
-        .frame(width: CGFloat(max(depth, 0)) * 16, height: 28, alignment: .trailing)
+    }
+}
+
+private struct TreeElbowShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            let elbowX = max(rect.minX, rect.maxX - 11)
+            let midY = rect.midY
+            path.move(to: CGPoint(x: elbowX, y: midY - 7))
+            path.addLine(to: CGPoint(x: elbowX, y: midY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: midY))
+        }
     }
 }
 

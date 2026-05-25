@@ -1232,8 +1232,11 @@ func runUILayoutSourceChecks() throws {
         "dragging a library paper should carry the selected paper set when the row is part of a multi-selection"
     )
     try check(
-        librarySource.contains("CategoryDepthGuide"),
-        "library folder hierarchy should render an explicit depth guide"
+        librarySource.contains("CategoryTreeConnector")
+            && librarySource.contains("TreeElbowShape")
+            && librarySource.contains("Path { path in")
+            && !librarySource.contains("CategoryDepthGuide"),
+        "library folder hierarchy should render elbow tree connectors instead of separate depth guide bars"
     )
     try check(
         (librarySource.contains("LibraryPaperList(papers: visiblePapers)")
