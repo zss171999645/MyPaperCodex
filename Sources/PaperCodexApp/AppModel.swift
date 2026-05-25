@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import PaperCodexCore
 import SwiftUI
@@ -290,30 +291,125 @@ final class AppModel: ObservableObject {
         set { navigation.route = newValue }
     }
 
-    @Published var papers: [Paper] = []
-    @Published var categories: [PaperCodexCore.Category] = []
-    @Published var tags: [PaperTag] = []
-    @Published var watchedFolders: [WatchedFolder] = []
-    @Published var paperCategoryIDsByID: [String: [String]] = [:]
-    @Published var paperTagsByID: [String: [PaperTag]] = [:]
-    @Published var libraryDerivedState: PaperLibraryDerivedState = .empty
-    @Published var selectedLibraryPaper: Paper?
-    @Published var selectedLibrarySurface: LibrarySurface = .papers
-    @Published var librarySearchText = ""
-    @Published var librarySelectedCategoryID: String?
-    @Published var librarySelectedTagID: String?
-    @Published var readerReturnRoute: AppRoute = .library
-    @Published var selectedPaper: Paper?
-    @Published var readerTabState = ReaderTabState()
-    @Published var selectedSession: PaperSession?
-    @Published var sessions: [PaperSession] = []
-    @Published var recentSessions: [PaperSession] = []
-    @Published var recentSessionPapersByID: [String: [Paper]] = [:]
-    @Published var selectedSessionPanelTab: SessionPanelTab = .chat
-    @Published var messages: [ChatMessage] = []
-    @Published var currentSelection: PDFSelectionInfo?
-    @Published var pdfJumpTarget: PDFJumpTarget?
-    @Published var readerPosition: PaperReaderPosition?
+    var papers: [Paper] {
+        get { libraryStore.papers }
+        set { libraryStore.papers = newValue }
+    }
+
+    var categories: [PaperCodexCore.Category] {
+        get { libraryStore.categories }
+        set { libraryStore.categories = newValue }
+    }
+
+    var tags: [PaperTag] {
+        get { libraryStore.tags }
+        set { libraryStore.tags = newValue }
+    }
+
+    var watchedFolders: [WatchedFolder] {
+        get { libraryStore.watchedFolders }
+        set { libraryStore.watchedFolders = newValue }
+    }
+
+    var paperCategoryIDsByID: [String: [String]] {
+        get { libraryStore.paperCategoryIDsByID }
+        set { libraryStore.paperCategoryIDsByID = newValue }
+    }
+
+    var paperTagsByID: [String: [PaperTag]] {
+        get { libraryStore.paperTagsByID }
+        set { libraryStore.paperTagsByID = newValue }
+    }
+
+    var libraryDerivedState: PaperLibraryDerivedState {
+        get { libraryStore.libraryDerivedState }
+        set { libraryStore.libraryDerivedState = newValue }
+    }
+
+    var selectedLibraryPaper: Paper? {
+        get { libraryStore.selectedLibraryPaper }
+        set { libraryStore.selectedLibraryPaper = newValue }
+    }
+
+    var selectedLibrarySurface: LibrarySurface {
+        get { libraryStore.selectedLibrarySurface }
+        set { libraryStore.selectedLibrarySurface = newValue }
+    }
+
+    var librarySearchText: String {
+        get { libraryStore.librarySearchText }
+        set { libraryStore.librarySearchText = newValue }
+    }
+
+    var librarySelectedCategoryID: String? {
+        get { libraryStore.librarySelectedCategoryID }
+        set { libraryStore.librarySelectedCategoryID = newValue }
+    }
+
+    var librarySelectedTagID: String? {
+        get { libraryStore.librarySelectedTagID }
+        set { libraryStore.librarySelectedTagID = newValue }
+    }
+
+    var readerReturnRoute: AppRoute {
+        get { readerStore.readerReturnRoute }
+        set { readerStore.readerReturnRoute = newValue }
+    }
+
+    var selectedPaper: Paper? {
+        get { readerStore.selectedPaper }
+        set { readerStore.selectedPaper = newValue }
+    }
+
+    var readerTabState: ReaderTabState {
+        get { readerStore.readerTabState }
+        set { readerStore.readerTabState = newValue }
+    }
+
+    var selectedSession: PaperSession? {
+        get { readerStore.selectedSession }
+        set { readerStore.selectedSession = newValue }
+    }
+
+    var sessions: [PaperSession] {
+        get { readerStore.sessions }
+        set { readerStore.sessions = newValue }
+    }
+
+    var recentSessions: [PaperSession] {
+        get { readerStore.recentSessions }
+        set { readerStore.recentSessions = newValue }
+    }
+
+    var recentSessionPapersByID: [String: [Paper]] {
+        get { readerStore.recentSessionPapersByID }
+        set { readerStore.recentSessionPapersByID = newValue }
+    }
+
+    var selectedSessionPanelTab: SessionPanelTab {
+        get { readerStore.selectedSessionPanelTab }
+        set { readerStore.selectedSessionPanelTab = newValue }
+    }
+
+    var messages: [ChatMessage] {
+        get { readerStore.messages }
+        set { readerStore.messages = newValue }
+    }
+
+    var currentSelection: PDFSelectionInfo? {
+        get { readerStore.currentSelection }
+        set { readerStore.currentSelection = newValue }
+    }
+
+    var pdfJumpTarget: PDFJumpTarget? {
+        get { readerStore.pdfJumpTarget }
+        set { readerStore.pdfJumpTarget = newValue }
+    }
+
+    var readerPosition: PaperReaderPosition? {
+        get { readerStore.readerPosition }
+        set { readerStore.readerPosition = newValue }
+    }
     @Published var codexDiagnostic: CodexDiagnostic?
     @Published var codexModelOverride: String = UserDefaults.standard.string(forKey: codexModelOverrideDefaultsKey) ?? ""
     @Published var codexReasoningEffort: CodexReasoningEffort = loadCodexReasoningEffortFromDefaults(key: codexReasoningEffortDefaultsKey)
@@ -335,42 +431,177 @@ final class AppModel: ObservableObject {
         return stored.flatMap(ArxivSaveOrganization.init(rawValue:)) ?? .primaryCategory
     }()
     @Published var quickPrompts: [QuickPrompt] = loadQuickPromptsFromDefaults()
-    @Published var arxivDates: [String] = []
-    @Published var selectedArxivDate: String?
-    @Published var arxivFeed: ArxivFeedResponse?
-    @Published var selectedArxivPaper: ArxivFeedPaper?
-    @Published var discoverKeyword = ""
-    @Published var discoverStartDate: String = latestCompleteArxivSubmissionISODate()
-    @Published var discoverEndDate: String = latestCompleteArxivSubmissionISODate()
-    @Published var discoverSelectedCategories: [String] = ["cs.CV"]
-    @Published var discoverSelectedSimilaritySourceIDs: [String] = []
-    @Published var discoverResultIDs: [String] = []
-    @Published var discoverEnrichmentsByID: [String: DiscoverPaperEnrichment] = [:]
-    @Published var isSearchingDiscover = false
-    @Published var isCancellingDiscoverSearch = false
-    @Published var isProcessingDiscoverResults = false
-    @Published var discoverProcessingProgress: ArxivCacheProgress?
-    @Published var isCachingDiscoverPDFs = false
-    @Published var discoverPDFCacheProgress: ArxivCacheProgress?
-    @Published var arxivAssetURLs: [String: URL] = [:]
-    @Published var arxivPDFThumbnailURLsByID: [String: [URL]] = [:]
-    @Published var discoverPaperInteractionStateByID: [String: DiscoverPaperInteractionState] = [:]
-    @Published var discoverScrollPositionPaperID: String? = loadDiscoverScrollPositionPaperIDFromDefaults()
-    @Published var isLoadingArxivFeed = false
-    @Published var isRefreshingArxivDates = false
-    @Published var isPreloadingArxivAssets = false
-    @Published var isAddingArxivPaper = false
-    @Published var arxivDownloadingPaperIDs: Set<String> = []
-    @Published var arxivDownloadProgressByID: [String: Double] = [:]
-    @Published var arxivCacheProgress: ArxivCacheProgress?
-    @Published var paperThumbnailURLsByID: [String: [URL]] = [:]
+    var arxivDates: [String] {
+        get { discoverStore.arxivDates }
+        set { discoverStore.arxivDates = newValue }
+    }
+
+    var selectedArxivDate: String? {
+        get { discoverStore.selectedArxivDate }
+        set { discoverStore.selectedArxivDate = newValue }
+    }
+
+    var arxivFeed: ArxivFeedResponse? {
+        get { discoverStore.arxivFeed }
+        set { discoverStore.arxivFeed = newValue }
+    }
+
+    var selectedArxivPaper: ArxivFeedPaper? {
+        get { discoverStore.selectedArxivPaper }
+        set { discoverStore.selectedArxivPaper = newValue }
+    }
+
+    var discoverKeyword: String {
+        get { discoverStore.discoverKeyword }
+        set { discoverStore.discoverKeyword = newValue }
+    }
+
+    var discoverStartDate: String {
+        get { discoverStore.discoverStartDate }
+        set { discoverStore.discoverStartDate = newValue }
+    }
+
+    var discoverEndDate: String {
+        get { discoverStore.discoverEndDate }
+        set { discoverStore.discoverEndDate = newValue }
+    }
+
+    var discoverSelectedCategories: [String] {
+        get { discoverStore.discoverSelectedCategories }
+        set { discoverStore.discoverSelectedCategories = newValue }
+    }
+
+    var discoverSelectedSimilaritySourceIDs: [String] {
+        get { discoverStore.discoverSelectedSimilaritySourceIDs }
+        set { discoverStore.discoverSelectedSimilaritySourceIDs = newValue }
+    }
+
+    var discoverResultIDs: [String] {
+        get { discoverStore.discoverResultIDs }
+        set { discoverStore.discoverResultIDs = newValue }
+    }
+
+    var discoverEnrichmentsByID: [String: DiscoverPaperEnrichment] {
+        get { discoverStore.discoverEnrichmentsByID }
+        set { discoverStore.discoverEnrichmentsByID = newValue }
+    }
+
+    var isSearchingDiscover: Bool {
+        get { discoverStore.isSearchingDiscover }
+        set { discoverStore.isSearchingDiscover = newValue }
+    }
+
+    var isCancellingDiscoverSearch: Bool {
+        get { discoverStore.isCancellingDiscoverSearch }
+        set { discoverStore.isCancellingDiscoverSearch = newValue }
+    }
+
+    var isProcessingDiscoverResults: Bool {
+        get { discoverStore.isProcessingDiscoverResults }
+        set { discoverStore.isProcessingDiscoverResults = newValue }
+    }
+
+    var discoverProcessingProgress: ArxivCacheProgress? {
+        get { discoverStore.discoverProcessingProgress }
+        set { discoverStore.discoverProcessingProgress = newValue }
+    }
+
+    var isCachingDiscoverPDFs: Bool {
+        get { discoverStore.isCachingDiscoverPDFs }
+        set { discoverStore.isCachingDiscoverPDFs = newValue }
+    }
+
+    var discoverPDFCacheProgress: ArxivCacheProgress? {
+        get { discoverStore.discoverPDFCacheProgress }
+        set { discoverStore.discoverPDFCacheProgress = newValue }
+    }
+
+    var arxivAssetURLs: [String: URL] {
+        get { discoverStore.arxivAssetURLs }
+        set { discoverStore.arxivAssetURLs = newValue }
+    }
+
+    var arxivPDFThumbnailURLsByID: [String: [URL]] {
+        get { discoverStore.arxivPDFThumbnailURLsByID }
+        set { discoverStore.arxivPDFThumbnailURLsByID = newValue }
+    }
+
+    var discoverPaperInteractionStateByID: [String: DiscoverPaperInteractionState] {
+        get { discoverStore.discoverPaperInteractionStateByID }
+        set { discoverStore.discoverPaperInteractionStateByID = newValue }
+    }
+
+    var discoverScrollPositionPaperID: String? {
+        get { discoverStore.discoverScrollPositionPaperID }
+        set { discoverStore.discoverScrollPositionPaperID = newValue }
+    }
+
+    var isLoadingArxivFeed: Bool {
+        get { discoverStore.isLoadingArxivFeed }
+        set { discoverStore.isLoadingArxivFeed = newValue }
+    }
+
+    var isRefreshingArxivDates: Bool {
+        get { discoverStore.isRefreshingArxivDates }
+        set { discoverStore.isRefreshingArxivDates = newValue }
+    }
+
+    var isPreloadingArxivAssets: Bool {
+        get { discoverStore.isPreloadingArxivAssets }
+        set { discoverStore.isPreloadingArxivAssets = newValue }
+    }
+
+    var isAddingArxivPaper: Bool {
+        get { discoverStore.isAddingArxivPaper }
+        set { discoverStore.isAddingArxivPaper = newValue }
+    }
+
+    var arxivDownloadingPaperIDs: Set<String> {
+        get { discoverStore.arxivDownloadingPaperIDs }
+        set { discoverStore.arxivDownloadingPaperIDs = newValue }
+    }
+
+    var arxivDownloadProgressByID: [String: Double] {
+        get { discoverStore.arxivDownloadProgressByID }
+        set { discoverStore.arxivDownloadProgressByID = newValue }
+    }
+
+    var arxivCacheProgress: ArxivCacheProgress? {
+        get { discoverStore.arxivCacheProgress }
+        set { discoverStore.arxivCacheProgress = newValue }
+    }
+    var paperThumbnailURLsByID: [String: [URL]] {
+        get { libraryStore.paperThumbnailURLsByID }
+        set { libraryStore.paperThumbnailURLsByID = newValue }
+    }
     @Published var cacheStorageSummary = CacheStorageSummary()
-    @Published var paperNotesByID: [String: [PaperNote]] = [:]
-    @Published var citationReturnPoint: CitationReturnPoint?
-    @Published var pdfKitCommand: PDFKitCommand?
-    @Published var pdfDocumentStatus: PDFDocumentStatus?
-    @Published var pendingArxivLibraryImportIDs: Set<String> = []
-    @Published var failedArxivLibraryImportMessagesByID: [String: String] = [:]
+    var paperNotesByID: [String: [PaperNote]] {
+        get { libraryStore.paperNotesByID }
+        set { libraryStore.paperNotesByID = newValue }
+    }
+    var citationReturnPoint: CitationReturnPoint? {
+        get { readerStore.citationReturnPoint }
+        set { readerStore.citationReturnPoint = newValue }
+    }
+
+    var pdfKitCommand: PDFKitCommand? {
+        get { readerStore.pdfKitCommand }
+        set { readerStore.pdfKitCommand = newValue }
+    }
+
+    var pdfDocumentStatus: PDFDocumentStatus? {
+        get { readerStore.pdfDocumentStatus }
+        set { readerStore.pdfDocumentStatus = newValue }
+    }
+    var pendingArxivLibraryImportIDs: Set<String> {
+        get { discoverStore.pendingArxivLibraryImportIDs }
+        set { discoverStore.pendingArxivLibraryImportIDs = newValue }
+    }
+
+    var failedArxivLibraryImportMessagesByID: [String: String] {
+        get { discoverStore.failedArxivLibraryImportMessagesByID }
+        set { discoverStore.failedArxivLibraryImportMessagesByID = newValue }
+    }
     @Published var embeddingProviderTestStatus: String?
     @Published var isTestingEmbeddingProvider = false
     @Published var librarySidebarWidth: CGFloat = {
@@ -378,6 +609,9 @@ final class AppModel: ObservableObject {
         return stored > 0 ? CGFloat(stored) : 280
     }()
 
+    private let libraryStore = LibraryFeatureStore()
+    private let readerStore = ReaderFeatureStore()
+    private let discoverStore: DiscoverFeatureStore
     private var repository: PaperRepository?
     private let supportRoot: URL
     private let arxivCache: ArxivFeedCache
@@ -392,6 +626,9 @@ final class AppModel: ObservableObject {
     private var cacheStorageSummaryTask: Task<Void, Never>?
     private var libraryThumbnailRefreshTask: Task<Void, Never>?
     private var routeDeferredWorkTask: Task<Void, Never>?
+    private var libraryStoreObservation: AnyCancellable?
+    private var readerStoreObservation: AnyCancellable?
+    private var discoverStoreObservation: AnyCancellable?
     private var cachedEmbeddingProviderAPIKey: String?
     private var activeCodexRunHandlesBySessionID: [String: CodexRunHandle] = [:]
     private var activeDiscoverCodexRunHandles: [CodexRunHandle] = []
@@ -500,12 +737,27 @@ final class AppModel: ObservableObject {
         let storedLanguageMode = loadGlobalLanguageModeFromDefaults()
         globalLanguageMode = storedLanguageMode
         codexSystemPrompt = loadCodexSystemPromptFromDefaults(languageMode: storedLanguageMode)
+        let initialDiscoverDate = latestCompleteArxivSubmissionISODate()
+        discoverStore = DiscoverFeatureStore(
+            startDate: initialDiscoverDate,
+            endDate: initialDiscoverDate,
+            scrollPositionPaperID: loadDiscoverScrollPositionPaperIDFromDefaults()
+        )
 
         let root = PaperCodexPaths.supportRoot()
         supportRoot = root
         arxivCache = ArxivFeedCache(root: root.appendingPathComponent("arxiv-cache", isDirectory: true))
         localDiscoverCache = LocalDiscoverCache(root: root.appendingPathComponent("discover-cache", isDirectory: true))
         thumbnailCache = PDFThumbnailCache(root: root.appendingPathComponent("thumbnails", isDirectory: true))
+        libraryStoreObservation = libraryStore.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        readerStoreObservation = readerStore.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        discoverStoreObservation = discoverStore.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
         discoverSelectedCategories = localDiscoverPreferences.categories.isEmpty ? ["cs.CV"] : [localDiscoverPreferences.categories[0]]
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -617,30 +869,22 @@ final class AppModel: ObservableObject {
         guard let repository else {
             return
         }
-        let selectedLibraryPaperID = selectedLibraryPaper?.id
         let fetchedPapers = try repository.fetchPapers()
         let fetchedCategories = try repository.fetchCategories()
         let fetchedTags = try repository.fetchTags()
         let fetchedWatchedFolders = try repository.fetchWatchedFolders()
         let categoryIDsByPaperID = try repository.fetchCategoryIDsByPaperID()
         let tagsByPaperID = try repository.fetchTagsByPaperID()
-        papers = fetchedPapers
-        categories = fetchedCategories
-        tags = fetchedTags
-        watchedFolders = fetchedWatchedFolders
-        paperCategoryIDsByID = categoryIDsByPaperID
-        paperTagsByID = tagsByPaperID
-        libraryDerivedState = PaperLibraryDerivedState.build(
+        libraryStore.applySnapshot(
             papers: fetchedPapers,
             categories: fetchedCategories,
+            tags: fetchedTags,
+            watchedFolders: fetchedWatchedFolders,
             categoryIDsByPaperID: categoryIDsByPaperID,
             tagsByPaperID: tagsByPaperID
         )
         try refreshRecentSessions(repository: repository)
         startLibraryThumbnailRefresh(for: fetchedPapers)
-        if let selectedLibraryPaperID {
-            selectedLibraryPaper = papers.first { $0.id == selectedLibraryPaperID }
-        }
     }
 
     private func startLibraryThumbnailRefresh(for papers: [Paper]) {

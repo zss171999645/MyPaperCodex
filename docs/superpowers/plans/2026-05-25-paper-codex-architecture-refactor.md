@@ -93,10 +93,10 @@ Expected: all commands exit 0.
 - Create: `Sources/PaperCodexApp/DiscoverFeatureStore.swift`
 - Modify: `Sources/PaperCodexApp/AppModel.swift`
 
-- [ ] Extract pure Library state and commands first.
-- [ ] Extract Reader/session state after Library still passes real app smoke tests.
-- [ ] Extract Discover state last because it has the highest async/concurrency risk.
-- [ ] Keep `AppModel` as the single SwiftUI environment object until the feature stores are stable.
+- [x] Extract pure Library state and commands first.
+- [x] Extract Reader/session state after Library still passes real app smoke tests.
+- [x] Extract Discover state last because it has the highest async/concurrency risk.
+- [x] Keep `AppModel` as the single SwiftUI environment object until the feature stores are stable.
 
 ## Task 3: Extract Agent Runtime Boundary
 

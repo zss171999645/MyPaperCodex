@@ -592,6 +592,9 @@ func runUILayoutSourceChecks() throws {
     let chatViewURL = root.appendingPathComponent("Sources/PaperCodexApp/ChatView.swift")
     let chatSource = try String(contentsOf: chatViewURL)
     let saveToLibrarySource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/SaveToLibrarySheet.swift"))
+    let libraryFeatureStoreSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/LibraryFeatureStore.swift"))
+    let readerFeatureStoreSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/ReaderFeatureStore.swift"))
+    let discoverFeatureStoreSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/DiscoverFeatureStore.swift"))
     let libraryCategoryAssignmentSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/LibraryCategoryAssignment.swift"))
     let arxivIDExtractorSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/ArxivIDExtractor.swift"))
     try check(
@@ -689,7 +692,8 @@ func runUILayoutSourceChecks() throws {
         "Shared sidebar navigation should centralize global route labels"
     )
     try check(
-        appModelSource.contains("@Published var selectedLibrarySurface: LibrarySurface")
+        (appModelSource.contains("@Published var selectedLibrarySurface: LibrarySurface")
+            || libraryFeatureStoreSource.contains("@Published var selectedLibrarySurface: LibrarySurface"))
             && appModelSource.contains("func showRecentConversations()")
             && appModelSource.contains("selectedLibrarySurface = .recentConversations")
             && !librarySource.contains("@State private var selectedLibrarySurface"),
@@ -740,6 +744,38 @@ func runUILayoutSourceChecks() throws {
             && libraryCategoryAssignmentSource.contains("createdCategoryIDsByRequestID")
             && libraryCategoryAssignmentSource.contains("LibraryCategoryAssignmentError.invalidCategoryHierarchy"),
         "arXiv and cached-paper save paths should create new folders under their selected parent folders"
+    )
+    try check(
+        libraryFeatureStoreSource.contains("final class LibraryFeatureStore")
+            && libraryFeatureStoreSource.contains("func applySnapshot")
+            && appModelSource.contains("private let libraryStore = LibraryFeatureStore()")
+            && appModelSource.contains("libraryStore.applySnapshot")
+            && !appModelSource.contains("@Published var papers: [Paper]")
+            && !appModelSource.contains("@Published var categories: [PaperCodexCore.Category]")
+            && !appModelSource.contains("@Published var libraryDerivedState: PaperLibraryDerivedState"),
+        "Library state should live in LibraryFeatureStore while AppModel remains the compatibility coordinator"
+    )
+    try check(
+        readerFeatureStoreSource.contains("final class ReaderFeatureStore")
+            && appModelSource.contains("private let readerStore = ReaderFeatureStore()")
+            && appModelSource.contains("readerStore.objectWillChange")
+            && !appModelSource.contains("@Published var selectedPaper: Paper?")
+            && !appModelSource.contains("@Published var readerTabState")
+            && !appModelSource.contains("@Published var selectedSession: PaperSession?")
+            && !appModelSource.contains("@Published var messages: [ChatMessage]")
+            && !appModelSource.contains("@Published var pdfJumpTarget: PDFJumpTarget?"),
+        "Reader and session state should live in ReaderFeatureStore while AppModel coordinates commands"
+    )
+    try check(
+        discoverFeatureStoreSource.contains("final class DiscoverFeatureStore")
+            && appModelSource.contains("private let discoverStore: DiscoverFeatureStore")
+            && appModelSource.contains("discoverStore.objectWillChange")
+            && !appModelSource.contains("@Published var arxivFeed: ArxivFeedResponse?")
+            && !appModelSource.contains("@Published var discoverKeyword")
+            && !appModelSource.contains("@Published var discoverResultIDs")
+            && !appModelSource.contains("@Published var discoverEnrichmentsByID")
+            && !appModelSource.contains("@Published var isSearchingDiscover"),
+        "Discover state should live in DiscoverFeatureStore while AppModel coordinates search and processing commands"
     )
     try check(
         settingsViewSource.contains("Similarity categories")
@@ -1026,8 +1062,10 @@ func runUILayoutSourceChecks() throws {
         "AppModel should expose a cache and storage summary for Settings"
     )
     try check(
-        appModelSource.contains("@Published var libraryDerivedState")
-            && appModelSource.contains("PaperLibraryDerivedState.build")
+        (appModelSource.contains("@Published var libraryDerivedState")
+            || libraryFeatureStoreSource.contains("@Published var libraryDerivedState"))
+            && (appModelSource.contains("PaperLibraryDerivedState.build")
+                || libraryFeatureStoreSource.contains("PaperLibraryDerivedState.build"))
             && librarySource.contains("model.libraryDerivedState.matchesSearch")
             && librarySource.contains("model.libraryDerivedState.categoryPaperCountsByID")
             && librarySource.contains("model.libraryDerivedState.tagPaperCountsByID"),
@@ -1364,7 +1402,8 @@ func runUILayoutSourceChecks() throws {
         "session context loading should not silently add the selected fallback paper to another paper's session"
     )
     try check(
-        appModelSource.contains("@Published var recentSessions")
+        (appModelSource.contains("@Published var recentSessions")
+            || readerFeatureStoreSource.contains("@Published var recentSessions"))
             && appModelSource.contains("refreshRecentSessions"),
         "AppModel should publish recent conversations for the library surface"
     )
