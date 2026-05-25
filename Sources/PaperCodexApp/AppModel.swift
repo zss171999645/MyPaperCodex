@@ -618,6 +618,7 @@ final class AppModel: ObservableObject {
     private let localDiscoverCache: LocalDiscoverCache
     private let thumbnailCache: PDFThumbnailCache
     private let workspaceManager = SessionWorkspaceManager()
+    private let agentRuntime: any AgentRuntime = CodexAgentRuntime()
     private var watchedFolderAutoScanTask: Task<Void, Never>?
     private var watchedFolderScanTask: Task<Void, Never>?
     private var activeDiscoverSearchTask: Task<Void, Never>?
@@ -4723,51 +4724,8 @@ final class AppModel: ObservableObject {
         runID: String,
         prefersWorkspaceImageOutput: Bool
     ) async throws -> (stdout: String, lastMessage: String, threadID: String?, generatedImages: [URL], tokenUsage: CodexTokenUsage?) {
-        let executable = try CodexCLI.findCodexExecutable(preferWorkspaceImageOutput: prefersWorkspaceImageOutput)
-        let cli = CodexCLI(executablePath: executable)
-        appendCodexRunEvent(
-            CodexRunEvent(kind: .status, title: "Codex", detail: "Launching \(URL(fileURLWithPath: executable).lastPathComponent)"),
-            runID: runID
-        )
-        let workspaceURL = URL(fileURLWithPath: session.workspacePath, isDirectory: true)
-        let imageSnapshot = try GeneratedImageCollector.snapshot(in: workspaceURL)
-        let outputURL = URL(fileURLWithPath: session.workspacePath)
-            .appendingPathComponent("turns", isDirectory: true)
-            .appendingPathComponent("\(UUID().uuidString.lowercased())-codex.txt")
-        let eventLogURL = outputURL.deletingPathExtension().appendingPathExtension("events.jsonl")
         let reasoningEffort = codexReasoningEffort
         let modelOverride = effectiveModelOverride(prefersWorkspaceImageOutput: prefersWorkspaceImageOutput)
-        let arguments: [String]
-        if let codexSessionID = session.codexSessionID, !prefersWorkspaceImageOutput {
-            arguments = cli.resumeArguments(
-                sessionID: codexSessionID,
-                prompt: prompt,
-                outputLastMessagePath: outputURL.path,
-                modelOverride: modelOverride,
-                reasoningEffort: reasoningEffort
-            )
-        } else {
-            arguments = cli.startArguments(
-                prompt: prompt,
-                workspacePath: session.workspacePath,
-                outputLastMessagePath: outputURL.path,
-                modelOverride: modelOverride,
-                reasoningEffort: reasoningEffort
-            )
-        }
-
-        appendCodexRunEvent(
-            CodexRunEvent(
-                kind: .status,
-                title: "Codex",
-                detail: codexRunModeDescription(
-                    reasoningEffort: reasoningEffort,
-                    modelOverride: modelOverride,
-                    prefersWorkspaceImageOutput: prefersWorkspaceImageOutput
-                )
-            ),
-            runID: runID
-        )
         let eventSink: @Sendable (CodexRunEvent) -> Void = { [weak self] event in
             Task { @MainActor in
                 self?.appendCodexRunEvent(event, runID: runID)
@@ -4775,30 +4733,39 @@ final class AppModel: ObservableObject {
         }
         let runHandle = CodexRunHandle()
         activeCodexRunHandlesBySessionID[session.id] = runHandle
-        let stdout = try await Task.detached(priority: .userInitiated) {
-            try cli.runStreaming(
-                arguments: arguments,
-                eventLogURL: eventLogURL,
-                currentDirectoryURL: workspaceURL,
-                runHandle: runHandle,
-                onEvent: eventSink
-            )
-        }.value
-        let lastMessage = (try? String(contentsOf: outputURL, encoding: .utf8)) ?? ""
-        let tokenUsage = CodexCLI.aggregateTokenUsage(from: stdout)
-        let generatedImages = try GeneratedImageCollector.newImages(in: workspaceURL, excluding: imageSnapshot)
-        if !generatedImages.isEmpty {
+        let result = try await agentRuntime.runCodexTurn(
+            AgentRuntimeRequest(
+                prompt: prompt,
+                workspacePath: session.workspacePath,
+                existingSessionID: session.codexSessionID,
+                modelOverride: modelOverride,
+                reasoningEffort: reasoningEffort,
+                prefersWorkspaceImageOutput: prefersWorkspaceImageOutput,
+                runModeDescription: codexRunModeDescription(
+                    reasoningEffort: reasoningEffort,
+                    modelOverride: modelOverride,
+                    prefersWorkspaceImageOutput: prefersWorkspaceImageOutput
+                )
+            ),
+            runHandle: runHandle,
+            onEvent: eventSink
+        )
+        if !result.generatedImages.isEmpty {
             appendCodexRunEvent(
-                CodexRunEvent(kind: .answer, title: "Image", detail: "Generated \(generatedImages.count) image\(generatedImages.count == 1 ? "" : "s")"),
+                CodexRunEvent(
+                    kind: .answer,
+                    title: "Image",
+                    detail: "Generated \(result.generatedImages.count) image\(result.generatedImages.count == 1 ? "" : "s")"
+                ),
                 runID: runID
             )
         }
         return (
-            stdout: stdout,
-            lastMessage: lastMessage,
-            threadID: CodexCLI.parseThreadID(from: stdout),
-            generatedImages: generatedImages,
-            tokenUsage: tokenUsage
+            stdout: result.stdout,
+            lastMessage: result.lastMessage,
+            threadID: result.threadID,
+            generatedImages: result.generatedImages,
+            tokenUsage: result.tokenUsage
         )
     }
 

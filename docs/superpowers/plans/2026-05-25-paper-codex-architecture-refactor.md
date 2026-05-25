@@ -106,9 +106,9 @@ Expected: all commands exit 0.
 - Modify: `Sources/PaperCodexApp/AppModel.swift`
 - Modify: `Sources/PaperCodexCoreChecks/main.swift`
 
-- [ ] Define a runtime protocol that preserves streaming events, cancellation, token usage, thread resume, generated image discovery, and workspace output paths.
-- [ ] Move Codex CLI orchestration behind `CodexAgentRuntime`.
-- [ ] Keep image generation capability routing intact.
+- [x] Define a runtime protocol that preserves streaming events, cancellation, token usage, thread resume, generated image discovery, and workspace output paths.
+- [x] Move Codex CLI orchestration behind `CodexAgentRuntime`.
+- [x] Keep image generation capability routing intact.
 
 ## Task 4: UI Simplification Pass
 

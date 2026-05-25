@@ -596,6 +596,8 @@ func runUILayoutSourceChecks() throws {
     let readerFeatureStoreSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/ReaderFeatureStore.swift"))
     let discoverFeatureStoreSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/DiscoverFeatureStore.swift"))
     let libraryCategoryAssignmentSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/LibraryCategoryAssignment.swift"))
+    let agentRuntimeSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/AgentRuntime.swift"))
+    let codexAgentRuntimeSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/CodexAgentRuntime.swift"))
     let arxivIDExtractorSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/ArxivIDExtractor.swift"))
     try check(
         !collectionViewExists
@@ -776,6 +778,17 @@ func runUILayoutSourceChecks() throws {
             && !appModelSource.contains("@Published var discoverEnrichmentsByID")
             && !appModelSource.contains("@Published var isSearchingDiscover"),
         "Discover state should live in DiscoverFeatureStore while AppModel coordinates search and processing commands"
+    )
+    try check(
+        agentRuntimeSource.contains("protocol AgentRuntime")
+            && agentRuntimeSource.contains("struct AgentRuntimeRequest")
+            && agentRuntimeSource.contains("struct AgentRuntimeResult")
+            && codexAgentRuntimeSource.contains("struct CodexAgentRuntime")
+            && codexAgentRuntimeSource.contains("CodexCLI")
+            && codexAgentRuntimeSource.contains("GeneratedImageCollector.newImages")
+            && appModelSource.contains("private let agentRuntime: any AgentRuntime")
+            && appModelSource.contains("agentRuntime.runCodexTurn"),
+        "Codex CLI streaming should sit behind an AgentRuntime boundary instead of being assembled directly in AppModel"
     )
     try check(
         settingsViewSource.contains("Similarity categories")
