@@ -595,6 +595,7 @@ func runUILayoutSourceChecks() throws {
     let libraryFeatureStoreSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/LibraryFeatureStore.swift"))
     let readerFeatureStoreSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/ReaderFeatureStore.swift"))
     let discoverFeatureStoreSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/DiscoverFeatureStore.swift"))
+    let actionButtonSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/PaperCodexActionButton.swift"))
     let libraryCategoryAssignmentSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/LibraryCategoryAssignment.swift"))
     let agentRuntimeSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/AgentRuntime.swift"))
     let codexAgentRuntimeSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/CodexAgentRuntime.swift"))
@@ -789,6 +790,15 @@ func runUILayoutSourceChecks() throws {
             && appModelSource.contains("private let agentRuntime: any AgentRuntime")
             && appModelSource.contains("agentRuntime.runCodexTurn"),
         "Codex CLI streaming should sit behind an AgentRuntime boundary instead of being assembled directly in AppModel"
+    )
+    try check(
+        actionButtonSource.contains("struct PaperCodexToolbarButton")
+            && actionButtonSource.contains("struct PaperCodexIconButton")
+            && discoverSource.contains("PaperCodexToolbarButton")
+            && librarySource.contains("PaperCodexToolbarButton")
+            && chatSource.contains("PaperCodexToolbarButton")
+            && !discoverSource.contains("private struct ToolbarActionButton"),
+        "common toolbar and icon actions should use shared Paper Codex controls instead of local duplicates"
     )
     try check(
         settingsViewSource.contains("Similarity categories")
@@ -1360,7 +1370,8 @@ func runUILayoutSourceChecks() throws {
         "chat sessions should be renameable from the session bar"
     )
     try check(
-        chatSource.contains("Label(\"Rename\", systemImage: \"pencil\")"),
+        chatSource.contains("Label(\"Rename\", systemImage: \"pencil\")")
+            || chatSource.contains("PaperCodexToolbarButton(\n                title: \"Rename\""),
         "chat session rename should be exposed as a direct button after New"
     )
     try check(

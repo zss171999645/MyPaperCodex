@@ -462,18 +462,12 @@ struct LibraryView: View {
                 Text("Library")
                     .font(.paperCodexSystem(size: 28, weight: .semibold))
                 Spacer()
-                Button {
+                PaperCodexToolbarButton(title: "Folders", systemImage: "folder.badge.plus", tint: .gray) {
                     isShowingWatchedFolders = true
-                } label: {
-                    Label("Folders", systemImage: "folder.badge.plus")
                 }
-                .buttonStyle(.bordered)
-                Button {
+                PaperCodexToolbarButton(title: "arXiv", systemImage: "number", tint: .gray) {
                     isShowingArxivImport = true
-                } label: {
-                    Label("arXiv", systemImage: "number")
                 }
-                .buttonStyle(.bordered)
                 Picker("Sort", selection: $librarySortRawValue) {
                     ForEach(LibrarySortOption.allCases) { option in
                         Label {
@@ -488,12 +482,9 @@ struct LibraryView: View {
                 .frame(width: 142)
                 .help("Sort Library")
                 sortDirectionButton
-                Button {
+                PaperCodexToolbarButton(title: "Import PDF", systemImage: "plus", tint: .blue) {
                     presentPDFImportPanel()
-                } label: {
-                    Label("Import PDF", systemImage: "plus")
                 }
-                .buttonStyle(.borderedProminent)
             }
 
             if let selectedCategory {

@@ -118,10 +118,10 @@ Expected: all commands exit 0.
 - Modify: `Sources/PaperCodexApp/ReaderView.swift`
 - Modify: `Sources/PaperCodexApp/ChatView.swift`
 
-- [ ] Reduce nested controls and repeated component definitions.
-- [ ] Make common toolbar/action button components reusable.
-- [ ] Preserve dense, work-focused macOS UI rather than adding marketing-style surfaces.
-- [ ] Verify text fit and interaction states in the built app.
+- [x] Reduce nested controls and repeated component definitions.
+- [x] Make common toolbar/action button components reusable.
+- [x] Preserve dense, work-focused macOS UI rather than adding marketing-style surfaces.
+- [x] Verify text fit and interaction states in the built app.
 
 ## Task 5: Real App Verification
 
@@ -132,4 +132,4 @@ Expected: all commands exit 0.
 - [x] Relaunch the app.
 - [x] Use the real Library, Discover, Reader, and Chat flows.
 - [x] Confirm no behavior regression from the current baseline.
-- [ ] Commit with a standard message after verification.
+- [x] Commit with a standard message after verification.

@@ -493,7 +493,7 @@ struct DiscoverView: View {
                     SimilaritySourceMenu()
                         .environmentObject(model)
 
-                    ToolbarActionButton(
+                    PaperCodexToolbarButton(
                         title: model.isSearchingDiscover ? "Searching" : "Search",
                         systemImage: "magnifyingglass",
                         tint: .blue,
@@ -503,7 +503,7 @@ struct DiscoverView: View {
                     }
 
                     if model.isSearchingDiscover || model.isProcessingDiscoverResults || model.isCachingDiscoverPDFs {
-                        ToolbarActionButton(title: "Stop", systemImage: "stop.circle", tint: .red) {
+                        PaperCodexToolbarButton(title: "Stop", systemImage: "stop.circle", tint: .red) {
                             if model.isSearchingDiscover {
                                 model.cancelDiscoverSearch()
                             }
@@ -515,7 +515,7 @@ struct DiscoverView: View {
                             }
                         }
                     } else {
-                        ToolbarActionButton(
+                        PaperCodexToolbarButton(
                             title: "Process Results",
                             systemImage: "sparkles",
                             tint: .indigo,
@@ -809,48 +809,6 @@ private struct DiscoverPaperStatusBadge: View {
             .orange
         case .downloading:
             .blue
-        }
-    }
-}
-
-private struct ToolbarActionButton: View {
-    @State private var isHovering = false
-
-    var title: String
-    var systemImage: String
-    var tint: Color
-    var disabled = false
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Label {
-                Text(LocalizedStringKey(title))
-            } icon: {
-                Image(systemName: systemImage)
-            }
-                .font(.paperCodexSystem(size: 12.5, weight: .semibold))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .foregroundStyle(disabled ? Color.secondary.opacity(0.55) : (isHovering ? tint : Color.primary.opacity(0.82)))
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(disabled ? Color(nsColor: .controlBackgroundColor).opacity(0.55) : (isHovering ? tint.opacity(0.12) : Color(nsColor: .controlBackgroundColor)))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(disabled ? Color.black.opacity(0.06) : (isHovering ? tint.opacity(0.45) : Color.black.opacity(0.10)), lineWidth: 1)
-                        )
-                )
-                .shadow(color: isHovering && !disabled ? tint.opacity(0.18) : .clear, radius: 7, y: 3)
-                .scaleEffect(isHovering && !disabled ? 1.035 : 1)
-        }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-        .help(title)
-        .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) {
-                isHovering = hovering
-            }
         }
     }
 }

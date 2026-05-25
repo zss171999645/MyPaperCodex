@@ -184,24 +184,21 @@ struct ChatView: View {
             .labelsHidden()
             .frame(minWidth: 120, maxWidth: .infinity)
 
-            Button {
+            PaperCodexToolbarButton(title: "New", systemImage: "plus", tint: .blue) {
                 model.newSessionButtonTapped()
-            } label: {
-                Label("New", systemImage: "plus")
             }
-            .buttonStyle(.borderedProminent)
 
-            Button {
+            PaperCodexToolbarButton(
+                title: "Rename",
+                systemImage: "pencil",
+                tint: .gray,
+                disabled: model.selectedSession == nil
+            ) {
                 if let session = model.selectedSession {
                     renameSessionTitle = session.title
                     sessionPendingRename = session
                 }
-            } label: {
-                Label("Rename", systemImage: "pencil")
             }
-            .buttonStyle(.bordered)
-            .disabled(model.selectedSession == nil)
-            .help("Rename Session")
         }
         .padding(14)
         .controlSize(.small)
