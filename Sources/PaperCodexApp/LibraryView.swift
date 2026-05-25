@@ -1559,14 +1559,15 @@ private enum LibraryLayout {
     static let paperRowThumbnailLimit = 3
     static let paperRowThumbnailMaxPixelSize = 128
     static let categoryTreeRowSpacing: CGFloat = 0
-    static let categoryTreeConnectorHeight: CGFloat = 40
-    static let categoryTreeIndentWidth: CGFloat = 20
+    static let categoryTreeConnectorHeight: CGFloat = 32
+    static let categoryTreeIndentWidth: CGFloat = 22
     static let categoryTreeChevronWidth: CGFloat = 16
     static let categoryTreeChevronIconSpacing: CGFloat = 4
     static let categoryTreeFolderButtonLeadingPadding: CGFloat = 8
     static let categoryTreeFolderIconWidth: CGFloat = 17
-    static let categoryTreeConnectorLineWidth: CGFloat = 1.1
-    static let categoryTreeConnectorOpacity = 0.24
+    static let categoryTreeConnectorTargetInset: CGFloat = 7
+    static let categoryTreeConnectorLineWidth: CGFloat = 1
+    static let categoryTreeConnectorOpacity = 0.16
     static let categoryDropContentTypes: [UTType] = [.plainText]
     static let categoryDragPayloadPrefix = "papercodex-category-id:"
 
@@ -2570,7 +2571,7 @@ private struct CategoryTreeConnector: View {
                 Color.primary.opacity(LibraryLayout.categoryTreeConnectorOpacity),
                 style: StrokeStyle(
                     lineWidth: LibraryLayout.categoryTreeConnectorLineWidth,
-                    lineCap: .round,
+                    lineCap: .butt,
                     lineJoin: .round
                 )
             )
@@ -2590,6 +2591,7 @@ private struct TreeConnectorLevel: Shape {
         Path { path in
             let midY = rect.midY
             let currentIconX = LibraryLayout.categoryTreeFolderIconCenterX(depth: depth)
+            let currentTargetX = currentIconX - LibraryLayout.categoryTreeConnectorTargetInset
             let parentIconX = LibraryLayout.categoryTreeFolderIconCenterX(depth: depth - 1)
             let currentBranchContinues = connectorContinuations.indices.contains(depth - 1)
                 ? connectorContinuations[depth - 1]
@@ -2606,7 +2608,7 @@ private struct TreeConnectorLevel: Shape {
             path.move(to: CGPoint(x: parentIconX, y: rect.minY))
             path.addLine(to: CGPoint(x: parentIconX, y: currentBranchContinues ? rect.maxY : midY))
             path.move(to: CGPoint(x: parentIconX, y: midY))
-            path.addLine(to: CGPoint(x: currentIconX, y: midY))
+            path.addLine(to: CGPoint(x: currentTargetX, y: midY))
         }
     }
 }
