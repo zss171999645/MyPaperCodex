@@ -4,12 +4,16 @@ public struct PaperLibraryDerivedState: Equatable, Sendable {
     public static let empty = PaperLibraryDerivedState(
         categoryPaperCountsByID: [:],
         tagPaperCountsByID: [:],
+        paperIDsByCategoryID: [:],
+        paperIDsByTagID: [:],
         descendantCategoryIDsByID: [:],
         searchTextByPaperID: [:]
     )
 
     public var categoryPaperCountsByID: [String: Int]
     public var tagPaperCountsByID: [String: Int]
+    public var paperIDsByCategoryID: [String: Set<String>]
+    public var paperIDsByTagID: [String: Set<String>]
     public var descendantCategoryIDsByID: [String: Set<String>]
     public var searchTextByPaperID: [String: String]
 
@@ -23,6 +27,8 @@ public struct PaperLibraryDerivedState: Equatable, Sendable {
         let descendantCategoryIDsByID = makeDescendantCategoryIDsByID(categories: categories)
         var categoryCounts: [String: Int] = [:]
         var tagCounts: [String: Int] = [:]
+        var paperIDsByCategoryID: [String: Set<String>] = [:]
+        var paperIDsByTagID: [String: Set<String>] = [:]
         var searchText: [String: String] = [:]
 
         for paper in papers {
@@ -30,9 +36,11 @@ public struct PaperLibraryDerivedState: Equatable, Sendable {
             let paperTags = tagsByPaperID[paper.id, default: []]
             for categoryID in Set(categoryIDs) {
                 categoryCounts[categoryID, default: 0] += 1
+                paperIDsByCategoryID[categoryID, default: []].insert(paper.id)
             }
             for tagID in Set(paperTags.map(\.id)) {
                 tagCounts[tagID, default: 0] += 1
+                paperIDsByTagID[tagID, default: []].insert(paper.id)
             }
 
             let categoryNames = categoryIDs.compactMap { categoryNamesByID[$0] }
@@ -54,6 +62,8 @@ public struct PaperLibraryDerivedState: Equatable, Sendable {
         return PaperLibraryDerivedState(
             categoryPaperCountsByID: categoryCounts,
             tagPaperCountsByID: tagCounts,
+            paperIDsByCategoryID: paperIDsByCategoryID,
+            paperIDsByTagID: paperIDsByTagID,
             descendantCategoryIDsByID: descendantCategoryIDsByID,
             searchTextByPaperID: searchText
         )
@@ -64,6 +74,17 @@ public struct PaperLibraryDerivedState: Equatable, Sendable {
             return [categoryID]
         }
         return Set([categoryID]).union(descendantCategoryIDsByID[categoryID, default: []])
+    }
+
+    public func paperIDsForCategoryFilter(_ categoryID: String, includeDescendants: Bool) -> Set<String> {
+        categoryIDsForFilter(categoryID, includeDescendants: includeDescendants)
+            .reduce(into: Set<String>()) { paperIDs, categoryID in
+                paperIDs.formUnion(paperIDsByCategoryID[categoryID, default: []])
+            }
+    }
+
+    public func paperIDsForTag(_ tagID: String) -> Set<String> {
+        paperIDsByTagID[tagID, default: []]
     }
 
     public func matchesSearch(paperID: String, query: String) -> Bool {

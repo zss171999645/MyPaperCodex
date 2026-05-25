@@ -308,6 +308,17 @@ func runLibraryDerivedStateChecks() throws {
         importedAt: now,
         updatedAt: now
     )
+    let paperC = Paper(
+        id: "paper-c",
+        filePath: "/tmp/c.pdf",
+        fileHash: "hash-c",
+        title: "Latent Diffusion",
+        authors: ["Dana"],
+        year: 2024,
+        sourceURL: nil,
+        importedAt: now,
+        updatedAt: now
+    )
     let categories = [
         Category(id: "cat-methods", parentID: nil, name: "Methods", sortOrder: 1),
         Category(id: "cat-vae", parentID: "cat-methods", name: "VAE", sortOrder: 2)
@@ -322,20 +333,24 @@ func runLibraryDerivedStateChecks() throws {
         ]
     ]
     let state = PaperLibraryDerivedState.build(
-        papers: [paperA, paperB],
+        papers: [paperA, paperB, paperC],
         categories: categories,
         categoryIDsByPaperID: [
             "paper-a": ["cat-methods", "cat-vae"],
-            "paper-b": ["cat-methods"]
+            "paper-b": ["cat-methods"],
+            "paper-c": ["cat-vae"]
         ],
         tagsByPaperID: tagsByPaperID
     )
 
-    try check(state.categoryPaperCountsByID == ["cat-methods": 2, "cat-vae": 1], "library derived state should precompute category counts")
+    try check(state.categoryPaperCountsByID == ["cat-methods": 2, "cat-vae": 2], "library derived state should precompute category counts")
     try check(state.tagPaperCountsByID == ["tag-autoencoder": 1, "tag-diffusion": 2], "library derived state should precompute tag counts")
     try check(state.descendantCategoryIDsByID["cat-methods"] == ["cat-vae"], "library derived state should precompute category descendants")
     try check(state.categoryIDsForFilter("cat-methods", includeDescendants: false) == ["cat-methods"], "library current-folder filter should only include the selected category")
     try check(state.categoryIDsForFilter("cat-methods", includeDescendants: true) == ["cat-methods", "cat-vae"], "library subtree filter should include the selected category and descendants")
+    try check(state.paperIDsForCategoryFilter("cat-methods", includeDescendants: false) == ["paper-a", "paper-b"], "library current-folder filtering should use precomputed category paper IDs")
+    try check(state.paperIDsForCategoryFilter("cat-methods", includeDescendants: true) == ["paper-a", "paper-b", "paper-c"], "library subtree filtering should union precomputed descendant paper IDs")
+    try check(state.paperIDsForTag("tag-diffusion") == ["paper-a", "paper-b"], "library tag filtering should use precomputed tag paper IDs")
     try check(state.matchesSearch(paperID: "paper-a", query: "vae autoencoder alice 2026"), "library search index should include title, authors, year, categories, tags, and URL")
     try check(!state.matchesSearch(paperID: "paper-b", query: "alice"), "library search index should stay scoped to each paper")
     try check(state.matchesSearch(paperID: "missing", query: "anything"), "missing papers should not be filtered out by an empty derived search index")
@@ -446,11 +461,13 @@ func runUILayoutSourceChecks() throws {
     )
     try check(
         librarySource.contains("LibraryRootFolderRow")
-            && librarySource.contains("FolderBreadcrumbBar")
-            && librarySource.contains("folderBreadcrumbPath(for:")
+            && librarySource.contains("LibraryInlineControlRow")
+            && librarySource.contains("LibraryPaperListState")
+            && !librarySource.contains("FolderBreadcrumbBar")
+            && !librarySource.contains("folderBreadcrumbPath(for:")
             && librarySource.contains("This folder")
             && librarySource.contains("All levels"),
-        "library folders should read as a Finder-style tree with a root row, breadcrumb path, and explicit folder scope labels"
+        "library folders should keep search, scope, count, and reading actions in one inline toolbar without a breadcrumb path"
     )
     try check(
         librarySource.contains("private var sidebarLists: some View") &&
@@ -603,6 +620,7 @@ func runUILayoutSourceChecks() throws {
     let readerViewSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/ReaderView.swift"))
     let localThumbnailSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/LocalThumbnailImage.swift"))
     let libraryFeatureStoreSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/LibraryFeatureStore.swift"))
+    let libraryDerivedStateSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/LibraryDerivedState.swift"))
     let readerFeatureStoreSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/ReaderFeatureStore.swift"))
     let discoverFeatureStoreSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/DiscoverFeatureStore.swift"))
     let actionButtonSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/PaperCodexActionButton.swift"))
@@ -1134,9 +1152,14 @@ func runUILayoutSourceChecks() throws {
             || libraryFeatureStoreSource.contains("@Published var libraryDerivedState"))
             && (appModelSource.contains("PaperLibraryDerivedState.build")
                 || libraryFeatureStoreSource.contains("PaperLibraryDerivedState.build"))
-            && librarySource.contains("model.libraryDerivedState.matchesSearch")
+            && (librarySource.contains("model.libraryDerivedState.matchesSearch")
+                || librarySource.contains("derivedState.matchesSearch"))
             && librarySource.contains("model.libraryDerivedState.categoryPaperCountsByID")
-            && librarySource.contains("model.libraryDerivedState.tagPaperCountsByID"),
+            && librarySource.contains("model.libraryDerivedState.tagPaperCountsByID")
+            && libraryDerivedStateSource.contains("paperIDsByCategoryID")
+            && libraryDerivedStateSource.contains("paperIDsForCategoryFilter")
+            && libraryDerivedStateSource.contains("paperIDsForTag")
+            && librarySource.contains("makePaperListState"),
         "library filtering and sidebar counts should use a precomputed derived state instead of recomputing in the view body"
     )
     try check(
@@ -1213,7 +1236,8 @@ func runUILayoutSourceChecks() throws {
         "library folder hierarchy should render an explicit depth guide"
     )
     try check(
-        librarySource.contains("LibraryPaperList(papers: visiblePapers)")
+        (librarySource.contains("LibraryPaperList(papers: visiblePapers)")
+            || librarySource.contains("LibraryPaperList(papers: listState.papers)"))
             && librarySource.contains("listRowInsets"),
         "library paper rows should reduce inter-card gaps and make the card hit area larger"
     )
@@ -1267,9 +1291,9 @@ func runUILayoutSourceChecks() throws {
     )
     try check(
         librarySource.contains("libraryIncludeSubfolders")
-            && librarySource.contains("categoryScopeToggle")
-            && librarySource.contains("categoryIDsForSelectedCategoryFilter")
-            && librarySource.contains("categoryIDsForFilter(selectedCategoryID, includeDescendants: libraryIncludeSubfolders)"),
+            && librarySource.contains("showsFolderScope")
+            && librarySource.contains("paperIDsForCategoryFilter(")
+            && librarySource.contains("includeDescendants: libraryIncludeSubfolders"),
         "library folder view should toggle between current-folder papers and current-plus-subfolders papers"
     )
     try check(
@@ -1482,7 +1506,8 @@ func runUILayoutSourceChecks() throws {
         librarySource.contains("RecentConversationsContent")
             && librarySource.contains("openSelectedPapersForReading")
             && librarySource.contains("openSelectedPapersForChat")
-            && librarySource.contains("selectedCategoryPaperIDsInOrder"),
+            && librarySource.contains("LibraryInlineControlRow")
+            && librarySource.contains("readablePaperIDs"),
         "library should expose recent conversations and open multi-paper sessions from selections or folders"
     )
     if let sidebarRange = appShellSource.range(of: "struct PrimaryNavigationSection"),

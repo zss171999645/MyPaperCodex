@@ -59,35 +59,12 @@ struct LibraryView: View {
         nonmutating set { model.selectedLibrarySurface = newValue }
     }
 
-    private var filteredPapers: [Paper] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        var result = model.papers
-        if let selectedCategoryID {
-            let categoryIDs = model.libraryDerivedState.categoryIDsForFilter(selectedCategoryID, includeDescendants: libraryIncludeSubfolders)
-            result = result.filter { paper in
-                !Set(model.paperCategoryIDsByID[paper.id, default: []]).isDisjoint(with: categoryIDs)
-            }
-        }
-        if let selectedTagID {
-            result = result.filter { paper in
-                model.paperTagsByID[paper.id, default: []].contains { $0.id == selectedTagID }
-            }
-        }
-        if !query.isEmpty {
-            result = result.filter {
-                model.libraryDerivedState.matchesSearch(paperID: $0.id, query: query)
-            }
-        }
-        return result
-    }
-
     private var filteredPaperIDs: [String] {
-        filteredPapers.map(\.id)
+        makePaperListState().paperIDs
     }
 
     private var sortedPapers: [Paper] {
-        let option = LibrarySortOption(rawValue: librarySortRawValue) ?? .addedNewest
-        return option.sorted(filteredPapers, ascending: librarySortAscending)
+        makePaperListState().papers
     }
 
     private var selectedPaperIDsInOrder: [String] {
@@ -101,38 +78,53 @@ struct LibraryView: View {
         }
     }
 
-    private var selectedCategory: PaperCodexCore.Category? {
-        selectedCategoryID.flatMap { categoryID in
-            model.categories.first { $0.id == categoryID }
-        }
-    }
-
-    private var selectedCategoryPaperIDsInOrder: [String] {
-        guard selectedCategoryID != nil else {
-            return []
-        }
-        let option = LibrarySortOption(rawValue: librarySortRawValue) ?? .addedNewest
-        let categoryIDs = categoryIDsForSelectedCategoryFilter
-        let categoryPapers = model.papers.filter { paper in
-            !paper.isArxivImportPlaceholder
-                && !Set(model.paperCategoryIDsByID[paper.id, default: []]).isDisjoint(with: categoryIDs)
-        }
-        return option.sorted(categoryPapers, ascending: librarySortAscending).map(\.id)
-    }
-
-    private var categoryIDsForSelectedCategoryFilter: Set<String> {
-        guard let selectedCategoryID else {
-            return []
-        }
-        return model.libraryDerivedState.categoryIDsForFilter(selectedCategoryID, includeDescendants: libraryIncludeSubfolders)
-    }
-
     private var selectedRecentSession: PaperSession? {
         if let selectedRecentSessionID,
            let session = model.recentSessions.first(where: { $0.id == selectedRecentSessionID }) {
             return session
         }
         return model.recentSessions.first
+    }
+
+    private func makePaperListState() -> LibraryPaperListState {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let derivedState = model.libraryDerivedState
+        var paperIDFilter: Set<String>?
+
+        if let selectedCategoryID {
+            paperIDFilter = derivedState.paperIDsForCategoryFilter(
+                selectedCategoryID,
+                includeDescendants: libraryIncludeSubfolders
+            )
+        }
+
+        if let selectedTagID {
+            let tagPaperIDs = derivedState.paperIDsForTag(selectedTagID)
+            if let existingFilter = paperIDFilter {
+                paperIDFilter = existingFilter.intersection(tagPaperIDs)
+            } else {
+                paperIDFilter = tagPaperIDs
+            }
+        }
+
+        var papers = model.papers
+        if let paperIDFilter {
+            papers = papers.filter { paperIDFilter.contains($0.id) }
+        }
+        if !query.isEmpty {
+            papers = papers.filter { paper in
+                derivedState.matchesSearch(paperID: paper.id, query: query)
+            }
+        }
+
+        let option = LibrarySortOption(rawValue: librarySortRawValue) ?? .addedNewest
+        let sortedPapers = option.sorted(papers, ascending: librarySortAscending)
+        return LibraryPaperListState(
+            papers: sortedPapers,
+            paperIDs: sortedPapers.map(\.id),
+            readablePaperIDs: sortedPapers.filter { !$0.isArxivImportPlaceholder }.map(\.id),
+            hasActiveFilters: selectedCategoryID != nil || selectedTagID != nil || !query.isEmpty
+        )
     }
 
     var body: some View {
@@ -324,7 +316,12 @@ struct LibraryView: View {
     }
 
     private var categorySidebarSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let categoryTree = LibraryCategoryTreeSnapshot(
+            categories: model.categories,
+            collapsedCategoryIDs: collapsedCategoryIDs
+        )
+
+        return VStack(alignment: .leading, spacing: 8) {
             sidebarHeader("Folders", systemImage: "folder") {
                 startCreatingCategory(parentID: selectedCategoryID)
             }
@@ -332,30 +329,26 @@ struct LibraryView: View {
                 countText: "\(model.papers.count)",
                 isSelected: selectedLibrarySurface == .papers && selectedCategoryID == nil && selectedTagID == nil
             ) {
-                selectedLibrarySurface = .papers
-                selectedCategoryID = nil
-                selectedTagID = nil
+                selectRootLibrary()
             }
             if model.categories.isEmpty {
                 SidebarEmptyText("No categories")
             } else {
-                ForEach(visibleCategoryItems()) { item in
+                ForEach(categoryTree.visibleItems) { item in
                     CategorySidebarRow(
                         title: item.category.name,
                         countText: "\(paperCount(inCategory: item.category.id))",
                         systemImage: selectedCategoryID == item.category.id ? "folder.fill" : "folder",
                         isSelected: selectedLibrarySurface == .papers && selectedCategoryID == item.category.id,
                         depth: item.depth,
-                        hasChildren: hasChildCategories(item.category.id),
+                        hasChildren: categoryTree.hasChildren(item.category.id),
                         isExpanded: !collapsedCategoryIDs.contains(item.category.id),
                         categoryDragPayload: categoryDragPayload(for: item.category),
                         onToggle: {
                             toggleCategoryCollapsed(item.category.id)
                         },
                         onSelect: {
-                            selectedLibrarySurface = .papers
-                            selectedCategoryID = item.category.id
-                            selectedTagID = nil
+                            selectLibraryCategory(item.category.id)
                         },
                         onCreateChild: {
                             newCategoryParentID = item.category.id
@@ -366,9 +359,7 @@ struct LibraryView: View {
                         },
                         onDropPapers: { paperIDs in
                             model.movePapers(paperIDs, toCategory: item.category.id)
-                            selectedLibrarySurface = .papers
-                            selectedCategoryID = item.category.id
-                            selectedTagID = nil
+                            selectLibraryCategory(item.category.id)
                         },
                         onDropCategory: { droppedCategoryID in
                             guard droppedCategoryID != item.category.id else {
@@ -396,9 +387,7 @@ struct LibraryView: View {
                         countText: "\(paperCount(forTag: tag.id))",
                         isSelected: selectedLibrarySurface == .papers && selectedTagID == tag.id
                     ) {
-                        selectedLibrarySurface = .papers
-                        selectedTagID = tag.id
-                        selectedCategoryID = nil
+                        selectLibraryTag(tag.id)
                     } onManage: {
                         tagPendingManagement = tag
                     }
@@ -455,72 +444,39 @@ struct LibraryView: View {
     }
 
     private var paperList: some View {
-        let visiblePapers = sortedPapers
+        let listState = makePaperListState()
         return VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 12) {
-                Text("Library")
-                    .font(.paperCodexSystem(size: 28, weight: .semibold))
-                Spacer()
-                PaperCodexToolbarButton(title: "Folders", systemImage: "folder.badge.plus", tint: .gray) {
+            LibraryInlineControlRow(
+                searchText: searchTextBinding,
+                sortRawValue: $librarySortRawValue,
+                sortAscending: $librarySortAscending,
+                includeSubfolders: $libraryIncludeSubfolders,
+                paperCount: listState.papers.count,
+                showsFolderScope: selectedCategoryID != nil,
+                showsReadActions: selectedCategoryID != nil,
+                canRead: !listState.readablePaperIDs.isEmpty,
+                hasActiveFilters: listState.hasActiveFilters,
+                onRead: {
+                    model.openPapersForReading(listState.readablePaperIDs)
+                },
+                onChat: {
+                    model.openPapersForChat(listState.readablePaperIDs)
+                },
+                onClearFilters: clearLibraryFilters,
+                onShowWatchedFolders: {
                     isShowingWatchedFolders = true
-                }
-                PaperCodexToolbarButton(title: "arXiv", systemImage: "number", tint: .gray) {
+                },
+                onShowArxivImport: {
                     isShowingArxivImport = true
-                }
-                Picker("Sort", selection: $librarySortRawValue) {
-                    ForEach(LibrarySortOption.allCases) { option in
-                        Label {
-                            Text(LocalizedStringKey(option.title))
-                        } icon: {
-                            Image(systemName: option.systemImage)
-                        }
-                        .tag(option.rawValue)
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(width: 142)
-                .help("Sort Library")
-                sortDirectionButton
-                PaperCodexToolbarButton(title: "Import PDF", systemImage: "plus", tint: .blue) {
-                    presentPDFImportPanel()
-                }
-            }
+                },
+                onImportPDF: presentPDFImportPanel
+            )
 
-            if let selectedCategory {
-                folderConversationActions(for: selectedCategory)
-            }
-
-            HStack(spacing: 8) {
-                TextField("Search title, author, tag, category, year, or source", text: searchTextBinding)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.paperCodexSystem(size: 15))
-                if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Clear Search")
-                }
-            }
-
-            if selectedCategoryID != nil || selectedTagID != nil || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Button {
-                    searchText = ""
-                    selectedCategoryID = nil
-                    selectedTagID = nil
-                } label: {
-                    Label("Clear Filters", systemImage: "xmark.circle")
-                }
-                .buttonStyle(.borderless)
-            }
-
-            if visiblePapers.isEmpty {
+            if listState.papers.isEmpty {
                 ContentUnavailableView("No Papers", systemImage: "doc.text.magnifyingglass")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                LibraryPaperList(papers: visiblePapers) { paper in
+                LibraryPaperList(papers: listState.papers) { paper in
                     PaperRow(
                         paper: paper,
                         categories: categories(for: paper),
@@ -590,69 +546,6 @@ struct LibraryView: View {
             }
         }
         .animation(.easeOut(duration: 0.16), value: selectedPaperIDs.count > 1)
-    }
-
-    private func folderConversationActions(for category: PaperCodexCore.Category) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                FolderBreadcrumbBar(path: folderBreadcrumbPath(for: category))
-                Spacer()
-                Text("\(selectedCategoryPaperIDsInOrder.count) papers")
-                    .font(.paperCodexSystem(size: 12.5))
-                    .foregroundStyle(.tertiary)
-            }
-            HStack(spacing: 10) {
-                categoryScopeToggle
-                Spacer()
-                Button {
-                    model.openPapersForReading(selectedCategoryPaperIDsInOrder)
-                } label: {
-                    Label("Read", systemImage: "book")
-                }
-                .disabled(selectedCategoryPaperIDsInOrder.isEmpty)
-                Button {
-                    model.openPapersForChat(selectedCategoryPaperIDsInOrder)
-                } label: {
-                    Label("Chat", systemImage: "text.bubble")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(selectedCategoryPaperIDsInOrder.isEmpty)
-            }
-        }
-        .buttonStyle(.bordered)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-        )
-    }
-
-    private var categoryScopeToggle: some View {
-        Button {
-            libraryIncludeSubfolders.toggle()
-        } label: {
-            Label(libraryIncludeSubfolders ? "All levels" : "This folder", systemImage: libraryIncludeSubfolders ? "folder.badge.gearshape" : "folder")
-        }
-        .buttonStyle(.bordered)
-        .help(libraryIncludeSubfolders ? "Showing current folder and subfolders" : "Showing current folder only")
-        .accessibilityLabel(libraryIncludeSubfolders ? "Show Current Folder Only" : "Show Current Folder And Subfolders")
-    }
-
-    private var sortDirectionButton: some View {
-        Button {
-            librarySortAscending.toggle()
-        } label: {
-            Image(systemName: librarySortAscending ? "arrow.up" : "arrow.down")
-                .frame(width: 22, height: 22)
-        }
-        .buttonStyle(.bordered)
-        .help(librarySortAscending ? "Ascending" : "Descending")
-        .accessibilityLabel(librarySortAscending ? "Sort Ascending" : "Sort Descending")
     }
 
     private var inspector: some View {
@@ -1043,16 +936,53 @@ struct LibraryView: View {
         noteBody = ""
     }
 
+    private func applyFastLibrarySelection(_ update: () -> Void) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            update()
+        }
+    }
+
+    private func selectRootLibrary() {
+        applyFastLibrarySelection {
+            selectedLibrarySurface = .papers
+            selectedCategoryID = nil
+            selectedTagID = nil
+        }
+    }
+
+    private func selectLibraryCategory(_ categoryID: String) {
+        applyFastLibrarySelection {
+            selectedLibrarySurface = .papers
+            selectedCategoryID = categoryID
+            selectedTagID = nil
+        }
+    }
+
+    private func selectLibraryTag(_ tagID: String) {
+        applyFastLibrarySelection {
+            selectedLibrarySurface = .papers
+            selectedTagID = tagID
+            selectedCategoryID = nil
+        }
+    }
+
+    private func clearLibraryFilters() {
+        applyFastLibrarySelection {
+            searchText = ""
+            selectedCategoryID = nil
+            selectedTagID = nil
+            selectedLibrarySurface = .papers
+        }
+    }
+
     private func toggleCategoryCollapsed(_ categoryID: String) {
         if collapsedCategoryIDs.contains(categoryID) {
             collapsedCategoryIDs.remove(categoryID)
         } else {
             collapsedCategoryIDs.insert(categoryID)
         }
-    }
-
-    private func hasChildCategories(_ categoryID: String) -> Bool {
-        model.categories.contains { $0.parentID == categoryID }
     }
 
     private func paperCount(inCategory categoryID: String) -> Int {
@@ -1113,20 +1043,6 @@ struct LibraryView: View {
     private func categories(for paper: Paper) -> [PaperCodexCore.Category] {
         let ids = Set(model.paperCategoryIDsByID[paper.id, default: []])
         return model.categories.filter { ids.contains($0.id) }
-    }
-
-    private func folderBreadcrumbPath(for category: PaperCodexCore.Category) -> [String] {
-        var path = [category.name]
-        var visited: Set<String> = [category.id]
-        var parentID = category.parentID
-        while let id = parentID,
-              !visited.contains(id),
-              let parent = model.categories.first(where: { $0.id == id }) {
-            path.append(parent.name)
-            visited.insert(parent.id)
-            parentID = parent.parentID
-        }
-        return ["All Papers"] + path.reversed()
     }
 
     private func presentPDFImportPanel() {
@@ -1381,29 +1297,223 @@ private struct LibraryRootFolderRow: View {
     }
 }
 
-private struct FolderBreadcrumbBar: View {
-    var path: [String]
+private struct LibraryInlineControlRow: View {
+    @Binding var searchText: String
+    @Binding var sortRawValue: String
+    @Binding var sortAscending: Bool
+    @Binding var includeSubfolders: Bool
+
+    var paperCount: Int
+    var showsFolderScope: Bool
+    var showsReadActions: Bool
+    var canRead: Bool
+    var hasActiveFilters: Bool
+    var onRead: () -> Void
+    var onChat: () -> Void
+    var onClearFilters: () -> Void
+    var onShowWatchedFolders: () -> Void
+    var onShowArxivImport: () -> Void
+    var onImportPDF: () -> Void
 
     var body: some View {
-        HStack(spacing: 5) {
-            ForEach(Array(path.enumerated()), id: \.offset) { index, name in
-                if index > 0 {
-                    Image(systemName: "chevron.right")
-                        .font(.paperCodexSystem(size: 8, weight: .bold))
-                        .foregroundStyle(.tertiary)
+        HStack(spacing: 8) {
+            Text("Library")
+                .font(.paperCodexSystem(size: 22, weight: .semibold))
+                .fixedSize()
+
+            searchField
+
+            Text("\(paperCount) papers")
+                .font(.paperCodexSystem(size: 12.5, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .fixedSize()
+
+            if showsFolderScope {
+                scopeToggle
+            }
+
+            Spacer(minLength: 8)
+
+            if hasActiveFilters {
+                PaperCodexIconButton(title: "Clear Filters", systemImage: "line.3.horizontal.decrease.circle", tint: .secondary) {
+                    onClearFilters()
                 }
-                Label {
-                    Text(name)
-                        .lineLimit(1)
-                } icon: {
-                    Image(systemName: index == 0 ? "tray.full" : "folder.fill")
-                }
-                .labelStyle(.titleAndIcon)
-                .font(.paperCodexSystem(size: 12.5, weight: index == path.count - 1 ? .semibold : .medium))
-                .foregroundStyle(index == path.count - 1 ? Color.primary : Color.secondary)
+            }
+
+            if showsReadActions {
+                readButton
+                chatButton
+            }
+
+            PaperCodexIconButton(title: "Folders", systemImage: "folder.badge.plus", tint: .secondary) {
+                onShowWatchedFolders()
+            }
+            PaperCodexIconButton(title: "arXiv", systemImage: "number", tint: .secondary) {
+                onShowArxivImport()
+            }
+            sortPicker
+            sortDirectionButton
+            PaperCodexToolbarButton(title: "Import PDF", systemImage: "plus", tint: .blue) {
+                onImportPDF()
             }
         }
-        .frame(minHeight: 24, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 34)
+        .lineLimit(1)
+        .controlSize(.small)
+    }
+
+    private var searchField: some View {
+        TextField("Search title, author, tag, category, year, or source", text: $searchText)
+            .textFieldStyle(.roundedBorder)
+            .font(.paperCodexSystem(size: 14))
+            .frame(minWidth: 180, maxWidth: .infinity)
+            .layoutPriority(1)
+            .overlay(alignment: .trailing) {
+                if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .padding(.trailing, 6)
+                    .help("Clear Search")
+                }
+            }
+    }
+
+    private var scopeToggle: some View {
+        Button {
+            includeSubfolders.toggle()
+        } label: {
+            Label(includeSubfolders ? "All levels" : "This folder", systemImage: includeSubfolders ? "folder.badge.gearshape" : "folder")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(.bordered)
+        .fixedSize()
+        .help(includeSubfolders ? "Showing current folder and subfolders" : "Showing current folder only")
+        .accessibilityLabel(includeSubfolders ? "Show Current Folder Only" : "Show Current Folder And Subfolders")
+    }
+
+    private var readButton: some View {
+        Button(action: onRead) {
+            Label("Read", systemImage: "book")
+        }
+        .buttonStyle(.bordered)
+        .fixedSize()
+        .disabled(!canRead)
+        .help("Read visible papers")
+    }
+
+    private var chatButton: some View {
+        Button(action: onChat) {
+            Label("Chat", systemImage: "text.bubble")
+        }
+        .buttonStyle(.borderedProminent)
+        .fixedSize()
+        .disabled(!canRead)
+        .help("Chat with visible papers")
+    }
+
+    private var sortPicker: some View {
+        Picker("Sort", selection: $sortRawValue) {
+            ForEach(LibrarySortOption.allCases) { option in
+                Label {
+                    Text(LocalizedStringKey(option.title))
+                } icon: {
+                    Image(systemName: option.systemImage)
+                }
+                .tag(option.rawValue)
+            }
+        }
+        .pickerStyle(.menu)
+        .frame(width: 108)
+        .help("Sort Library")
+    }
+
+    private var sortDirectionButton: some View {
+        Button {
+            sortAscending.toggle()
+        } label: {
+            Image(systemName: sortAscending ? "arrow.up" : "arrow.down")
+                .frame(width: 22, height: 22)
+        }
+        .buttonStyle(.bordered)
+        .fixedSize()
+        .help(sortAscending ? "Ascending" : "Descending")
+        .accessibilityLabel(sortAscending ? "Sort Ascending" : "Sort Descending")
+    }
+}
+
+private struct LibraryPaperListState {
+    var papers: [Paper]
+    var paperIDs: [String]
+    var readablePaperIDs: [String]
+    var hasActiveFilters: Bool
+}
+
+private struct LibraryCategoryTreeSnapshot {
+    var visibleItems: [CategoryListItem]
+
+    private var childrenByParentID: [String: [PaperCodexCore.Category]]
+
+    init(categories: [PaperCodexCore.Category], collapsedCategoryIDs: Set<String>) {
+        var rootCategories: [PaperCodexCore.Category] = []
+        var childrenByParentID: [String: [PaperCodexCore.Category]] = [:]
+
+        for category in categories {
+            if let parentID = category.parentID {
+                childrenByParentID[parentID, default: []].append(category)
+            } else {
+                rootCategories.append(category)
+            }
+        }
+
+        rootCategories.sort(by: Self.sortCategories)
+        for parentID in Array(childrenByParentID.keys) {
+            childrenByParentID[parentID, default: []].sort(by: Self.sortCategories)
+        }
+
+        self.childrenByParentID = childrenByParentID
+        self.visibleItems = Self.visibleItems(
+            categories: rootCategories,
+            childrenByParentID: childrenByParentID,
+            collapsedCategoryIDs: collapsedCategoryIDs,
+            depth: 0
+        )
+    }
+
+    func hasChildren(_ categoryID: String) -> Bool {
+        childrenByParentID[categoryID]?.isEmpty == false
+    }
+
+    private static func visibleItems(
+        categories: [PaperCodexCore.Category],
+        childrenByParentID: [String: [PaperCodexCore.Category]],
+        collapsedCategoryIDs: Set<String>,
+        depth: Int
+    ) -> [CategoryListItem] {
+        categories.flatMap { category in
+            let item = CategoryListItem(category: category, depth: depth)
+            guard !collapsedCategoryIDs.contains(category.id) else {
+                return [item]
+            }
+            return [item] + visibleItems(
+                categories: childrenByParentID[category.id, default: []],
+                childrenByParentID: childrenByParentID,
+                collapsedCategoryIDs: collapsedCategoryIDs,
+                depth: depth + 1
+            )
+        }
+    }
+
+    private static func sortCategories(_ left: PaperCodexCore.Category, _ right: PaperCodexCore.Category) -> Bool {
+        if left.sortOrder == right.sortOrder {
+            return left.name.localizedCaseInsensitiveCompare(right.name) == .orderedAscending
+        }
+        return left.sortOrder < right.sortOrder
     }
 }
 
@@ -1464,7 +1574,7 @@ private struct PaperRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
-            ThumbnailStrip(urls: Array(thumbnailURLs.prefix(5)))
+            ThumbnailStrip(urls: Array(thumbnailURLs.prefix(LibraryLayout.paperRowThumbnailLimit)))
                 .frame(width: 132, height: 54)
                 .opacity(isImportPlaceholder ? 0.45 : 1)
 
