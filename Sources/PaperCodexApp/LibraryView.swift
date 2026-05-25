@@ -334,40 +334,43 @@ struct LibraryView: View {
             if model.categories.isEmpty {
                 SidebarEmptyText("No categories")
             } else {
-                ForEach(categoryTree.visibleItems) { item in
-                    CategorySidebarRow(
-                        title: item.category.name,
-                        countText: "\(paperCount(inCategory: item.category.id))",
-                        systemImage: selectedCategoryID == item.category.id ? "folder.fill" : "folder",
-                        isSelected: selectedLibrarySurface == .papers && selectedCategoryID == item.category.id,
-                        depth: item.depth,
-                        hasChildren: categoryTree.hasChildren(item.category.id),
-                        isExpanded: !collapsedCategoryIDs.contains(item.category.id),
-                        categoryDragPayload: categoryDragPayload(for: item.category),
-                        onToggle: {
-                            toggleCategoryCollapsed(item.category.id)
-                        },
-                        onSelect: {
-                            selectLibraryCategory(item.category.id)
-                        },
-                        onCreateChild: {
-                            newCategoryParentID = item.category.id
-                            startCreatingCategory(parentID: item.category.id)
-                        },
-                        onManage: {
-                            categoryPendingManagement = item.category
-                        },
-                        onDropPapers: { paperIDs in
-                            model.movePapers(paperIDs, toCategory: item.category.id)
-                            selectLibraryCategory(item.category.id)
-                        },
-                        onDropCategory: { droppedCategoryID in
-                            guard droppedCategoryID != item.category.id else {
-                                return
+                VStack(alignment: .leading, spacing: LibraryLayout.categoryTreeRowSpacing) {
+                    ForEach(categoryTree.visibleItems) { item in
+                        CategorySidebarRow(
+                            title: item.category.name,
+                            countText: "\(paperCount(inCategory: item.category.id))",
+                            systemImage: selectedCategoryID == item.category.id ? "folder.fill" : "folder",
+                            isSelected: selectedLibrarySurface == .papers && selectedCategoryID == item.category.id,
+                            depth: item.depth,
+                            connectorContinuations: item.connectorContinuations,
+                            hasChildren: categoryTree.hasChildren(item.category.id),
+                            isExpanded: !collapsedCategoryIDs.contains(item.category.id),
+                            categoryDragPayload: categoryDragPayload(for: item.category),
+                            onToggle: {
+                                toggleCategoryCollapsed(item.category.id)
+                            },
+                            onSelect: {
+                                selectLibraryCategory(item.category.id)
+                            },
+                            onCreateChild: {
+                                newCategoryParentID = item.category.id
+                                startCreatingCategory(parentID: item.category.id)
+                            },
+                            onManage: {
+                                categoryPendingManagement = item.category
+                            },
+                            onDropPapers: { paperIDs in
+                                model.movePapers(paperIDs, toCategory: item.category.id)
+                                selectLibraryCategory(item.category.id)
+                            },
+                            onDropCategory: { droppedCategoryID in
+                                guard droppedCategoryID != item.category.id else {
+                                    return
+                                }
+                                model.moveCategory(droppedCategoryID, toParent: item.category.id)
                             }
-                            model.moveCategory(droppedCategoryID, toParent: item.category.id)
-                        }
-                    )
+                        )
+                    }
                 }
             }
         }
@@ -1258,6 +1261,7 @@ private struct WatchedFolderRow: View {
 private struct CategoryListItem: Identifiable {
     var category: PaperCodexCore.Category
     var depth: Int
+    var connectorContinuations: [Bool] = []
 
     var id: String { category.id }
 }
@@ -1481,7 +1485,8 @@ private struct LibraryCategoryTreeSnapshot {
             categories: rootCategories,
             childrenByParentID: childrenByParentID,
             collapsedCategoryIDs: collapsedCategoryIDs,
-            depth: 0
+            depth: 0,
+            ancestorContinuations: []
         )
     }
 
@@ -1493,10 +1498,17 @@ private struct LibraryCategoryTreeSnapshot {
         categories: [PaperCodexCore.Category],
         childrenByParentID: [String: [PaperCodexCore.Category]],
         collapsedCategoryIDs: Set<String>,
-        depth: Int
+        depth: Int,
+        ancestorContinuations: [Bool]
     ) -> [CategoryListItem] {
-        categories.flatMap { category in
-            let item = CategoryListItem(category: category, depth: depth)
+        categories.enumerated().flatMap { index, category in
+            let isLast = index == categories.count - 1
+            let connectorContinuations = depth == 0 ? [] : ancestorContinuations + [!isLast]
+            let item = CategoryListItem(
+                category: category,
+                depth: depth,
+                connectorContinuations: connectorContinuations
+            )
             guard !collapsedCategoryIDs.contains(category.id) else {
                 return [item]
             }
@@ -1504,7 +1516,8 @@ private struct LibraryCategoryTreeSnapshot {
                 categories: childrenByParentID[category.id, default: []],
                 childrenByParentID: childrenByParentID,
                 collapsedCategoryIDs: collapsedCategoryIDs,
-                depth: depth + 1
+                depth: depth + 1,
+                ancestorContinuations: connectorContinuations
             )
         }
     }
@@ -1545,6 +1558,8 @@ private enum LibraryLayout {
     static let bulkActionBarOverlayOpacity = 0.84
     static let paperRowThumbnailLimit = 3
     static let paperRowThumbnailMaxPixelSize = 128
+    static let categoryTreeRowSpacing: CGFloat = 0
+    static let categoryTreeConnectorHeight: CGFloat = 40
     static let categoryDropContentTypes: [UTType] = [.plainText]
     static let categoryDragPayloadPrefix = "papercodex-category-id:"
 
@@ -2357,6 +2372,7 @@ private struct CategorySidebarRow: View {
     var systemImage: String
     var isSelected: Bool
     var depth: Int
+    var connectorContinuations: [Bool]
     var hasChildren: Bool
     var isExpanded: Bool
     var categoryDragPayload: String
@@ -2370,7 +2386,7 @@ private struct CategorySidebarRow: View {
     var body: some View {
         ZStack(alignment: .trailing) {
             HStack(spacing: 4) {
-                CategoryTreeConnector(depth: depth)
+                CategoryTreeConnector(connectorContinuations: connectorContinuations)
                 Button {
                     if hasChildren {
                         onToggle()
@@ -2512,31 +2528,50 @@ private struct CategorySidebarRow: View {
 }
 
 private struct CategoryTreeConnector: View {
-    var depth: Int
+    var connectorContinuations: [Bool]
 
     var body: some View {
-        if depth > 0 {
-            TreeElbowShape()
-                .stroke(
-                    Color.primary.opacity(0.24),
-                    style: StrokeStyle(lineWidth: 1.35, lineCap: .round, lineJoin: .round)
-                )
-                .frame(width: CGFloat(depth) * 16, height: 28)
-        } else {
+        if connectorContinuations.isEmpty {
             Color.clear
                 .frame(width: 0, height: 28)
+        } else {
+            HStack(spacing: 0) {
+                ForEach(Array(connectorContinuations.enumerated()), id: \.offset) { index, continues in
+                    TreeConnectorLevel(
+                        isCurrentLevel: index == connectorContinuations.count - 1,
+                        isCurrentBranchContinuation: continues
+                    )
+                    .stroke(
+                        Color.primary.opacity(index == connectorContinuations.count - 1 ? 0.34 : 0.18),
+                        style: StrokeStyle(lineWidth: 1.35, lineCap: .round, lineJoin: .round)
+                    )
+                    .frame(width: 16, height: LibraryLayout.categoryTreeConnectorHeight)
+                }
+            }
         }
     }
 }
 
-private struct TreeElbowShape: Shape {
+private struct TreeConnectorLevel: Shape {
+    var isCurrentLevel: Bool
+    var isCurrentBranchContinuation: Bool
+
     func path(in rect: CGRect) -> Path {
         Path { path in
-            let elbowX = max(rect.minX, rect.maxX - 11)
+            let columnX = rect.midX
             let midY = rect.midY
-            path.move(to: CGPoint(x: elbowX, y: midY - 7))
-            path.addLine(to: CGPoint(x: elbowX, y: midY))
-            path.addLine(to: CGPoint(x: rect.maxX, y: midY))
+            if isCurrentLevel {
+                path.move(to: CGPoint(x: columnX, y: rect.minY))
+                path.addLine(to: CGPoint(x: columnX, y: midY))
+                if isCurrentBranchContinuation {
+                    path.addLine(to: CGPoint(x: columnX, y: rect.maxY))
+                }
+                path.move(to: CGPoint(x: columnX, y: midY))
+                path.addLine(to: CGPoint(x: rect.maxX, y: midY))
+            } else if isCurrentBranchContinuation {
+                path.move(to: CGPoint(x: columnX, y: rect.minY))
+                path.addLine(to: CGPoint(x: columnX, y: rect.maxY))
+            }
         }
     }
 }

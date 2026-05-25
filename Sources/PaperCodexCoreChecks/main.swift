@@ -1233,10 +1233,15 @@ func runUILayoutSourceChecks() throws {
     )
     try check(
         librarySource.contains("CategoryTreeConnector")
-            && librarySource.contains("TreeElbowShape")
-            && librarySource.contains("Path { path in")
+            && librarySource.contains("TreeConnectorLevel")
+            && librarySource.contains("connectorContinuations")
+            && librarySource.contains("isCurrentBranchContinuation")
+            && librarySource.contains("categoryTreeRowSpacing: CGFloat = 0")
+            && librarySource.contains("categoryTreeConnectorHeight")
+            && librarySource.contains("ancestorContinuations + [!isLast]")
+            && librarySource.contains("path.addLine(to: CGPoint(x: columnX, y: rect.maxY))")
             && !librarySource.contains("CategoryDepthGuide"),
-        "library folder hierarchy should render elbow tree connectors instead of separate depth guide bars"
+        "library folder hierarchy should render continuous tree connectors driven by sibling continuity, not standalone elbow icons"
     )
     try check(
         (librarySource.contains("LibraryPaperList(papers: visiblePapers)")
