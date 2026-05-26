@@ -492,12 +492,7 @@ struct DiscoverView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                TextField("Keyword, method, author, arXiv ID", text: $model.discoverKeyword)
-                    .textFieldStyle(.roundedBorder)
-                    .layoutPriority(-1)
-                    .onSubmit {
-                        model.startDiscoverSearch()
-                    }
+                searchAndActionRow
 
                 FlowLayout(spacing: 8) {
                     DiscoverDateControls(start: $model.discoverStartDate, end: $model.discoverEndDate) { range in
@@ -513,38 +508,6 @@ struct DiscoverView: View {
 
                     SimilaritySourceMenu()
                         .environmentObject(model)
-
-                    PaperCodexToolbarButton(
-                        title: model.isSearchingDiscover ? "Searching" : "Search",
-                        systemImage: "magnifyingglass",
-                        tint: .blue,
-                        disabled: model.isSearchingDiscover || model.isProcessingDiscoverResults || model.isCachingDiscoverPDFs
-                    ) {
-                        model.startDiscoverSearch()
-                    }
-
-                    if model.isSearchingDiscover || model.isProcessingDiscoverResults || model.isCachingDiscoverPDFs {
-                        PaperCodexToolbarButton(title: "Stop", systemImage: "stop.circle", tint: .red) {
-                            if model.isSearchingDiscover {
-                                model.cancelDiscoverSearch()
-                            }
-                            if model.isProcessingDiscoverResults {
-                                model.cancelDiscoverProcessing()
-                            }
-                            if model.isCachingDiscoverPDFs {
-                                model.cancelDiscoverPDFCache()
-                            }
-                        }
-                    } else {
-                        PaperCodexToolbarButton(
-                            title: "Process Results",
-                            systemImage: "sparkles",
-                            tint: .indigo,
-                            disabled: papers.isEmpty || model.isSearchingDiscover
-                        ) {
-                            isShowingProcessSelection = true
-                        }
-                    }
 
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -565,6 +528,57 @@ struct DiscoverView: View {
                 }
             }
         }
+    }
+
+    private var searchAndActionRow: some View {
+        HStack(spacing: 8) {
+            TextField("Keyword, method, author, arXiv ID", text: $model.discoverKeyword)
+                .textFieldStyle(.roundedBorder)
+                .font(.paperCodexSystem(size: 14))
+                .frame(minWidth: 260, maxWidth: .infinity)
+                .layoutPriority(1)
+                .onSubmit {
+                    model.startDiscoverSearch()
+                }
+
+            PaperCodexToolbarButton(
+                title: model.isSearchingDiscover ? "Searching" : "Search",
+                systemImage: "magnifyingglass",
+                tint: .blue,
+                disabled: model.isSearchingDiscover || model.isProcessingDiscoverResults || model.isCachingDiscoverPDFs
+            ) {
+                model.startDiscoverSearch()
+            }
+            .fixedSize(horizontal: true, vertical: false)
+
+            if model.isSearchingDiscover || model.isProcessingDiscoverResults || model.isCachingDiscoverPDFs {
+                PaperCodexToolbarButton(title: "Stop", systemImage: "stop.circle", tint: .red) {
+                    if model.isSearchingDiscover {
+                        model.cancelDiscoverSearch()
+                    }
+                    if model.isProcessingDiscoverResults {
+                        model.cancelDiscoverProcessing()
+                    }
+                    if model.isCachingDiscoverPDFs {
+                        model.cancelDiscoverPDFCache()
+                    }
+                }
+                .fixedSize(horizontal: true, vertical: false)
+            } else {
+                PaperCodexToolbarButton(
+                    title: "Process",
+                    systemImage: "sparkles",
+                    tint: .indigo,
+                    disabled: papers.isEmpty || model.isSearchingDiscover
+                ) {
+                    isShowingProcessSelection = true
+                }
+                .fixedSize(horizontal: true, vertical: false)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 34)
+        .lineLimit(1)
+        .controlSize(.small)
     }
 
     private func filterButton(title: String, detail: String? = nil, selected: Bool, action: @escaping () -> Void) -> some View {

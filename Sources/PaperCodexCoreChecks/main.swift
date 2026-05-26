@@ -1785,6 +1785,21 @@ func runUILayoutSourceChecks() throws {
         discoverSource.contains("activeFilterChips"),
         "Discover should show removable active filter chips"
     )
+    if let searchRowRange = discoverSource.range(of: "private var searchAndActionRow: some View"),
+       let filterButtonRange = discoverSource.range(of: "private func filterButton", range: searchRowRange.upperBound..<discoverSource.endIndex) {
+        let searchRowSource = String(discoverSource[searchRowRange.lowerBound..<filterButtonRange.lowerBound])
+        try check(
+            searchRowSource.contains("TextField(\"Keyword, method, author, arXiv ID\", text: $model.discoverKeyword)")
+                && searchRowSource.contains("title: model.isSearchingDiscover ? \"Searching\" : \"Search\"")
+                && searchRowSource.contains("title: \"Process\"")
+                && searchRowSource.contains(".fixedSize(horizontal: true, vertical: false)")
+                && searchRowSource.contains(".frame(maxWidth: .infinity, minHeight: 34)")
+                && discoverSource.contains("VStack(alignment: .leading, spacing: 8) {\n                searchAndActionRow\n\n                FlowLayout"),
+            "Discover search, Search, Stop, and Process should share one compact row above the filter controls"
+        )
+    } else {
+        try check(false, "Discover should keep the search action row as a distinct source region for layout checks")
+    }
 
     try check(
         !settingsViewSource.contains("SettingsSectionAnchor")
