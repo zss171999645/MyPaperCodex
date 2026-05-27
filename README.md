@@ -20,13 +20,13 @@
 </p>
 
 <p align="center">
-  <a href="#intro-video">Intro Video</a> ·
-  <a href="#screenshots">Screenshots</a> ·
-  <a href="#features">Features</a> ·
-  <a href="#installation">Installation</a> ·
-  <a href="#quick-start">Quick Start</a> ·
-  <a href="#development">Development</a> ·
-  <a href="#architecture">Architecture</a>
+  <a href="#intro-video">🎬 Intro Video</a> ·
+  <a href="#screenshots">🖼️ Screenshots</a> ·
+  <a href="#features">✨ Features</a> ·
+  <a href="#installation">🚀 Installation</a> ·
+  <a href="#quick-start">⚡ Quick Start</a> ·
+  <a href="#development">🛠️ Development</a> ·
+  <a href="#architecture">🧱 Architecture</a>
 </p>
 
 Paper Codex is a native macOS workspace for reading, organizing, and discussing academic papers. It keeps PDFs, folders, tags, notes, arXiv caches, thumbnails, reading sessions, and generated outputs on your machine, while using the Codex CLI when you want an AI research assistant inside a paper-specific workspace.
@@ -64,15 +64,15 @@ See the full visual tour in [docs/showcase.md](docs/showcase.md).
 
 ## Features
 
-- **Local paper library** - import PDFs, organize them into nested folders, add tags, and keep durable metadata in SQLite.
-- **Native PDF reader** - read with PDFKit, switch paper tabs, zoom smoothly, and preserve reader context.
-- **Source-grounded chat** - select text in the PDF, ask Codex, and keep citations tied to original page regions.
-- **Codex session workspaces** - each chat session writes a local workspace with PDFs, metadata, anchors, extracted text, and turn logs.
-- **Generated image support** - image-generation requests can surface directly in the chat, with in-app zoomable previews.
-- **Local arXiv Discover** - browse arXiv metadata directly, cache feeds/PDFs/thumbnails, and save papers into the local library.
-- **Codex enrichment** - process Discover results for Chinese titles, summaries, contribution notes, tags, and useful links.
-- **Similarity ranking** - optionally rank arXiv results against local folders or tags using an OpenAI-compatible embedding provider.
-- **Local-first storage** - no Paper Codex account, cloud sync, or product API is required for the current version.
+- 📚 **Local paper library** - import PDFs, organize them into nested folders, add tags, and keep durable metadata in SQLite.
+- 📖 **Native PDF reader** - read with PDFKit, switch paper tabs, zoom smoothly, and preserve reader context.
+- 🔎 **Source-grounded chat** - select text in the PDF, ask Codex, and keep citations tied to original page regions.
+- 🧰 **Codex session workspaces** - each chat session writes a local workspace with PDFs, metadata, anchors, extracted text, and turn logs.
+- 🎨 **Generated image support** - image-generation requests can surface directly in the chat, with in-app zoomable previews.
+- 🔭 **Local arXiv Explore** - browse arXiv metadata directly, cache feeds/PDFs/thumbnails, and save papers into the local library.
+- ✨ **Codex enrichment** - process Explore results for Chinese titles, summaries, contribution notes, tags, and useful links.
+- 🧭 **Similarity ranking** - optionally rank arXiv results against local folders or tags using an OpenAI-compatible embedding provider.
+- 🔒 **Local-first storage** - no Paper Codex account, cloud sync, or product API is required for the current version.
 
 ## Installation
 
