@@ -185,6 +185,9 @@ private let arxivSaveOrganizationDefaultsKey = "PaperCodexArxivSaveOrganization"
 private let quickPromptsDefaultsKey = "PaperCodexQuickPrompts"
 private let librarySidebarWidthDefaultsKey = "PaperCodexLibrarySidebarWidth"
 private let discoverScrollPositionPaperIDDefaultsKey = "PaperCodexDiscoverScrollPositionPaperID"
+private let arxivSearchRequiredCategoriesDefaultsKey = "PaperCodexArxivSearchRequiredCategories"
+private let arxivSearchFromYearDefaultsKey = "PaperCodexArxivSearchFromYear"
+private let arxivSearchThroughYearDefaultsKey = "PaperCodexArxivSearchThroughYear"
 private let defaultDiscoverCodexConcurrency = 10
 private let arxivLibraryImportRetryDelaysNanoseconds: [UInt64] = [
     30_000_000_000,
@@ -225,6 +228,26 @@ private func loadDiscoverScrollPositionPaperIDFromDefaults() -> String? {
     let value = UserDefaults.standard.string(forKey: discoverScrollPositionPaperIDDefaultsKey)?
         .trimmingCharacters(in: .whitespacesAndNewlines)
     return value?.isEmpty == false ? value : nil
+}
+
+private func loadArxivSearchRequiredCategoriesFromDefaults() -> [String] {
+    let stored = UserDefaults.standard.stringArray(forKey: arxivSearchRequiredCategoriesDefaultsKey) ?? []
+    let categories = LocalArxivClient.normalizedSearchCategories(stored)
+    return categories.isEmpty ? ["cs.CV"] : categories
+}
+
+private func loadTrimmedSearchTextFromDefaults(_ key: String) -> String {
+    UserDefaults.standard.string(forKey: key)?
+        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+}
+
+private func saveTrimmedSearchTextToDefaults(_ value: String, key: String) {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty {
+        UserDefaults.standard.removeObject(forKey: key)
+    } else {
+        UserDefaults.standard.set(trimmed, forKey: key)
+    }
 }
 
 private func loadCodexSystemPromptFromDefaults(languageMode: PaperCodexLanguageMode) -> String {
@@ -479,6 +502,31 @@ final class AppModel: ObservableObject {
         set { discoverStore.arxivSearchSortOrderRawValue = newValue }
     }
 
+    var arxivSearchRequiredCategories: [String] {
+        get { discoverStore.arxivSearchRequiredCategories }
+        set {
+            let normalized = LocalArxivClient.normalizedSearchCategories(newValue)
+            discoverStore.arxivSearchRequiredCategories = normalized
+            UserDefaults.standard.set(normalized, forKey: arxivSearchRequiredCategoriesDefaultsKey)
+        }
+    }
+
+    var arxivSearchFromYear: String {
+        get { discoverStore.arxivSearchFromYear }
+        set {
+            discoverStore.arxivSearchFromYear = newValue
+            saveTrimmedSearchTextToDefaults(newValue, key: arxivSearchFromYearDefaultsKey)
+        }
+    }
+
+    var arxivSearchThroughYear: String {
+        get { discoverStore.arxivSearchThroughYear }
+        set {
+            discoverStore.arxivSearchThroughYear = newValue
+            saveTrimmedSearchTextToDefaults(newValue, key: arxivSearchThroughYearDefaultsKey)
+        }
+    }
+
     var discoverStartDate: String {
         get { discoverStore.discoverStartDate }
         set { discoverStore.discoverStartDate = newValue }
@@ -692,6 +740,21 @@ final class AppModel: ObservableObject {
         supportRoot.appendingPathComponent("papers", isDirectory: true).path
     }
 
+    private var arxivSearchQueryPreview: String {
+        do {
+            let fromYear = try LocalArxivClient.normalizedSearchYear(arxivSearchFromYear)
+            let throughYear = try LocalArxivClient.normalizedSearchYear(arxivSearchThroughYear)
+            return try LocalArxivClient.composedUserSearchQuery(
+                arxivSearchQuery,
+                requiredCategories: arxivSearchRequiredCategories,
+                fromYear: fromYear,
+                throughYear: throughYear
+            )
+        } catch {
+            return String(describing: error)
+        }
+    }
+
     var globalOperationStatus: AppOperationStatus? {
         if isSearchingDiscover {
             return AppOperationStatus(
@@ -704,7 +767,7 @@ final class AppModel: ObservableObject {
         if isSearchingArxivSearch {
             return AppOperationStatus(
                 title: isCancellingArxivSearch ? "Stopping arXiv Search" : "Searching arXiv",
-                detail: LocalArxivClient.normalizedUserSearchQuery(arxivSearchQuery),
+                detail: arxivSearchQueryPreview,
                 systemImage: "magnifyingglass",
                 tint: .blue
             )
@@ -784,7 +847,10 @@ final class AppModel: ObservableObject {
         discoverStore = DiscoverFeatureStore(
             startDate: initialDiscoverDate,
             endDate: initialDiscoverDate,
-            scrollPositionPaperID: loadDiscoverScrollPositionPaperIDFromDefaults()
+            scrollPositionPaperID: loadDiscoverScrollPositionPaperIDFromDefaults(),
+            searchRequiredCategories: loadArxivSearchRequiredCategoriesFromDefaults(),
+            searchFromYear: loadTrimmedSearchTextFromDefaults(arxivSearchFromYearDefaultsKey),
+            searchThroughYear: loadTrimmedSearchTextFromDefaults(arxivSearchThroughYearDefaultsKey)
         )
 
         let root = PaperCodexPaths.supportRoot()
@@ -1600,7 +1666,14 @@ final class AppModel: ObservableObject {
 
     func searchArxiv() async {
         do {
-            let normalizedQuery = LocalArxivClient.normalizedUserSearchQuery(arxivSearchQuery)
+            let fromYear = try LocalArxivClient.normalizedSearchYear(arxivSearchFromYear)
+            let throughYear = try LocalArxivClient.normalizedSearchYear(arxivSearchThroughYear)
+            let normalizedQuery = try LocalArxivClient.composedUserSearchQuery(
+                arxivSearchQuery,
+                requiredCategories: arxivSearchRequiredCategories,
+                fromYear: fromYear,
+                throughYear: throughYear
+            )
             guard !normalizedQuery.isEmpty else {
                 arxivSearchFeed = ArxivFeedResponse(date: "search", count: 0, papers: [])
                 return
@@ -1622,6 +1695,9 @@ final class AppModel: ObservableObject {
             let sortOrder = ArxivAPISortOrder(rawValue: arxivSearchSortOrderRawValue) ?? .descending
             let feed = try await makeLocalArxivClient().search(
                 query: arxivSearchQuery,
+                requiredCategories: arxivSearchRequiredCategories,
+                fromYear: fromYear,
+                throughYear: throughYear,
                 maxResults: 100,
                 sortBy: sortBy,
                 sortOrder: sortOrder
@@ -1639,7 +1715,9 @@ final class AppModel: ObservableObject {
             if isCancellationError(error) || isCancellingArxivSearch || Task.isCancelled {
                 arxivCacheProgress = nil
             } else {
-                errorMessage = String(describing: error)
+                let message = String(describing: error)
+                errorMessage = message
+                postNotice(kind: .error, title: "arXiv Search Failed", message: message)
             }
         }
     }

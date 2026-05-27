@@ -12,6 +12,9 @@ final class DiscoverFeatureStore: ObservableObject {
     @Published var arxivSearchFeed: ArxivFeedResponse?
     @Published var arxivSearchSortRawValue = ArxivAPISort.relevance.rawValue
     @Published var arxivSearchSortOrderRawValue = ArxivAPISortOrder.descending.rawValue
+    @Published var arxivSearchRequiredCategories: [String]
+    @Published var arxivSearchFromYear: String
+    @Published var arxivSearchThroughYear: String
     @Published var discoverStartDate: String
     @Published var discoverEndDate: String
     @Published var discoverSelectedCategories: [String] = ["cs.CV"]
@@ -43,10 +46,16 @@ final class DiscoverFeatureStore: ObservableObject {
     init(
         startDate: String,
         endDate: String,
-        scrollPositionPaperID: String?
+        scrollPositionPaperID: String?,
+        searchRequiredCategories: [String],
+        searchFromYear: String,
+        searchThroughYear: String
     ) {
         discoverStartDate = startDate
         discoverEndDate = endDate
         discoverScrollPositionPaperID = scrollPositionPaperID
+        arxivSearchRequiredCategories = searchRequiredCategories
+        arxivSearchFromYear = searchFromYear
+        arxivSearchThroughYear = searchThroughYear
     }
 }

@@ -11,7 +11,8 @@ let package = Package(
         .library(name: "PaperCodexCore", targets: ["PaperCodexCore"]),
         .executable(name: "PaperCodexApp", targets: ["PaperCodexApp"]),
         .executable(name: "CodeArxivFavoritesMigrator", targets: ["CodeArxivFavoritesMigrator"]),
-        .executable(name: "PaperCodexCoreChecks", targets: ["PaperCodexCoreChecks"])
+        .executable(name: "PaperCodexCoreChecks", targets: ["PaperCodexCoreChecks"]),
+        .executable(name: "PaperCodexSearchChecks", targets: ["PaperCodexSearchChecks"])
     ],
     targets: [
         .target(
@@ -31,6 +32,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "PaperCodexCoreChecks",
+            dependencies: ["PaperCodexCore"]
+        ),
+        .executableTarget(
+            name: "PaperCodexSearchChecks",
             dependencies: ["PaperCodexCore"]
         )
     ]

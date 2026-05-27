@@ -67,6 +67,7 @@ public enum LocalArxivClientError: Error, CustomStringConvertible, Equatable {
     case missingPDFURL(String)
     case downloadedFileIsNotPDF(String)
     case networkFailure(url: String, reason: String)
+    case invalidYearRange(String)
 
     public var description: String {
         switch self {
@@ -90,6 +91,8 @@ public enum LocalArxivClientError: Error, CustomStringConvertible, Equatable {
             "Downloaded arXiv file is not a PDF for \(arxivID)."
         case let .networkFailure(url, reason):
             "arXiv network request failed for \(url). \(reason)"
+        case let .invalidYearRange(message):
+            "Invalid arXiv search year range: \(message)"
         }
     }
 }
@@ -209,12 +212,20 @@ public final class LocalArxivClient: Sendable {
     }
 
     public func search(query: String,
+        requiredCategories: [String] = [],
+        fromYear: Int? = nil,
+        throughYear: Int? = nil,
         start: Int = 0,
         maxResults: Int = 100,
         sortBy: ArxivAPISort = .relevance,
         sortOrder: ArxivAPISortOrder = .descending
     ) async throws -> ArxivFeedResponse {
-        let normalizedQuery = Self.normalizedUserSearchQuery(query)
+        let normalizedQuery = try Self.composedUserSearchQuery(
+            query,
+            requiredCategories: requiredCategories,
+            fromYear: fromYear,
+            throughYear: throughYear
+        )
         guard !normalizedQuery.isEmpty else {
             return ArxivFeedResponse(date: "search", count: 0, papers: [])
         }
@@ -306,12 +317,7 @@ public final class LocalArxivClient: Sendable {
         guard !normalizedCategories.isEmpty else {
             throw LocalArxivClientError.emptyCategories
         }
-        let categoryClause: String
-        if normalizedCategories.count == 1 {
-            categoryClause = "cat:\(normalizedCategories[0])"
-        } else {
-            categoryClause = "(\(normalizedCategories.map { "cat:\($0)" }.joined(separator: " OR ")))"
-        }
+        let categoryClause = categorySearchClause(for: normalizedCategories)
         let start = range.start.replacingOccurrences(of: "-", with: "")
         let end = range.end.replacingOccurrences(of: "-", with: "")
         return "\(categoryClause) AND submittedDate:[\(start)0000 TO \(end)2359]"
@@ -349,6 +355,73 @@ public final class LocalArxivClient: Sendable {
             return trimmed
         }
         return "all:\(trimmed)"
+    }
+
+    public static func normalizedSearchCategories(_ values: [String]) -> [String] {
+        LocalArxivClientConfiguration.normalized(values)
+    }
+
+    public static func normalizedSearchYear(_ raw: String) throws -> Int? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        guard trimmed.count == 4,
+              let year = Int(trimmed),
+              (1...9999).contains(year) else {
+            throw LocalArxivClientError.invalidYearRange("Use a four-digit year.")
+        }
+        return year
+    }
+
+    public static func submittedDateYearRangeSearchQuery(
+        fromYear: Int?,
+        throughYear: Int?
+    ) throws -> String? {
+        guard fromYear != nil || throughYear != nil else {
+            return nil
+        }
+        let startYear = fromYear ?? 1991
+        let endYear = throughYear ?? 9999
+        guard (1...9999).contains(startYear), (1...9999).contains(endYear) else {
+            throw LocalArxivClientError.invalidYearRange("Years must be between 0001 and 9999.")
+        }
+        guard startYear <= endYear else {
+            throw LocalArxivClientError.invalidYearRange("The start year must not be later than the end year.")
+        }
+        return String(
+            format: "submittedDate:[%04d01010000 TO %04d12312359]",
+            startYear,
+            endYear
+        )
+    }
+
+    public static func composedUserSearchQuery(
+        _ raw: String,
+        requiredCategories: [String],
+        fromYear: Int?,
+        throughYear: Int?
+    ) throws -> String {
+        var clauses: [String] = []
+        let normalizedQuery = normalizedUserSearchQuery(raw)
+        if !normalizedQuery.isEmpty {
+            clauses.append("(\(normalizedQuery))")
+        }
+        let categories = normalizedSearchCategories(requiredCategories)
+        if !categories.isEmpty {
+            clauses.append(categorySearchClause(for: categories))
+        }
+        if let yearClause = try submittedDateYearRangeSearchQuery(fromYear: fromYear, throughYear: throughYear) {
+            clauses.append(yearClause)
+        }
+        return clauses.joined(separator: " AND ")
+    }
+
+    private static func categorySearchClause(for categories: [String]) -> String {
+        if categories.count == 1 {
+            return "cat:\(categories[0])"
+        }
+        return "(\(categories.map { "cat:\($0)" }.joined(separator: " OR ")))"
     }
 
     public static func parseAtomFeed(

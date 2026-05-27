@@ -646,9 +646,23 @@ struct ArxivSearchView: View {
         return result
     }
 
-    private var categories: [String] {
+    private var resultCategories: [String] {
         let all = (model.arxivSearchFeed?.papers ?? []).flatMap { $0.listCategories.isEmpty ? $0.categories : $0.listCategories }
         return Array(Set(all)).sorted()
+    }
+
+    private var requiredCategoryOptions: [String] {
+        let configured = model.localDiscoverPreferences.normalized.categories
+        let common = ["cs.CV", "cs.CL", "cs.AI", "cs.LG", "cs.RO", "stat.ML", "cs.HC", "cs.IR", "cs.SE"]
+        return LocalArxivClient.normalizedSearchCategories(model.arxivSearchRequiredCategories + configured + common)
+    }
+
+    private var trimmedSearchFromYear: String {
+        model.arxivSearchFromYear.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedSearchThroughYear: String {
+        model.arxivSearchThroughYear.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var body: some View {
@@ -733,12 +747,30 @@ struct ArxivSearchView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Label("Categories", systemImage: "line.3.horizontal.decrease.circle")
+                        Label("至少包含类别", systemImage: "checklist.checked")
+                            .font(.headline)
+
+                        SidebarFilterButton(title: "不限制", selected: model.arxivSearchRequiredCategories.isEmpty) {
+                            model.arxivSearchRequiredCategories = []
+                        }
+
+                        ForEach(requiredCategoryOptions, id: \.self) { category in
+                            Toggle(category, isOn: requiredCategoryBinding(for: category))
+                                .toggleStyle(.checkbox)
+                                .font(.paperCodexSystem(size: 13))
+                                .lineLimit(1)
+                        }
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("结果类别", systemImage: "line.3.horizontal.decrease.circle")
                             .font(.headline)
                         SidebarFilterButton(title: "All", selected: selectedCategory == nil) {
                             selectedCategory = nil
                         }
-                        ForEach(categories, id: \.self) { category in
+                        ForEach(resultCategories, id: \.self) { category in
                             SidebarFilterButton(title: category, selected: selectedCategory == category) {
                                 selectedCategory = category
                             }
@@ -885,11 +917,54 @@ struct ArxivSearchView: View {
             .lineLimit(1)
             .controlSize(.small)
 
+            FlowLayout(spacing: 8) {
+                ArxivSearchYearField(title: "From", placeholder: "YYYY", text: $model.arxivSearchFromYear)
+                ArxivSearchYearField(title: "To", placeholder: "YYYY", text: $model.arxivSearchThroughYear)
+
+                ForEach(model.arxivSearchRequiredCategories, id: \.self) { category in
+                    DiscoverFilterChip(title: "cat:\(category)") {
+                        removeRequiredCategory(category)
+                    }
+                }
+                if !trimmedSearchFromYear.isEmpty {
+                    DiscoverFilterChip(title: "from \(trimmedSearchFromYear)") {
+                        model.arxivSearchFromYear = ""
+                    }
+                }
+                if !trimmedSearchThroughYear.isEmpty {
+                    DiscoverFilterChip(title: "to \(trimmedSearchThroughYear)") {
+                        model.arxivSearchThroughYear = ""
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
             if (model.isSearchingArxivSearch || model.isProcessingDiscoverResults),
                let progress = model.arxivCacheProgress {
                 ArxivCacheProgressStrip(progress: progress)
             }
         }
+    }
+
+    private func requiredCategoryBinding(for category: String) -> Binding<Bool> {
+        Binding(
+            get: {
+                model.arxivSearchRequiredCategories.contains(category)
+            },
+            set: { isSelected in
+                var categories = model.arxivSearchRequiredCategories
+                if isSelected {
+                    categories.append(category)
+                } else {
+                    categories.removeAll { $0 == category }
+                }
+                model.arxivSearchRequiredCategories = categories
+            }
+        )
+    }
+
+    private func removeRequiredCategory(_ category: String) {
+        model.arxivSearchRequiredCategories = model.arxivSearchRequiredCategories.filter { $0 != category }
     }
 
     private func gridColumnCount(for width: CGFloat) -> Int {
@@ -1091,6 +1166,25 @@ private struct DiscoverFilterChip: View {
         .buttonStyle(.plain)
         .foregroundStyle(Color.accentColor)
         .help("Remove \(title) filter")
+    }
+}
+
+private struct ArxivSearchYearField: View {
+    var title: String
+    var placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.roundedBorder)
+                .font(.paperCodexSystem(size: 12))
+                .frame(width: 70)
+        }
+        .controlSize(.small)
     }
 }
 
