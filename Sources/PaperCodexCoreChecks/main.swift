@@ -460,6 +460,17 @@ func runUILayoutSourceChecks() throws {
         "library category rows should have a dedicated hoverable row component"
     )
     try check(
+        librarySource.contains("private var folderIconName: String")
+            && librarySource.contains("private func primaryCategoryRowAction()")
+            && librarySource.contains("if hasChildren {\n            onToggle()\n        }")
+            && librarySource.contains("hasChildren ? (isExpanded ? \"folder.fill\" : \"folder\") : systemImage")
+            && !librarySource.contains("\"chevron.down\"")
+            && !librarySource.contains("\"chevron.right\"")
+            && !librarySource.contains("categoryTreeChevronWidth")
+            && !librarySource.contains("categoryTreeChevronIconSpacing"),
+        "library folder rows should use the folder icon itself for expanded/collapsed state and remove chevron expand controls"
+    )
+    try check(
         librarySource.contains("LibraryRootFolderRow")
             && librarySource.contains("LibraryInlineControlRow")
             && librarySource.contains("LibraryPaperListState")

@@ -1563,8 +1563,6 @@ private enum LibraryLayout {
     static let categoryTreeRowSpacing: CGFloat = 0
     static let categoryTreeConnectorHeight: CGFloat = 32
     static let categoryTreeIndentWidth: CGFloat = 22
-    static let categoryTreeChevronWidth: CGFloat = 16
-    static let categoryTreeChevronIconSpacing: CGFloat = 4
     static let categoryTreeFolderButtonLeadingPadding: CGFloat = 8
     static let categoryTreeFolderIconWidth: CGFloat = 17
     static let categoryTreeConnectorTargetInset: CGFloat = 7
@@ -1574,10 +1572,7 @@ private enum LibraryLayout {
     static let categoryDragPayloadPrefix = "papercodex-category-id:"
 
     static var categoryTreeFolderIconCenterX: CGFloat {
-        categoryTreeChevronWidth
-            + categoryTreeChevronIconSpacing
-            + categoryTreeFolderButtonLeadingPadding
-            + categoryTreeFolderIconWidth / 2
+        categoryTreeFolderButtonLeadingPadding + categoryTreeFolderIconWidth / 2
     }
 
     static func categoryTreeFolderIconCenterX(depth: Int) -> CGFloat {
@@ -2406,44 +2401,28 @@ private struct CategorySidebarRow: View {
 
     var body: some View {
         ZStack(alignment: .trailing) {
-            HStack(spacing: 4) {
-                Button {
-                    if hasChildren {
-                        onToggle()
-                    }
-                } label: {
-                    Image(systemName: hasChildren ? (isExpanded ? "chevron.down" : "chevron.right") : "chevron.right")
-                        .font(.paperCodexSystem(size: 9, weight: .bold))
-                        .frame(width: 16, height: 26)
-                        .opacity(hasChildren ? 0.78 : 0)
+            Button(action: primaryCategoryRowAction) {
+                HStack(spacing: 8) {
+                    Image(systemName: folderIconName)
+                        .frame(width: 17)
+                        .foregroundStyle(isSelected || isExpanded ? Color.accentColor : Color.secondary)
+                    Text(title)
+                        .font(.paperCodexSystem(size: 13, weight: isSelected ? .semibold : .medium))
+                        .lineLimit(1)
+                    Spacer(minLength: 58)
                 }
-                .buttonStyle(.plain)
-                .help(hasChildren ? (isExpanded ? "Collapse" : "Expand") : "")
-
-                Button(action: onSelect) {
-                    HStack(spacing: 8) {
-                        Image(systemName: systemImage)
-                            .frame(width: 17)
-                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                        Text(title)
-                            .font(.paperCodexSystem(size: 13, weight: isSelected ? .semibold : .medium))
-                            .lineLimit(1)
-                        Spacer(minLength: 58)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 7)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(isSelected ? Color.accentColor.opacity(0.13) : (isHovering ? Color.primary.opacity(0.045) : Color.clear))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(isSelected ? Color.accentColor.opacity(0.22) : Color.clear, lineWidth: 1)
-                    )
-                }
-                .buttonStyle(.plain)
-                .help(title)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(isSelected ? Color.accentColor.opacity(0.13) : (isHovering ? Color.primary.opacity(0.045) : Color.clear))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(isSelected ? Color.accentColor.opacity(0.22) : Color.clear, lineWidth: 1)
+                )
             }
+            .buttonStyle(.plain)
             .padding(.leading, CGFloat(depth) * LibraryLayout.categoryTreeIndentWidth)
             .frame(minHeight: LibraryLayout.categoryTreeConnectorHeight)
             .background(alignment: .leading) {
@@ -2453,6 +2432,7 @@ private struct CategorySidebarRow: View {
                 )
                 .allowsHitTesting(false)
             }
+            .help(rowHelpText)
 
             if isDropActive {
                 Label("Drop", systemImage: "arrow.down.doc")
@@ -2521,6 +2501,24 @@ private struct CategorySidebarRow: View {
 
     private var isDropActive: Bool {
         isDropTargeted
+    }
+
+    private var folderIconName: String {
+        hasChildren ? (isExpanded ? "folder.fill" : "folder") : systemImage
+    }
+
+    private var rowHelpText: String {
+        guard hasChildren else {
+            return title
+        }
+        return isExpanded ? "Collapse \(title)" : "Expand \(title)"
+    }
+
+    private func primaryCategoryRowAction() {
+        if hasChildren {
+            onToggle()
+        }
+        onSelect()
     }
 
     private func loadDroppedItems(from providers: [NSItemProvider]) -> Bool {
