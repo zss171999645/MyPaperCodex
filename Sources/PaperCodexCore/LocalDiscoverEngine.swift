@@ -91,6 +91,16 @@ public struct DiscoverDateRange: Codable, Equatable, Sendable {
         start <= range.start && range.end <= end
     }
 
+    public static func isoDate(for date: Date = Date(), calendar inputCalendar: Calendar = .current) -> String {
+        let components = inputCalendar.dateComponents([.year, .month, .day], from: date)
+        return String(
+            format: "%04d-%02d-%02d",
+            components.year ?? 1970,
+            components.month ?? 1,
+            components.day ?? 1
+        )
+    }
+
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -231,6 +241,10 @@ public enum DiscoverQuickRange: String, CaseIterable, Identifiable, Sendable {
             start: discoverDateFormatter.string(from: startDate),
             end: discoverDateFormatter.string(from: endDate)
         )
+    }
+
+    public func dateRange(containing date: Date = Date(), calendar: Calendar = .current) throws -> DiscoverDateRange {
+        try dateRange(endingAt: DiscoverDateRange.isoDate(for: date, calendar: calendar))
     }
 }
 

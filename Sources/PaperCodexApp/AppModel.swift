@@ -279,16 +279,6 @@ private func isCancellationError(_ error: any Error) -> Bool {
     return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
 }
 
-private func latestCompleteArxivSubmissionISODate() -> String {
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.timeZone = TimeZone(secondsFromGMT: 0)
-    formatter.dateFormat = "yyyy-MM-dd"
-    let calendar = Calendar(identifier: .gregorian)
-    let date = calendar.date(byAdding: .day, value: -1, to: Date()) ?? Date()
-    return formatter.string(from: date)
-}
-
 @MainActor
 final class AppModel: ObservableObject {
     let navigation = AppNavigation()
@@ -744,7 +734,7 @@ final class AppModel: ObservableObject {
         let storedLanguageMode = loadGlobalLanguageModeFromDefaults()
         globalLanguageMode = storedLanguageMode
         codexSystemPrompt = loadCodexSystemPromptFromDefaults(languageMode: storedLanguageMode)
-        let initialDiscoverDate = latestCompleteArxivSubmissionISODate()
+        let initialDiscoverDate = DiscoverDateRange.isoDate()
         discoverStore = DiscoverFeatureStore(
             startDate: initialDiscoverDate,
             endDate: initialDiscoverDate,
@@ -1429,7 +1419,7 @@ final class AppModel: ObservableObject {
 
     func applyDiscoverQuickRange(_ preset: DiscoverQuickRange) {
         do {
-            let range = try preset.dateRange(endingAt: discoverEndDate)
+            let range = try preset.dateRange(containing: Date())
             discoverStartDate = range.start
             discoverEndDate = range.end
         } catch {
@@ -3940,7 +3930,7 @@ final class AppModel: ObservableObject {
     }
 
     private func arxivPDFCacheDate(for paper: ArxivFeedPaper) -> String {
-        paper.listDate ?? selectedArxivDate ?? arxivFeed?.date ?? latestCompleteArxivSubmissionISODate()
+        paper.listDate ?? selectedArxivDate ?? arxivFeed?.date ?? DiscoverDateRange.isoDate()
     }
 
     private func ensureArxivPDFCached(_ paper: ArxivFeedPaper, client: LocalArxivClient? = nil) async throws -> URL {

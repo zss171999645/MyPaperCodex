@@ -1670,6 +1670,15 @@ func runUILayoutSourceChecks() throws {
         "Discover quick ranges should be limited to Today, Last 7 Days, and Last 30 Days"
     )
     try check(
+        appModelSource.contains("let initialDiscoverDate = DiscoverDateRange.isoDate()")
+            && !appModelSource.contains("latestCompleteArxivSubmissionISODate"),
+        "Discover initial date should use today's local date instead of the latest complete arXiv submission date"
+    )
+    try check(
+        appModelSource.contains("let range = try preset.dateRange(containing: Date())"),
+        "Discover quick ranges should anchor to today's date instead of the current end date"
+    )
+    try check(
         !discoverSource.contains("ArxivSourceBadge"),
         "Discover toolbar should not render the decorative arXiv source badge"
     )
@@ -3566,6 +3575,15 @@ func runLocalDiscoverEngineChecks() throws {
     let last7Days = try DiscoverQuickRange.last7Days.dateRange(endingAt: "2026-04-29")
     try check(last7Days.start == "2026-04-23", "last 7 days should include the ending date")
     try check(last7Days.end == "2026-04-29", "quick range should preserve the ending date")
+    var shanghaiCalendar = Calendar(identifier: .gregorian)
+    shanghaiCalendar.timeZone = TimeZone(secondsFromGMT: 8 * 60 * 60) ?? .current
+    let justAfterLocalMidnight = ISO8601DateFormatter().date(from: "2026-05-26T16:30:00Z")!
+    let today = try DiscoverQuickRange.today.dateRange(containing: justAfterLocalMidnight, calendar: shanghaiCalendar)
+    try check(today.start == "2026-05-27", "Today quick range should use the user's local date")
+    try check(today.end == "2026-05-27", "Today quick range should end on the user's local date")
+    let localLast7Days = try DiscoverQuickRange.last7Days.dateRange(containing: justAfterLocalMidnight, calendar: shanghaiCalendar)
+    try check(localLast7Days.start == "2026-05-21", "Last 7 Days quick range should be anchored to the user's local today")
+    try check(localLast7Days.end == "2026-05-27", "Last 7 Days quick range should end on the user's local today")
 
     let queryA = DiscoverQuery(
         keyword: "diffusion policy",
