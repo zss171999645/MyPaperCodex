@@ -34,13 +34,26 @@ enum InteractionNoticeKind: Equatable {
     }
 }
 
+func defaultNoticeDismissDuration(for kind: InteractionNoticeKind) -> TimeInterval {
+    switch kind {
+    case .success:
+        5
+    case .error:
+        10
+    case .warning:
+        10
+    case .info:
+        5
+    }
+}
+
 struct InteractionNotice: Identifiable, Equatable {
     var id = UUID()
     var kind: InteractionNoticeKind
     var title: String
     var message: String
     var createdAt = Date()
-    var autoDismissAfter: TimeInterval? = 4
+    var autoDismissAfter: TimeInterval? = 5
 }
 
 struct AppOperationStatus: Equatable {

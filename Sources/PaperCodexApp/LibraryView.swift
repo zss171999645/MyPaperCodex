@@ -15,7 +15,7 @@ struct LibraryView: View {
     @State private var selectedPaperIDs: Set<String> = []
     @State private var lastSelectedPaperID: String?
     @State private var lastPaperRowClick: LibraryPaperRowClick?
-    @State private var isShowingBulkMove = false
+    @State private var isShowingBulkCopy = false
     @State private var isShowingBulkTag = false
     @State private var isConfirmingBulkDelete = false
     @State private var collapsedCategoryIDs: Set<String> = []
@@ -248,21 +248,21 @@ struct LibraryView: View {
             }
             .environmentObject(model)
         }
-        .sheet(isPresented: $isShowingBulkMove) {
-            LibraryBulkMoveSheet(
+        .sheet(isPresented: $isShowingBulkCopy) {
+            LibraryBulkCopySheet(
                 categoryItems: flattenedCategoryItems(),
                 selectedCount: selectedPaperIDs.count
             ) { categoryID in
-                model.movePapers(selectedPaperIDsInOrder, toCategory: categoryID)
-                selectedPaperIDs.removeAll()
-                lastSelectedPaperID = nil
                 if let categoryID {
+                    model.copyPapers(selectedPaperIDsInOrder, toCategory: categoryID)
                     selectedCategoryID = categoryID
                     selectedTagID = nil
                 }
-                isShowingBulkMove = false
+                selectedPaperIDs.removeAll()
+                lastSelectedPaperID = nil
+                isShowingBulkCopy = false
             } onCancel: {
-                isShowingBulkMove = false
+                isShowingBulkCopy = false
             }
         }
         .sheet(isPresented: $isShowingBulkTag) {
@@ -345,6 +345,7 @@ struct LibraryView: View {
                             connectorContinuations: item.connectorContinuations,
                             hasChildren: categoryTree.hasChildren(item.category.id),
                             isExpanded: !collapsedCategoryIDs.contains(item.category.id),
+                            isPinned: item.category.isPinned,
                             categoryDragPayload: categoryDragPayload(for: item.category),
                             onToggle: {
                                 toggleCategoryCollapsed(item.category.id)
@@ -359,15 +360,25 @@ struct LibraryView: View {
                             onManage: {
                                 categoryPendingManagement = item.category
                             },
+                            onTogglePinned: {
+                                model.setCategoryPinned(item.category.id, pinned: !item.category.isPinned)
+                            },
                             onDropPapers: { paperIDs in
-                                model.movePapers(paperIDs, toCategory: item.category.id)
+                                dropPaperIDs(paperIDs, ontoCategory: item.category.id)
                                 selectLibraryCategory(item.category.id)
                             },
-                            onDropCategory: { droppedCategoryID in
+                            onDropCategory: { droppedCategoryID, placement in
                                 guard droppedCategoryID != item.category.id else {
                                     return
                                 }
-                                model.moveCategory(droppedCategoryID, toParent: item.category.id)
+                                withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
+                                    switch placement {
+                                    case .inside:
+                                        model.moveCategory(droppedCategoryID, toParent: item.category.id)
+                                    case .before, .after:
+                                        model.reorderCategory(droppedCategoryID, relativeTo: item.category.id, placement: placement)
+                                    }
+                                }
                             }
                         )
                     }
@@ -533,8 +544,8 @@ struct LibraryView: View {
                     canOpenConversation: !selectedReadablePaperIDsInOrder.isEmpty,
                     onRead: openSelectedPapersForReading,
                     onChat: openSelectedPapersForChat,
-                    onMove: {
-                        isShowingBulkMove = true
+                    onCopy: {
+                        isShowingBulkCopy = true
                     },
                     onTag: {
                         isShowingBulkTag = true
@@ -550,8 +561,8 @@ struct LibraryView: View {
                 .padding(.horizontal, 10)
                 .padding(.top, LibraryLayout.bulkActionBarOverlayYOffset)
                 .opacity(LibraryLayout.bulkActionBarOverlayOpacity)
-                .transition(.move(edge: .top).combined(with: .opacity))
-                .shadow(color: Color.black.opacity(0.12), radius: 14, y: 5)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .shadow(color: Color.black.opacity(0.10), radius: 12, y: 5)
             }
         }
         .animation(.easeOut(duration: 0.16), value: selectedPaperIDs.count > 1)
@@ -563,6 +574,7 @@ struct LibraryView: View {
                 .font(.paperCodexSystem(size: 20, weight: .semibold))
 
             if let paper = model.selectedLibraryPaper {
+                let metadata = model.libraryArxivMetadata(for: paper)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         VStack(alignment: .leading, spacing: 6) {
@@ -588,6 +600,11 @@ struct LibraryView: View {
                                 .foregroundStyle(.tertiary)
                                 .lineLimit(2)
                                 .textSelection(.enabled)
+                        }
+
+                        if let metadata {
+                            paperMetadataSection(for: paper, metadata: metadata)
+                            Divider()
                         }
 
                         Button {
@@ -623,6 +640,35 @@ struct LibraryView: View {
         }
         .padding(22)
         .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private func paperMetadataSection(for paper: Paper, metadata: LibraryPaperArxivMetadata) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("解析信息", systemImage: "sparkles")
+                .font(.headline)
+            if !metadata.titleZH.isEmpty, metadata.titleZH != paper.title {
+                LibraryMetadataBlock(title: "中文标题", text: metadata.titleZH)
+            }
+            if !metadata.summaryZH.isEmpty {
+                LibraryMetadataBlock(title: "中文摘要", text: metadata.summaryZH)
+            }
+            if !metadata.contribution.isEmpty {
+                LibraryMetadataBlock(title: "贡献总结", text: metadata.contribution)
+            }
+            if !metadata.abstractZH.isEmpty {
+                LibraryMetadataBlock(title: "中文 Abstract", text: metadata.abstractZH)
+            }
+            if !metadata.abstractEN.isEmpty {
+                LibraryMetadataBlock(title: "Abstract", text: metadata.abstractEN)
+            }
+            if !metadata.tags.isEmpty {
+                FlowLayout(spacing: 6) {
+                    ForEach(metadata.tags.prefix(10), id: \.self) { tag in
+                        SmallChip(title: tag, systemImage: "tag")
+                    }
+                }
+            }
+        }
     }
 
     private func categoryAssignments(for paper: Paper) -> some View {
@@ -994,6 +1040,21 @@ struct LibraryView: View {
         }
     }
 
+    private func dropPaperIDs(_ paperIDs: [String], ontoCategory categoryID: String) {
+        if shouldMoveDroppedPapers(toCategory: categoryID) {
+            model.movePapers(paperIDs, toCategory: categoryID)
+        } else {
+            model.copyPapers(paperIDs, toCategory: categoryID)
+        }
+    }
+
+    private func shouldMoveDroppedPapers(toCategory categoryID: String) -> Bool {
+        guard let selectedCategoryID else {
+            return false
+        }
+        return categoryID == selectedCategoryID || model.categoryIsDescendant(categoryID, of: selectedCategoryID)
+    }
+
     private func paperCount(inCategory categoryID: String) -> Int {
         model.libraryDerivedState.categoryPaperCountsByID[categoryID, default: 0]
     }
@@ -1104,6 +1165,9 @@ struct LibraryView: View {
         model.categories
             .filter { $0.parentID == parentID }
             .sorted { left, right in
+                if left.isPinned != right.isPinned {
+                    return left.isPinned
+                }
                 if left.sortOrder == right.sortOrder {
                     return left.name.localizedCaseInsensitiveCompare(right.name) == .orderedAscending
                 }
@@ -1119,6 +1183,9 @@ struct LibraryView: View {
         model.categories
             .filter { $0.parentID == parentID }
             .sorted { left, right in
+                if left.isPinned != right.isPinned {
+                    return left.isPinned
+                }
                 if left.sortOrder == right.sortOrder {
                     return left.name.localizedCaseInsensitiveCompare(right.name) == .orderedAscending
                 }
@@ -1270,6 +1337,16 @@ private struct CategoryListItem: Identifiable {
     var connectorContinuations: [Bool] = []
 
     var id: String { category.id }
+}
+
+struct LibraryPaperArxivMetadata: Equatable {
+    var arxivID: String
+    var titleZH: String
+    var summaryZH: String
+    var contribution: String
+    var abstractZH: String
+    var abstractEN: String
+    var tags: [String]
 }
 
 private struct LibraryRootFolderRow: View {
@@ -1529,6 +1606,9 @@ private struct LibraryCategoryTreeSnapshot {
     }
 
     private static func sortCategories(_ left: PaperCodexCore.Category, _ right: PaperCodexCore.Category) -> Bool {
+        if left.isPinned != right.isPinned {
+            return left.isPinned
+        }
         if left.sortOrder == right.sortOrder {
             return left.name.localizedCaseInsensitiveCompare(right.name) == .orderedAscending
         }
@@ -1565,8 +1645,8 @@ private enum LibraryLayout {
     static let libraryInspectorIdealWidth: CGFloat = 300
     static let libraryInspectorMaximumWidth: CGFloat = 380
     static let splitPaneTopInset: CGFloat = 0
-    static let bulkActionBarOverlayYOffset: CGFloat = 42
-    static let bulkActionBarOverlayOpacity = 0.84
+    static let bulkActionBarOverlayYOffset: CGFloat = 148
+    static let bulkActionBarOverlayOpacity = 0.66
     static let paperRowThumbnailLimit = 3
     static let paperRowThumbnailMaxPixelSize = 128
     static let categoryTreeRowSpacing: CGFloat = 0
@@ -1786,6 +1866,24 @@ private struct SmallChip: View {
             .padding(.vertical, 3)
             .background(Color(nsColor: .windowBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+private struct LibraryMetadataBlock: View {
+    var title: String
+    var text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(text)
+                .font(.paperCodexSystem(size: 12.8))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
     }
 }
 
@@ -2015,7 +2113,7 @@ private struct BulkLibraryActionBar: View {
     var canOpenConversation: Bool
     var onRead: () -> Void
     var onChat: () -> Void
-    var onMove: () -> Void
+    var onCopy: () -> Void
     var onTag: () -> Void
     var onDelete: () -> Void
     var onClear: () -> Void
@@ -2036,11 +2134,11 @@ private struct BulkLibraryActionBar: View {
             }
             .disabled(!canOpenConversation)
             .help("Chat with selected papers together")
-            Button(action: onMove) {
-                Label("Move", systemImage: "folder")
+            Button(action: onCopy) {
+                Label("Copy", systemImage: "doc.on.doc")
             }
             .disabled(!canMove)
-            .help("Move selected papers to a folder")
+            .help("Copy selected papers to a folder")
             Button(action: onTag) {
                 Label("Tag", systemImage: "tag")
             }
@@ -2069,17 +2167,17 @@ private struct BulkLibraryActionBar: View {
     }
 }
 
-private struct LibraryBulkMoveSheet: View {
+private struct LibraryBulkCopySheet: View {
     var categoryItems: [CategoryListItem]
     var selectedCount: Int
-    var onMove: (String?) -> Void
+    var onCopy: (String?) -> Void
     var onCancel: () -> Void
 
     @State private var targetCategoryID = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label("Move Papers", systemImage: "folder")
+            Label("Copy Papers", systemImage: "doc.on.doc")
                 .font(.title3.weight(.semibold))
             Text("\(selectedCount) selected papers")
                 .foregroundStyle(.secondary)
@@ -2094,11 +2192,12 @@ private struct LibraryBulkMoveSheet: View {
                 Spacer()
                 Button("Cancel", action: onCancel)
                 Button {
-                    onMove(targetCategoryID.isEmpty ? nil : targetCategoryID)
+                    onCopy(targetCategoryID.isEmpty ? nil : targetCategoryID)
                 } label: {
-                    Label("Move", systemImage: "arrow.right.folder")
+                    Label("Copy", systemImage: "doc.on.doc")
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(targetCategoryID.isEmpty)
             }
         }
         .padding(22)
@@ -2391,6 +2490,7 @@ private struct FlowLayout: Layout {
 private struct CategorySidebarRow: View {
     @State private var isHovering = false
     @State private var isDropTargeted = false
+    @State private var dropPlacement: LibraryCategoryDropPlacement?
 
     var title: String
     var countText: String
@@ -2400,13 +2500,15 @@ private struct CategorySidebarRow: View {
     var connectorContinuations: [Bool]
     var hasChildren: Bool
     var isExpanded: Bool
+    var isPinned: Bool
     var categoryDragPayload: String
     var onToggle: () -> Void
     var onSelect: () -> Void
     var onCreateChild: () -> Void
     var onManage: () -> Void
+    var onTogglePinned: () -> Void
     var onDropPapers: ([String]) -> Void
-    var onDropCategory: (String) -> Void
+    var onDropCategory: (String, LibraryCategoryDropPlacement) -> Void
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -2453,7 +2555,7 @@ private struct CategorySidebarRow: View {
             }
 
             if isDropActive {
-                Label("Drop", systemImage: "arrow.down.doc")
+                Label(dropLabel, systemImage: dropIconName)
                     .font(.paperCodexSystem(size: 11, weight: .semibold))
                     .padding(.horizontal, 7)
                     .padding(.vertical, 4)
@@ -2478,6 +2580,15 @@ private struct CategorySidebarRow: View {
                         .buttonStyle(.plain)
                         .help("New subcategory under \(title)")
 
+                        Button(action: onTogglePinned) {
+                            Image(systemName: isPinned ? "pin.fill" : "pin")
+                                .font(.paperCodexSystem(size: 11, weight: .bold))
+                                .frame(width: 22, height: 22)
+                                .foregroundStyle(isPinned ? Color.accentColor : Color.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help(isPinned ? "Unpin \(title)" : "Pin \(title)")
+
                         Button(action: onManage) {
                             Image(systemName: "ellipsis")
                                 .font(.paperCodexSystem(size: 11, weight: .bold))
@@ -2499,16 +2610,32 @@ private struct CategorySidebarRow: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(isDropActive ? Color.accentColor.opacity(0.55) : Color.clear, lineWidth: 1.5)
         )
+        .overlay(alignment: dropLineAlignment) {
+            if dropPlacement == .before || dropPlacement == .after {
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(height: 2)
+                    .padding(.leading, CGFloat(depth) * LibraryLayout.categoryTreeIndentWidth + 8)
+                    .padding(.trailing, 8)
+                    .transition(.opacity)
+            }
+        }
         .scaleEffect(isDropActive ? 1.02 : 1, anchor: .center)
         .animation(.easeOut(duration: 0.12), value: isDropActive)
+        .animation(.easeOut(duration: 0.10), value: dropPlacement)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onDrag {
             NSItemProvider(object: categoryDragPayload as NSString)
         }
-        .onDrop(of: LibraryLayout.categoryDropContentTypes, isTargeted: $isDropTargeted) { providers in
-            loadDroppedItems(from: providers)
-        }
+        .onDrop(
+            of: LibraryLayout.categoryDropContentTypes,
+            delegate: CategorySidebarDropDelegate(
+                isTargeted: $isDropTargeted,
+                placement: $dropPlacement,
+                onDrop: loadDroppedItems(from:placement:)
+            )
+        )
         .help("Drop papers or folders into \(title)")
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) {
@@ -2519,6 +2646,30 @@ private struct CategorySidebarRow: View {
 
     private var isDropActive: Bool {
         isDropTargeted
+    }
+
+    private var dropLabel: String {
+        switch dropPlacement {
+        case .before:
+            "Before"
+        case .after:
+            "After"
+        case .inside, .none:
+            "Drop"
+        }
+    }
+
+    private var dropIconName: String {
+        switch dropPlacement {
+        case .before, .after:
+            "arrow.up.arrow.down"
+        case .inside, .none:
+            "arrow.down.doc"
+        }
+    }
+
+    private var dropLineAlignment: Alignment {
+        dropPlacement == .after ? .bottom : .top
     }
 
     private var folderIconName: String {
@@ -2540,7 +2691,7 @@ private struct CategorySidebarRow: View {
         }
     }
 
-    private func loadDroppedItems(from providers: [NSItemProvider]) -> Bool {
+    private func loadDroppedItems(from providers: [NSItemProvider], placement: LibraryCategoryDropPlacement) -> Bool {
         let textProviders = providers.filter { $0.canLoadObject(ofClass: NSString.self) }
         guard !textProviders.isEmpty else {
             return false
@@ -2553,7 +2704,7 @@ private struct CategorySidebarRow: View {
                 let trimmedPayload = payload.trimmingCharacters(in: .whitespacesAndNewlines)
                 if let droppedCategoryID = LibraryLayout.droppedCategoryID(from: trimmedPayload) {
                     DispatchQueue.main.async {
-                        onDropCategory(droppedCategoryID)
+                        onDropCategory(droppedCategoryID, placement)
                     }
                     return
                 }
@@ -2570,6 +2721,51 @@ private struct CategorySidebarRow: View {
             }
         }
         return true
+    }
+}
+
+private struct CategorySidebarDropDelegate: DropDelegate {
+    @Binding var isTargeted: Bool
+    @Binding var placement: LibraryCategoryDropPlacement?
+    var onDrop: ([NSItemProvider], LibraryCategoryDropPlacement) -> Bool
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: LibraryLayout.categoryDropContentTypes)
+    }
+
+    func dropEntered(info: DropInfo) {
+        isTargeted = true
+        placement = placement(for: info)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        isTargeted = true
+        placement = placement(for: info)
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        isTargeted = false
+        placement = nil
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let finalPlacement = placement(for: info)
+        isTargeted = false
+        placement = nil
+        return onDrop(info.itemProviders(for: LibraryLayout.categoryDropContentTypes), finalPlacement)
+    }
+
+    private func placement(for info: DropInfo) -> LibraryCategoryDropPlacement {
+        let rowHeight = max(LibraryLayout.categoryTreeConnectorHeight, 1)
+        let y = min(max(info.location.y, 0), rowHeight)
+        if y < rowHeight * 0.28 {
+            return .before
+        }
+        if y > rowHeight * 0.72 {
+            return .after
+        }
+        return .inside
     }
 }
 

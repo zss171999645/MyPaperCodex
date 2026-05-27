@@ -183,7 +183,7 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
 
-            Text("Controls the whole app interface, Discover language, and the default Codex prompt.")
+            Text("Controls the whole app interface, Explore language, and the default Codex prompt.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -285,7 +285,7 @@ struct SettingsView: View {
     }
 
     private var discoverCodexProcessingSettings: some View {
-        settingsSection(title: "Discover Processing", systemImage: "cpu") {
+        settingsSection(title: "Explore Processing", systemImage: "cpu") {
             Picker("Model", selection: $draftDiscoverCodexModel) {
                 Text(codexDefaultModelLabel).tag("")
                 ForEach(model.availableCodexModelIDs, id: \.self) { modelID in

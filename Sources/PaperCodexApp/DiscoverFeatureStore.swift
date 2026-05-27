@@ -8,6 +8,10 @@ final class DiscoverFeatureStore: ObservableObject {
     @Published var arxivFeed: ArxivFeedResponse?
     @Published var selectedArxivPaper: ArxivFeedPaper?
     @Published var discoverKeyword = ""
+    @Published var arxivSearchQuery = ""
+    @Published var arxivSearchFeed: ArxivFeedResponse?
+    @Published var arxivSearchSortRawValue = ArxivAPISort.relevance.rawValue
+    @Published var arxivSearchSortOrderRawValue = ArxivAPISortOrder.descending.rawValue
     @Published var discoverStartDate: String
     @Published var discoverEndDate: String
     @Published var discoverSelectedCategories: [String] = ["cs.CV"]
@@ -16,6 +20,8 @@ final class DiscoverFeatureStore: ObservableObject {
     @Published var discoverEnrichmentsByID: [String: DiscoverPaperEnrichment] = [:]
     @Published var isSearchingDiscover = false
     @Published var isCancellingDiscoverSearch = false
+    @Published var isSearchingArxivSearch = false
+    @Published var isCancellingArxivSearch = false
     @Published var isProcessingDiscoverResults = false
     @Published var discoverProcessingProgress: ArxivCacheProgress?
     @Published var isCachingDiscoverPDFs = false

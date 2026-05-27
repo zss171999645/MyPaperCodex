@@ -154,14 +154,16 @@ public struct LibraryFolder: Codable, Equatable, Identifiable, Sendable {
     public var parentID: String?
     public var name: String
     public var sortOrder: Int
+    public var isPinned: Bool
     public var deletedAt: Date?
     public var syncRevision: Int
 
-    public init(id: String, parentID: String?, name: String, sortOrder: Int, deletedAt: Date?, syncRevision: Int) {
+    public init(id: String, parentID: String?, name: String, sortOrder: Int, isPinned: Bool = false, deletedAt: Date?, syncRevision: Int) {
         self.id = id
         self.parentID = parentID
         self.name = name
         self.sortOrder = sortOrder
+        self.isPinned = isPinned
         self.deletedAt = deletedAt
         self.syncRevision = syncRevision
     }

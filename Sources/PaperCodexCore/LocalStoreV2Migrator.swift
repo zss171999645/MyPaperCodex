@@ -29,6 +29,7 @@ public enum LocalStoreV2Migrator {
             try addSyncEntityColumns(database: database)
             try addPaperColumns(database: database)
             try addTagColumns(database: database)
+            try addFolderColumns(database: database)
             try backfillFolders(database: database)
             try backfillPaperFiles(database: database)
             try backfillPaperSources(database: database)
@@ -157,6 +158,7 @@ public enum LocalStoreV2Migrator {
           parent_id TEXT REFERENCES folders(id) ON DELETE CASCADE,
           name TEXT NOT NULL,
           sort_order INTEGER NOT NULL,
+          is_pinned INTEGER NOT NULL DEFAULT 0,
           deleted_at TEXT,
           sync_revision INTEGER NOT NULL DEFAULT 0
         );
@@ -336,15 +338,23 @@ public enum LocalStoreV2Migrator {
         }
     }
 
+    private static func addFolderColumns(database: SQLiteDatabase) throws {
+        let columns = try database.tableColumns("folders")
+        if !columns.contains("is_pinned") {
+            try database.execute("ALTER TABLE folders ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0;")
+        }
+    }
+
     private static func backfillFolders(database: SQLiteDatabase) throws {
         try database.run("""
-        INSERT INTO folders (id, parent_id, name, sort_order, deleted_at, sync_revision)
-        SELECT id, parent_id, name, sort_order, NULL, 0 FROM categories
+        INSERT INTO folders (id, parent_id, name, sort_order, is_pinned, deleted_at, sync_revision)
+        SELECT id, parent_id, name, sort_order, COALESCE(is_pinned, 0), NULL, 0 FROM categories
         WHERE true
         ON CONFLICT(id) DO UPDATE SET
           parent_id = excluded.parent_id,
           name = excluded.name,
           sort_order = excluded.sort_order,
+          is_pinned = excluded.is_pinned,
           deleted_at = NULL;
         """)
         try database.run("""

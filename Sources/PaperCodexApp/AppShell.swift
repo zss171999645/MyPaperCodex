@@ -15,11 +15,19 @@ struct PrimaryNavigationSection: View {
             }
 
             SidebarRowButton(
-                title: "Discover",
+                title: "探索",
                 systemImage: "sparkle.magnifyingglass",
                 selected: navigation.route == .discover
             ) {
                 model.showDiscover()
+            }
+
+            SidebarRowButton(
+                title: "搜索",
+                systemImage: "magnifyingglass",
+                selected: navigation.route == .search
+            ) {
+                model.showSearch()
             }
 
             SidebarRowButton(

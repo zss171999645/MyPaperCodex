@@ -10,12 +10,13 @@ public final class LibraryDataStore {
 
     public func upsertFolder(_ folder: LibraryFolder) throws {
         try database.run("""
-        INSERT INTO folders (id, parent_id, name, sort_order, deleted_at, sync_revision)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO folders (id, parent_id, name, sort_order, is_pinned, deleted_at, sync_revision)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           parent_id = excluded.parent_id,
           name = excluded.name,
           sort_order = excluded.sort_order,
+          is_pinned = excluded.is_pinned,
           deleted_at = excluded.deleted_at,
           sync_revision = excluded.sync_revision;
         """, bindings: [
@@ -23,6 +24,7 @@ public final class LibraryDataStore {
             folder.parentID.map(SQLiteValue.text) ?? .null,
             .text(folder.name),
             .int(folder.sortOrder),
+            .int(folder.isPinned ? 1 : 0),
             folder.deletedAt.map { .text(dates.string(from: $0)) } ?? .null,
             .int(folder.syncRevision)
         ])
@@ -30,18 +32,19 @@ public final class LibraryDataStore {
 
     public func fetchFolders() throws -> [LibraryFolder] {
         try database.query("""
-        SELECT id, parent_id, name, sort_order, deleted_at, sync_revision
+        SELECT id, parent_id, name, sort_order, is_pinned, deleted_at, sync_revision
         FROM folders
         WHERE deleted_at IS NULL
-        ORDER BY sort_order, name, id;
+        ORDER BY is_pinned DESC, sort_order, name, id;
         """) { row in
             LibraryFolder(
                 id: try row.text(0),
                 parentID: row.optionalText(1),
                 name: try row.text(2),
                 sortOrder: row.int(3),
-                deletedAt: try row.optionalText(4).map { try date(from: $0) },
-                syncRevision: row.int(5)
+                isPinned: row.int(4) != 0,
+                deletedAt: try row.optionalText(5).map { try date(from: $0) },
+                syncRevision: row.int(6)
             )
         }
     }

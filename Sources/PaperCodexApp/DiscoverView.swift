@@ -202,7 +202,7 @@ struct DiscoverView: View {
 
             Divider()
 
-            Label("Discover Filters", systemImage: "line.3.horizontal.decrease.circle")
+            Label("探索筛选", systemImage: "line.3.horizontal.decrease.circle")
                 .font(.headline)
                 .foregroundStyle(.secondary)
 
@@ -482,7 +482,7 @@ struct DiscoverView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Discover")
+                    Text("探索")
                         .font(.paperCodexSystem(size: 28, weight: .semibold))
                     Text("\(papers.count) visible · \(model.arxivFeed?.count ?? 0) found · \(model.selectedArxivDate ?? "\(model.discoverStartDate)...\(model.discoverEndDate)")")
                         .font(.caption)
@@ -619,6 +619,330 @@ struct DiscoverView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct ArxivSearchView: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var selectedCategory: String?
+    @State private var selectedLibraryFilter: DiscoverLibraryFilter = .all
+    @State private var paperPendingSave: ArxivFeedPaper?
+    @State private var previewPaper: ArxivFeedPaper?
+    @State private var isShowingProcessSelection = false
+
+    private var papers: [ArxivFeedPaper] {
+        var result = model.arxivSearchFeed?.papers ?? []
+        if let selectedCategory {
+            result = result.filter { $0.categories.contains(selectedCategory) || $0.listCategories.contains(selectedCategory) }
+        }
+        switch selectedLibraryFilter {
+        case .all:
+            break
+        case .newOnly:
+            result = result.filter { model.libraryPaper(for: $0) == nil }
+        case .inLibrary:
+            result = result.filter { model.libraryPaper(for: $0) != nil }
+        }
+        return result
+    }
+
+    private var categories: [String] {
+        let all = (model.arxivSearchFeed?.papers ?? []).flatMap { $0.listCategories.isEmpty ? $0.categories : $0.listCategories }
+        return Array(Set(all)).sorted()
+    }
+
+    var body: some View {
+        SidebarSplitLayout(minContentWidth: 760) {
+            sidebar
+        } content: {
+            feed
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .overlay {
+            if let previewPaper {
+                ArxivImagePreviewOverlay(paper: previewPaper) {
+                    self.previewPaper = nil
+                }
+                .environmentObject(model)
+            }
+        }
+        .sheet(item: $paperPendingSave) { paper in
+            SaveToLibrarySheet(
+                paperTitle: paper.displayTitle(language: model.globalLanguageMode.discoverLanguageCode),
+                detail: paper.authors.prefix(4).joined(separator: ", "),
+                libraryCategories: model.categories,
+                initialCategoryIDs: [],
+                onSave: { selection in
+                    paperPendingSave = nil
+                    Task {
+                        await model.addArxivPaperToLibrary(
+                            paper,
+                            selectedCategoryIDs: selection.categoryIDs,
+                            newCategoryNames: selection.newCategoryNames,
+                            newCategories: selection.newCategories
+                        )
+                    }
+                },
+                onCancel: {
+                    paperPendingSave = nil
+                }
+            )
+        }
+        .sheet(isPresented: $isShowingProcessSelection) {
+            DiscoverProcessActionSheet(
+                paperCount: papers.count,
+                availableModelIDs: model.availableCodexModelIDs,
+                defaultModelID: model.codexDefaultModelID,
+                defaultModelOverride: model.discoverCodexModelOverride,
+                defaultReasoningEffort: model.discoverCodexReasoningEffort,
+                isRefreshingModels: model.isRefreshingCodexModels,
+                onRefreshModels: {
+                    Task {
+                        await model.refreshAvailableCodexModels()
+                    }
+                },
+                onConfirm: { actions, modelOverride, reasoningEffort in
+                    isShowingProcessSelection = false
+                    let searchPapers = papers
+                    Task {
+                        await model.processCurrentDiscoverResults(searchPapers, actions: Set(actions), modelOverride: modelOverride, reasoningEffort: reasoningEffort)
+                    }
+                },
+                onCancel: {
+                    isShowingProcessSelection = false
+                }
+            )
+        }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Paper Codex")
+                .font(.paperCodexSystem(size: 24, weight: .semibold))
+
+            PrimaryNavigationSection()
+
+            Divider()
+
+            Label("搜索筛选", systemImage: "line.3.horizontal.decrease.circle")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Categories", systemImage: "line.3.horizontal.decrease.circle")
+                            .font(.headline)
+                        SidebarFilterButton(title: "All", selected: selectedCategory == nil) {
+                            selectedCategory = nil
+                        }
+                        ForEach(categories, id: \.self) { category in
+                            SidebarFilterButton(title: category, selected: selectedCategory == category) {
+                                selectedCategory = category
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Library", systemImage: "books.vertical")
+                            .font(.headline)
+                        ForEach(DiscoverLibraryFilter.allCases) { filter in
+                            SidebarFilterButton(title: filter.title, selected: selectedLibraryFilter == filter) {
+                                selectedLibraryFilter = filter
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .paperCodexSidebarChromePadding()
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private var feed: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            toolbar
+
+            if model.isSearchingArxivSearch && model.arxivSearchFeed == nil {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if papers.isEmpty {
+                ContentUnavailableView("No Papers", systemImage: "doc.text.magnifyingglass")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                GeometryReader { proxy in
+                    let columnCount = gridColumnCount(for: proxy.size.width)
+                    let rows = paperRows(papers, columnCount: columnCount)
+                    let imagePreloadURLs = discoverImagePreloadURLs(for: papers)
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 14) {
+                            ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, rowPapers in
+                                HStack(alignment: .top, spacing: 16) {
+                                    ForEach(rowPapers) { paper in
+                                        discoverCard(for: paper, rowIndex: rowIndex)
+                                    }
+                                    ForEach(0..<max(0, columnCount - rowPapers.count), id: \.self) { _ in
+                                        Color.clear
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .task(id: imagePreloadURLs.map(\.path).joined(separator: "|")) {
+                            await warmDiscoverLocalImages(imagePreloadURLs)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var toolbar: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("搜索")
+                        .font(.paperCodexSystem(size: 28, weight: .semibold))
+                    Text("\(papers.count) visible · \(model.arxivSearchFeed?.count ?? 0) found")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            HStack(spacing: 8) {
+                TextField("all:diffusion AND cat:cs.CV", text: $model.arxivSearchQuery)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.paperCodexSystem(size: 14))
+                    .frame(minWidth: 280, maxWidth: .infinity)
+                    .layoutPriority(1)
+                    .onSubmit {
+                        model.startArxivSearch()
+                    }
+
+                Picker("Sort", selection: $model.arxivSearchSortRawValue) {
+                    Text("Relevance").tag(ArxivAPISort.relevance.rawValue)
+                    Text("Submitted").tag(ArxivAPISort.submittedDate.rawValue)
+                    Text("Updated").tag(ArxivAPISort.lastUpdatedDate.rawValue)
+                }
+                .pickerStyle(.menu)
+                .frame(width: 116)
+
+                Button {
+                    model.arxivSearchSortOrderRawValue = model.arxivSearchSortOrderRawValue == ArxivAPISortOrder.descending.rawValue
+                        ? ArxivAPISortOrder.ascending.rawValue
+                        : ArxivAPISortOrder.descending.rawValue
+                } label: {
+                    Image(systemName: model.arxivSearchSortOrderRawValue == ArxivAPISortOrder.descending.rawValue ? "arrow.down" : "arrow.up")
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.bordered)
+                .fixedSize()
+
+                PaperCodexToolbarButton(
+                    title: model.isSearchingArxivSearch ? "Searching" : "Search",
+                    systemImage: "magnifyingglass",
+                    tint: .blue,
+                    disabled: model.isSearchingArxivSearch || model.isProcessingDiscoverResults
+                ) {
+                    model.startArxivSearch()
+                }
+                .fixedSize(horizontal: true, vertical: false)
+
+                if model.isSearchingArxivSearch || model.isProcessingDiscoverResults {
+                    PaperCodexToolbarButton(title: "Stop", systemImage: "stop.circle", tint: .red) {
+                        if model.isSearchingArxivSearch {
+                            model.cancelArxivSearch()
+                        }
+                        if model.isProcessingDiscoverResults {
+                            model.cancelDiscoverProcessing()
+                        }
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                } else {
+                    PaperCodexToolbarButton(
+                        title: "Process",
+                        systemImage: "sparkles",
+                        tint: .indigo,
+                        disabled: papers.isEmpty
+                    ) {
+                        isShowingProcessSelection = true
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 34)
+            .lineLimit(1)
+            .controlSize(.small)
+
+            if (model.isSearchingArxivSearch || model.isProcessingDiscoverResults),
+               let progress = model.arxivCacheProgress {
+                ArxivCacheProgressStrip(progress: progress)
+            }
+        }
+    }
+
+    private func gridColumnCount(for width: CGFloat) -> Int {
+        if width >= 1120 {
+            return 3
+        }
+        if width >= 760 {
+            return 2
+        }
+        return 1
+    }
+
+    private func paperRows(_ papers: [ArxivFeedPaper], columnCount: Int) -> [[ArxivFeedPaper]] {
+        let count = max(columnCount, 1)
+        return stride(from: 0, to: papers.count, by: count).map { start in
+            Array(papers[start..<min(start + count, papers.count)])
+        }
+    }
+
+    private func discoverImagePreloadURLs(for papers: [ArxivFeedPaper]) -> [URL] {
+        papers.prefix(DiscoverImagePreloadPolicy.visiblePaperLimit).flatMap { paper in
+            var urls: [URL] = []
+            if let assetURL = model.cachedArxivAssetURL(for: paper.assets.small) {
+                urls.append(assetURL)
+            }
+            urls.append(contentsOf: model.cachedArxivPDFThumbnailURLs(for: paper))
+            return urls
+        }
+    }
+
+    private func discoverCard(for paper: ArxivFeedPaper, rowIndex: Int) -> some View {
+        ArxivPaperCard(
+            paper: paper,
+            enrichment: model.discoverEnrichment(for: paper),
+            imageURL: model.cachedArxivAssetURL(for: paper.assets.small),
+            thumbnailURLs: model.cachedArxivPDFThumbnailURLs(for: paper),
+            inLibrary: model.libraryPaper(for: paper) != nil,
+            isBusy: model.isDownloadingArxivPaper(paper),
+            downloadProgress: model.arxivDownloadProgress(for: paper),
+            interactionState: model.discoverPaperInteractionStateByID[paper.id],
+            languageMode: model.globalLanguageMode,
+            onPreview: {
+                previewPaper = paper
+            },
+            onSave: {
+                paperPendingSave = paper
+            },
+            onOpen: {
+                Task {
+                    await model.openArxivPaper(paper)
+                }
+            }
+        )
     }
 }
 

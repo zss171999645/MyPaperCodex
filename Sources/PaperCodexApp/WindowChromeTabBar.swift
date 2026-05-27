@@ -76,11 +76,13 @@ struct PaperCodexWindowTabBar: View {
         case .library:
             return model.selectedLibrarySurface == .recentConversations ? "Home: Recent Conversations" : "Home: Library"
         case .discover:
-            return "Home: Discover"
+            return "Home: 探索"
+        case .search:
+            return "Home: 搜索"
         case .settings:
             return "Home: Settings"
         case .reader:
-            return "Home (Library, Discover, Settings, Recent Conversations)"
+            return "Home (Library, 探索, 搜索, Settings, Recent Conversations)"
         }
     }
 

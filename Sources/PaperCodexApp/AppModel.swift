@@ -7,6 +7,7 @@ import SwiftUI
 enum AppRoute: Hashable {
     case library
     case discover
+    case search
     case settings
     case reader
 }
@@ -19,6 +20,12 @@ final class AppNavigation: ObservableObject {
 enum LibrarySurface {
     case recentConversations
     case papers
+}
+
+enum LibraryCategoryDropPlacement: String {
+    case before
+    case after
+    case inside
 }
 
 enum ArxivSaveOrganization: String, CaseIterable, Identifiable {
@@ -452,6 +459,26 @@ final class AppModel: ObservableObject {
         set { discoverStore.discoverKeyword = newValue }
     }
 
+    var arxivSearchQuery: String {
+        get { discoverStore.arxivSearchQuery }
+        set { discoverStore.arxivSearchQuery = newValue }
+    }
+
+    var arxivSearchFeed: ArxivFeedResponse? {
+        get { discoverStore.arxivSearchFeed }
+        set { discoverStore.arxivSearchFeed = newValue }
+    }
+
+    var arxivSearchSortRawValue: String {
+        get { discoverStore.arxivSearchSortRawValue }
+        set { discoverStore.arxivSearchSortRawValue = newValue }
+    }
+
+    var arxivSearchSortOrderRawValue: String {
+        get { discoverStore.arxivSearchSortOrderRawValue }
+        set { discoverStore.arxivSearchSortOrderRawValue = newValue }
+    }
+
     var discoverStartDate: String {
         get { discoverStore.discoverStartDate }
         set { discoverStore.discoverStartDate = newValue }
@@ -490,6 +517,16 @@ final class AppModel: ObservableObject {
     var isCancellingDiscoverSearch: Bool {
         get { discoverStore.isCancellingDiscoverSearch }
         set { discoverStore.isCancellingDiscoverSearch = newValue }
+    }
+
+    var isSearchingArxivSearch: Bool {
+        get { discoverStore.isSearchingArxivSearch }
+        set { discoverStore.isSearchingArxivSearch = newValue }
+    }
+
+    var isCancellingArxivSearch: Bool {
+        get { discoverStore.isCancellingArxivSearch }
+        set { discoverStore.isCancellingArxivSearch = newValue }
     }
 
     var isProcessingDiscoverResults: Bool {
@@ -618,6 +655,7 @@ final class AppModel: ObservableObject {
     private var watchedFolderAutoScanTask: Task<Void, Never>?
     private var watchedFolderScanTask: Task<Void, Never>?
     private var activeDiscoverSearchTask: Task<Void, Never>?
+    private var activeArxivSearchTask: Task<Void, Never>?
     private var activeDiscoverPDFCacheTask: Task<Void, Never>?
     private var discoverCacheWarmupTask: Task<Void, Never>?
     private var cacheStorageSummaryTask: Task<Void, Never>?
@@ -657,15 +695,23 @@ final class AppModel: ObservableObject {
     var globalOperationStatus: AppOperationStatus? {
         if isSearchingDiscover {
             return AppOperationStatus(
-                title: isCancellingDiscoverSearch ? "Stopping Discover Search" : "Searching Discover",
+                title: isCancellingDiscoverSearch ? "Stopping Explore Search" : "Searching Explore",
                 detail: arxivCacheProgress?.detail ?? "\(discoverStartDate)...\(discoverEndDate)",
+                systemImage: "magnifyingglass",
+                tint: .blue
+            )
+        }
+        if isSearchingArxivSearch {
+            return AppOperationStatus(
+                title: isCancellingArxivSearch ? "Stopping arXiv Search" : "Searching arXiv",
+                detail: LocalArxivClient.normalizedUserSearchQuery(arxivSearchQuery),
                 systemImage: "magnifyingglass",
                 tint: .blue
             )
         }
         if isProcessingDiscoverResults {
             return AppOperationStatus(
-                title: isCancellingDiscoverProcessing ? "Stopping Discover Processing" : "Processing Discover Results",
+                title: isCancellingDiscoverProcessing ? "Stopping Explore Processing" : "Processing Explore Results",
                 detail: discoverProcessingProgress?.detail ?? "\(discoverCodexConcurrency) workers",
                 systemImage: "sparkles",
                 tint: .indigo
@@ -777,6 +823,7 @@ final class AppModel: ObservableObject {
     deinit {
         watchedFolderAutoScanTask?.cancel()
         watchedFolderScanTask?.cancel()
+        activeArxivSearchTask?.cancel()
         activeDiscoverPDFCacheTask?.cancel()
         discoverCacheWarmupTask?.cancel()
         cacheStorageSummaryTask?.cancel()
@@ -788,21 +835,20 @@ final class AppModel: ObservableObject {
         kind: InteractionNoticeKind,
         title: String,
         message: String = "",
-        autoDismissAfter: TimeInterval? = 4
+        autoDismissAfter: TimeInterval? = nil
     ) {
+        let dismissAfter = autoDismissAfter ?? defaultNoticeDismissDuration(for: kind)
         let notice = InteractionNotice(
             kind: kind,
             title: title,
             message: message,
-            autoDismissAfter: autoDismissAfter
+            autoDismissAfter: dismissAfter
         )
         notices.append(notice)
-        if let autoDismissAfter {
-            Task { [weak self] in
-                try? await Task.sleep(nanoseconds: UInt64(autoDismissAfter * 1_000_000_000))
-                await MainActor.run {
-                    self?.dismissNotice(id: notice.id)
-                }
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(dismissAfter * 1_000_000_000))
+            await MainActor.run {
+                self?.dismissNotice(id: notice.id)
             }
         }
     }
@@ -1096,6 +1142,10 @@ final class AppModel: ObservableObject {
         scheduleDiscoverCacheWarmup()
     }
 
+    func showSearch() {
+        route = .search
+    }
+
     private func startDiscoverCacheWarmupIfNeeded() {
         guard discoverCacheWarmupTask == nil else {
             return
@@ -1315,7 +1365,7 @@ final class AppModel: ObservableObject {
         }
         UserDefaults.standard.set(discoverCodexConcurrency, forKey: discoverCodexConcurrencyDefaultsKey)
         mergeAvailableCodexModelIDs([trimmedModel])
-        postNotice(kind: .success, title: "Discover Processing Saved", message: "\(discoverCodexConcurrency) workers · Think \(reasoningEffort.displayName)")
+        postNotice(kind: .success, title: "Explore Processing Saved", message: "\(discoverCodexConcurrency) workers · Think \(reasoningEffort.displayName)")
     }
 
     func setCodexSystemPrompt(_ prompt: String) {
@@ -1440,6 +1490,23 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func startArxivSearch() {
+        guard activeArxivSearchTask == nil, !isSearchingArxivSearch else {
+            return
+        }
+        activeArxivSearchTask = Task { [weak self] in
+            await self?.searchArxiv()
+            await MainActor.run {
+                self?.activeArxivSearchTask = nil
+            }
+        }
+    }
+
+    func cancelArxivSearch() {
+        isCancellingArxivSearch = true
+        activeArxivSearchTask?.cancel()
+    }
+
     func cancelDiscoverSearch() {
         isCancellingDiscoverSearch = true
         activeDiscoverSearchTask?.cancel()
@@ -1524,7 +1591,53 @@ final class AppModel: ObservableObject {
             if isCancellationError(error) || isCancellingDiscoverSearch || Task.isCancelled {
                 arxivCacheProgress = nil
             } else if (try? loadCachedDiscoverSearch()) == true {
-                errorMessage = "Using cached Discover results. Search failed: \(error)"
+                errorMessage = "Using cached Explore results. Search failed: \(error)"
+            } else {
+                errorMessage = String(describing: error)
+            }
+        }
+    }
+
+    func searchArxiv() async {
+        do {
+            let normalizedQuery = LocalArxivClient.normalizedUserSearchQuery(arxivSearchQuery)
+            guard !normalizedQuery.isEmpty else {
+                arxivSearchFeed = ArxivFeedResponse(date: "search", count: 0, papers: [])
+                return
+            }
+            isSearchingArxivSearch = true
+            isCancellingArxivSearch = false
+            defer {
+                isSearchingArxivSearch = false
+                isCancellingArxivSearch = false
+            }
+            arxivCacheProgress = ArxivCacheProgress(
+                date: "search",
+                title: "Searching arXiv",
+                detail: normalizedQuery,
+                completed: 0,
+                total: 0
+            )
+            let sortBy = ArxivAPISort(rawValue: arxivSearchSortRawValue) ?? .relevance
+            let sortOrder = ArxivAPISortOrder(rawValue: arxivSearchSortOrderRawValue) ?? .descending
+            let feed = try await makeLocalArxivClient().search(
+                query: arxivSearchQuery,
+                maxResults: 100,
+                sortBy: sortBy,
+                sortOrder: sortOrder
+            )
+            arxivSearchFeed = feed
+            mergeDiscoverEnrichments(for: feed.papers)
+            arxivCacheProgress = ArxivCacheProgress(
+                date: "search",
+                title: "arXiv Search Ready",
+                detail: "\(feed.papers.count)/\(feed.count) results",
+                completed: feed.papers.count,
+                total: max(feed.count, feed.papers.count)
+            )
+        } catch {
+            if isCancellationError(error) || isCancellingArxivSearch || Task.isCancelled {
+                arxivCacheProgress = nil
             } else {
                 errorMessage = String(describing: error)
             }
@@ -1928,6 +2041,54 @@ final class AppModel: ObservableObject {
             }
             return paper.sourceURL == absURL || paper.sourceURL?.contains(arxivPaper.id) == true
         }
+    }
+
+    func libraryArxivMetadata(for paper: Paper) -> LibraryPaperArxivMetadata? {
+        let canonicalID = paper.arxivImportPlaceholderCanonicalID
+            ?? paper.sourceURL.flatMap(ArxivIDExtractor.firstCanonicalID(in:))
+        guard let canonicalID else {
+            return nil
+        }
+        let feedPaper = arxivFeed?.papers.first { $0.id == canonicalID }
+            ?? arxivSearchFeed?.papers.first { $0.id == canonicalID }
+            ?? (try? arxivCache.loadPaper(arxivID: canonicalID))
+        let enrichment = discoverEnrichmentsByID[canonicalID] ?? (try? localDiscoverCache.loadEnrichment(arxivID: canonicalID))
+        guard feedPaper != nil || enrichment != nil else {
+            return nil
+        }
+        let tags = uniqueDisplayTags((enrichment?.tags ?? []) + (feedPaper?.tags ?? []) + (feedPaper?.categories ?? []))
+        return LibraryPaperArxivMetadata(
+            arxivID: canonicalID,
+            titleZH: nonEmpty(enrichment?.titleZH) ?? feedPaper?.title.zh ?? "",
+            summaryZH: nonEmpty(enrichment?.summaryZH) ?? feedPaper?.summary.zh ?? "",
+            contribution: nonEmpty(enrichment?.contribution) ?? "",
+            abstractZH: feedPaper?.abstract.zh ?? "",
+            abstractEN: feedPaper?.abstract.en ?? "",
+            tags: tags
+        )
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func uniqueDisplayTags(_ values: [String]) -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        for value in values {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                continue
+            }
+            let key = trimmed.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            guard !seen.contains(key) else {
+                continue
+            }
+            seen.insert(key)
+            result.append(trimmed)
+        }
+        return result
     }
 
     func arxivImportPlaceholderDetail(for paper: Paper) -> String {
@@ -2397,9 +2558,76 @@ final class AppModel: ObservableObject {
                 return
             }
             category.parentID = parentID
+            category.sortOrder = nextCategorySortOrder(parentID: parentID)
             try repository.upsertCategory(category)
             try reloadLibrary()
             postNotice(kind: .success, title: "Category Moved", message: category.name)
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func reorderCategory(_ categoryID: String, relativeTo targetCategoryID: String, placement: LibraryCategoryDropPlacement) {
+        do {
+            guard let repository else {
+                throw AppModelError.repositoryUnavailable
+            }
+            guard var category = categories.first(where: { $0.id == categoryID }) else {
+                throw AppModelError.categoryNotFound(categoryID)
+            }
+            guard let target = categories.first(where: { $0.id == targetCategoryID }) else {
+                throw AppModelError.categoryNotFound(targetCategoryID)
+            }
+            guard categoryID != targetCategoryID else {
+                return
+            }
+            if placement == .inside {
+                moveCategory(categoryID, toParent: targetCategoryID)
+                return
+            }
+            let newParentID = target.parentID
+            if newParentID == categoryID || categoryDescendantIDs(of: categoryID).contains(newParentID ?? "") {
+                throw AppModelError.invalidCategoryMove
+            }
+            category.parentID = newParentID
+            category.isPinned = target.isPinned
+            var siblings = sortedCategorySiblings(parentID: newParentID).filter { $0.id != categoryID }
+            guard let targetIndex = siblings.firstIndex(where: { $0.id == targetCategoryID }) else {
+                return
+            }
+            let insertionIndex = placement == .before ? targetIndex : targetIndex + 1
+            siblings.insert(category, at: insertionIndex)
+            try saveNormalizedCategoryOrder(siblings, repository: repository)
+            try reloadLibrary()
+            postNotice(kind: .success, title: "Category Reordered", message: category.name)
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func setCategoryPinned(_ categoryID: String, pinned: Bool) {
+        do {
+            guard let repository else {
+                throw AppModelError.repositoryUnavailable
+            }
+            guard var category = categories.first(where: { $0.id == categoryID }) else {
+                throw AppModelError.categoryNotFound(categoryID)
+            }
+            guard category.isPinned != pinned else {
+                return
+            }
+            category.isPinned = pinned
+            var siblings = sortedCategorySiblings(parentID: category.parentID).filter { $0.id != categoryID }
+            let insertionIndex: Int
+            if pinned {
+                insertionIndex = 0
+            } else {
+                insertionIndex = siblings.firstIndex { !$0.isPinned } ?? siblings.count
+            }
+            siblings.insert(category, at: insertionIndex)
+            try saveNormalizedCategoryOrder(siblings, repository: repository)
+            try reloadLibrary()
+            postNotice(kind: .success, title: pinned ? "Folder Pinned" : "Folder Unpinned", message: category.name)
         } catch {
             errorMessage = String(describing: error)
         }
@@ -2484,6 +2712,42 @@ final class AppModel: ObservableObject {
         return descendants
     }
 
+    func categoryIsDescendant(_ categoryID: String, of ancestorID: String) -> Bool {
+        categoryDescendantIDs(of: ancestorID).contains(categoryID)
+    }
+
+    private func sortedCategorySiblings(parentID: String?) -> [PaperCodexCore.Category] {
+        categories
+            .filter { $0.parentID == parentID }
+            .sorted(by: categorySortPrecedes)
+    }
+
+    private func categorySortPrecedes(_ left: PaperCodexCore.Category, _ right: PaperCodexCore.Category) -> Bool {
+        if left.isPinned != right.isPinned {
+            return left.isPinned
+        }
+        if left.sortOrder != right.sortOrder {
+            return left.sortOrder < right.sortOrder
+        }
+        let nameComparison = left.name.localizedCaseInsensitiveCompare(right.name)
+        if nameComparison != .orderedSame {
+            return nameComparison == .orderedAscending
+        }
+        return left.id < right.id
+    }
+
+    private func nextCategorySortOrder(parentID: String?) -> Int {
+        (categories.filter { $0.parentID == parentID }.map(\.sortOrder).max() ?? 0) + 10
+    }
+
+    private func saveNormalizedCategoryOrder(_ siblings: [PaperCodexCore.Category], repository: PaperRepository) throws {
+        for (index, sibling) in siblings.enumerated() {
+            var updated = sibling
+            updated.sortOrder = (index + 1) * 10
+            try repository.upsertCategory(updated)
+        }
+    }
+
     func setCategory(_ categoryID: String, assigned: Bool, for paper: Paper) {
         do {
             guard let repository else {
@@ -2525,6 +2789,30 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func copyPapers(_ paperIDs: [String], toCategory categoryID: String) {
+        do {
+            guard let repository else {
+                throw AppModelError.repositoryUnavailable
+            }
+            guard categories.contains(where: { $0.id == categoryID }) else {
+                throw AppModelError.categoryNotFound(categoryID)
+            }
+            let validPaperIDs = Set(papers.map(\.id))
+            var copiedPaperIDs = Set<String>()
+            for paperID in paperIDs where validPaperIDs.contains(paperID) && !copiedPaperIDs.contains(paperID) {
+                try repository.assignPaper(paperID, toCategory: categoryID)
+                copiedPaperIDs.insert(paperID)
+            }
+            guard !copiedPaperIDs.isEmpty else {
+                return
+            }
+            try reloadLibrary()
+            postNotice(kind: .success, title: "已复制", message: "\(copiedPaperIDs.count) 篇论文")
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
     func movePapers(_ paperIDs: [String], toCategory categoryID: String?) {
         do {
             guard let repository else {
@@ -2548,7 +2836,7 @@ final class AppModel: ObservableObject {
                 return
             }
             try reloadLibrary()
-            postNotice(kind: .success, title: "Papers Moved", message: "\(movedPaperIDs.count) updated")
+            postNotice(kind: .success, title: "已移动", message: "\(movedPaperIDs.count) 篇论文")
         } catch {
             errorMessage = String(describing: error)
         }
@@ -2904,6 +3192,8 @@ final class AppModel: ObservableObject {
         do {
             if route == .discover {
                 readerReturnRoute = .discover
+            } else if route == .search {
+                readerReturnRoute = .search
             } else if route == .library {
                 readerReturnRoute = .library
             }
@@ -3574,6 +3864,8 @@ final class AppModel: ObservableObject {
         case .discover:
             route = .discover
             startDiscoverCacheWarmupIfNeeded()
+        case .search:
+            route = .search
         case .library, .settings, .reader:
             route = .library
         }
@@ -3878,6 +4170,16 @@ final class AppModel: ObservableObject {
         discoverEnrichmentsByID = enrichments.filter { entry in
             papers.contains { $0.id == entry.key }
         }
+    }
+
+    private func mergeDiscoverEnrichments(for papers: [ArxivFeedPaper]) {
+        var enrichments = discoverEnrichmentsByID
+        for paper in papers {
+            if let enrichment = try? localDiscoverCache.loadEnrichment(arxivID: paper.id) {
+                enrichments[paper.id] = enrichment
+            }
+        }
+        discoverEnrichmentsByID = enrichments
     }
 
     private func updateDiscoverProcessingProgress(

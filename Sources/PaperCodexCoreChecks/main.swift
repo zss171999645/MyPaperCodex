@@ -446,6 +446,8 @@ func runUILayoutSourceChecks() throws {
     let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
     let libraryViewURL = root.appendingPathComponent("Sources/PaperCodexApp/LibraryView.swift")
     let librarySource = try String(contentsOf: libraryViewURL)
+    let appModelURL = root.appendingPathComponent("Sources/PaperCodexApp/AppModel.swift")
+    let appModelSource = try String(contentsOf: appModelURL)
 
     try check(
         librarySource.contains("static let splitPaneTopInset: CGFloat"),
@@ -562,7 +564,8 @@ func runUILayoutSourceChecks() throws {
         "library paper rows should expose selected paper IDs as an NSItemProvider drag payload"
     )
     try check(
-        librarySource.contains(".onDrop(of: LibraryLayout.categoryDropContentTypes"),
+        librarySource.contains("CategorySidebarDropDelegate")
+            && librarySource.contains("LibraryLayout.categoryDropContentTypes"),
         "library category rows should accept dropped paper IDs as plain text payloads"
     )
     try check(
@@ -594,8 +597,14 @@ func runUILayoutSourceChecks() throws {
         "library category rows should accept native plain-text paper drag payloads"
     )
     try check(
-        librarySource.contains("model.movePapers(paperIDs, toCategory: item.category.id)"),
-        "dropping papers onto a folder should move them out of existing folders instead of copying category links"
+        librarySource.contains("dropPaperIDs(paperIDs, ontoCategory: item.category.id)"),
+        "dropping papers onto a folder should decide copy vs move from the current folder context"
+    )
+    try check(
+        appModelSource.contains("func copyPapers(_ paperIDs: [String], toCategory categoryID: String)")
+            && appModelSource.contains("title: \"已复制\"")
+            && appModelSource.contains("title: \"已移动\""),
+        "paper folder operations should expose explicit copy and move success notices"
     )
     try check(
         librarySource.contains("categoryDragPayload(for: item.category)") &&
@@ -604,12 +613,32 @@ func runUILayoutSourceChecks() throws {
         "library category rows should support dragging folders onto other folders"
     )
     try check(
+        librarySource.contains("LibraryCategoryDropPlacement")
+            && librarySource.contains("CategorySidebarDropDelegate")
+            && appModelSource.contains("func reorderCategory("),
+        "library category rows should support animated folder reordering before or after sibling rows"
+    )
+    try check(
+        librarySource.contains("onTogglePinned")
+            && librarySource.contains("pin.fill")
+            && appModelSource.contains("func setCategoryPinned("),
+        "library category rows should expose folder pinning within the current parent level"
+    )
+    try check(
         librarySource.contains("bulkActionBarOverlayYOffset"),
         "library bulk action overlay should sit lower over the list instead of hugging the top edge"
     )
     try check(
         librarySource.contains("bulkActionBarOverlayOpacity"),
         "library bulk action overlay should render with reduced opacity"
+    )
+    try check(
+        librarySource.contains("static let bulkActionBarOverlayYOffset: CGFloat = 148")
+            && librarySource.contains("static let bulkActionBarOverlayOpacity = 0.66")
+            && librarySource.contains("onCopy")
+            && librarySource.contains("LibraryBulkCopySheet")
+            && !librarySource.contains("LibraryBulkMoveSheet"),
+        "library multi-selection should show a lower, softer bulk bar with copy instead of move"
     )
     try check(
         librarySource.contains("dragPreviewPaperIDs(for:"),
@@ -624,8 +653,6 @@ func runUILayoutSourceChecks() throws {
         "library paper dragging should avoid stale custom drag state when native drag/drop is used"
     )
 
-    let appModelURL = root.appendingPathComponent("Sources/PaperCodexApp/AppModel.swift")
-    let appModelSource = try String(contentsOf: appModelURL)
     let repositorySource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/PaperRepository.swift"))
     let settingsViewURL = root.appendingPathComponent("Sources/PaperCodexApp/SettingsView.swift")
     let settingsViewSource = try String(contentsOf: settingsViewURL)
@@ -652,6 +679,44 @@ func runUILayoutSourceChecks() throws {
     let agentRuntimeSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/AgentRuntime.swift"))
     let codexAgentRuntimeSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/CodexAgentRuntime.swift"))
     let arxivIDExtractorSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/ArxivIDExtractor.swift"))
+    let interactionFeedbackSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/InteractionFeedback.swift"))
+    let localArxivClientSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/LocalArxivClient.swift"))
+    try check(
+        appModelSource.contains("case search")
+            && appSource.contains("ArxivSearchView()")
+            && appShellSource.contains("title: \"探索\"")
+            && appShellSource.contains("title: \"搜索\"")
+            && windowTabBarSource.contains("Home: 探索")
+            && windowTabBarSource.contains("Home: 搜索"),
+        "navigation should rename Discover to Explore and add an arXiv search page below it"
+    )
+    try check(
+        discoverSource.contains("struct ArxivSearchView")
+            && discoverSource.contains("model.startArxivSearch()")
+            && discoverSource.contains("ArxivPaperCard(")
+            && discoverSource.contains("model.processCurrentDiscoverResults(searchPapers"),
+        "search page should call arXiv API search and reuse Explore paper cards and processing"
+    )
+    try check(
+        localArxivClientSource.contains("func search(query:")
+            && localArxivClientSource.contains("sortBy: ArxivAPISort")
+            && localArxivClientSource.contains("sortOrder: ArxivAPISortOrder")
+            && localArxivClientSource.contains("normalizedUserSearchQuery"),
+        "LocalArxivClient should expose arXiv-compatible API search with explicit sort parameters"
+    )
+    try check(
+        librarySource.contains("LibraryPaperArxivMetadata")
+            && librarySource.contains("paperMetadataSection(for paper: Paper, metadata:")
+            && appModelSource.contains("func libraryArxivMetadata(for paper: Paper)"),
+        "library paper details should surface cached parsed arXiv metadata and Chinese enrichments when available"
+    )
+    try check(
+        interactionFeedbackSource.contains("defaultNoticeDismissDuration")
+            && interactionFeedbackSource.contains("case .success:\n        5")
+            && interactionFeedbackSource.contains("case .error:\n        10")
+            && appModelSource.contains("autoDismissAfter ?? defaultNoticeDismissDuration(for: kind)"),
+        "success and failure notices should auto-dismiss after 5s and 10s respectively"
+    )
     try check(
         !collectionViewExists
             && !appSource.contains("case .collections")
@@ -702,8 +767,10 @@ func runUILayoutSourceChecks() throws {
         appShellSource.contains("struct PrimaryNavigationSection")
             && appShellSource.contains("title: \"Library\"")
             && appShellSource.contains("model.goToLibrary()")
-            && appShellSource.contains("title: \"Discover\"")
+            && appShellSource.contains("title: \"探索\"")
             && appShellSource.contains("model.showDiscover()")
+            && appShellSource.contains("title: \"搜索\"")
+            && appShellSource.contains("model.showSearch()")
             && appShellSource.contains("title: \"Settings\"")
             && appShellSource.contains("model.showSettings()")
             && appShellSource.contains("title: \"Recent Conversations\"")
@@ -711,22 +778,24 @@ func runUILayoutSourceChecks() throws {
             && librarySource.contains("PrimaryNavigationSection()")
             && discoverSource.contains("PrimaryNavigationSection()")
             && settingsViewSource.contains("PrimaryNavigationSection()"),
-        "Library, Discover, and Settings should share one in-sidebar global navigation section"
+        "Library, Explore, Search, and Settings should share one in-sidebar global navigation section"
     )
     if let navigationRange = appShellSource.range(of: "struct PrimaryNavigationSection"),
        let libraryRange = appShellSource.range(of: "title: \"Library\""),
-       let discoverRange = appShellSource.range(of: "title: \"Discover\""),
+       let discoverRange = appShellSource.range(of: "title: \"探索\""),
+       let searchRange = appShellSource.range(of: "title: \"搜索\""),
        let settingsRange = appShellSource.range(of: "title: \"Settings\""),
        let recentRange = appShellSource.range(of: "title: \"Recent Conversations\"") {
         try check(
             navigationRange.lowerBound < libraryRange.lowerBound
                 && libraryRange.lowerBound < discoverRange.lowerBound
-                && discoverRange.lowerBound < settingsRange.lowerBound
+                && discoverRange.lowerBound < searchRange.lowerBound
+                && searchRange.lowerBound < settingsRange.lowerBound
                 && settingsRange.lowerBound < recentRange.lowerBound,
             "Recent Conversations should live under Settings in the shared sidebar navigation"
         )
     } else {
-        throw CheckFailure(description: "shared sidebar navigation should include Library, Discover, Settings, and Recent Conversations")
+        throw CheckFailure(description: "shared sidebar navigation should include Library, Explore, Search, Settings, and Recent Conversations")
     }
     try check(
         !librarySource.contains("title: \"Discover\",")
@@ -741,7 +810,8 @@ func runUILayoutSourceChecks() throws {
     try check(
         appShellSource.contains("PrimaryNavigationSection")
             && appShellSource.contains("title: \"Library\"")
-            && appShellSource.contains("title: \"Discover\"")
+            && appShellSource.contains("title: \"探索\"")
+            && appShellSource.contains("title: \"搜索\"")
             && appShellSource.contains("title: \"Settings\"")
             && appShellSource.contains("title: \"Recent Conversations\""),
         "Shared sidebar navigation should centralize global route labels"
@@ -982,8 +1052,8 @@ func runUILayoutSourceChecks() throws {
         "library should show a contextual bulk action bar for selected papers"
     )
     try check(
-        librarySource.contains("LibraryBulkMoveSheet"),
-        "library should provide a bulk move sheet"
+        librarySource.contains("LibraryBulkCopySheet"),
+        "library should provide a bulk copy sheet"
     )
     try check(
         librarySource.contains("LibraryBulkTagSheet"),
@@ -1072,13 +1142,13 @@ func runUILayoutSourceChecks() throws {
             && rootViewSource.contains(".ignoresSafeArea(.container, edges: .top)")
             && windowTabBarSource.contains("struct PaperCodexWindowTabBar")
             && windowTabBarSource.contains("PaperCodexHomeChromeTab")
-            && windowTabBarSource.contains("Home (Library, Discover, Settings, Recent Conversations)")
+            && windowTabBarSource.contains("Home (Library, 探索, 搜索, Settings, Recent Conversations)")
             && windowTabBarSource.contains("navigation.route != .reader")
             && windowTabBarSource.contains("model.returnFromReader()")
             && windowTabBarSource.contains("model.goToLibrary()")
             && windowChromeSource.contains("tabBarHeight")
             && windowChromeSource.contains("tabBarTrafficLightLeadingInset"),
-        "root chrome should keep a fixed titlebar tab strip with a persistent Home tab for library, discover, settings, and recent conversations"
+        "root chrome should keep a fixed titlebar tab strip with a persistent Home tab for library, explore, search, settings, and recent conversations"
     )
     try check(
         windowChromeSource.contains(".fullSizeContentView")
@@ -1932,6 +2002,7 @@ func runRepositoryChecks() throws {
     )
     let category = Category(id: "cat-methods", parentID: nil, name: "Methods", sortOrder: 1)
     let childCategory = Category(id: "cat-vae", parentID: "cat-methods", name: "VAE", sortOrder: 2)
+    let pinnedCategory = Category(id: "cat-pinned", parentID: nil, name: "Pinned", sortOrder: 3, isPinned: true)
     let tag = PaperTag(id: "tag-control", name: "control")
     let unassignedTag = PaperTag(id: "tag-diffusion", name: "diffusion")
     let page = PageIndex(
@@ -1985,6 +2056,7 @@ func runRepositoryChecks() throws {
     try repository.setPaperStarred(true, paperID: "paper-b", updatedAt: now.addingTimeInterval(1))
     try repository.upsertCategory(category)
     try repository.upsertCategory(childCategory)
+    try repository.upsertCategory(pinnedCategory)
     try repository.upsertTag(tag)
     try repository.upsertTag(unassignedTag)
     try repository.assignPaper("paper-a", toCategory: "cat-vae")
@@ -2018,7 +2090,7 @@ func runRepositoryChecks() throws {
     try check(fetchedPapersByID == [starredPaperB, paper], "papers should be fetchable by ID in requested order")
     try check(fetchedPaperByHash == paper, "paper should be fetchable by file hash for duplicate detection")
     try check(missingPaperByHash == nil, "missing file hash should not return a paper")
-    try check(fetchedCategories == [category, childCategory], "categories should preserve hierarchy and sort order")
+    try check(fetchedCategories == [pinnedCategory, category, childCategory], "pinned categories should round-trip and sort before unpinned siblings")
     try check(fetchedAllTags == [tag, unassignedTag], "all tags should round-trip sorted by name")
     try check(fetchedTags == [tag], "paper tags should round-trip")
     try check(fetchedCategoryIDs == ["cat-vae"], "paper category links should round-trip")
@@ -2062,6 +2134,15 @@ func runRepositoryChecks() throws {
         laterSession.id: [paper],
         multiPaperSession.id: [starredPaperB, paper]
     ], "repository should batch-fetch recent session papers without per-session paper queries")
+
+    var reorderedCategory = category
+    reorderedCategory.sortOrder = 9
+    try repository.upsertCategory(reorderedCategory)
+    let reorderedCategories = try repository.fetchCategories()
+    try check(
+        reorderedCategories.first(where: { $0.id == "cat-methods" })?.sortOrder == 9,
+        "category sort order updates should persist for drag reordering"
+    )
 
     try repository.removePaper("paper-a", fromCategory: "cat-vae")
     try repository.removePaper("paper-a", fromTag: "tag-control")
@@ -3807,18 +3888,28 @@ func runLocalArxivClientChecks() throws {
 
     let apiRange = try DiscoverDateRange(start: "2026-04-27", end: "2026-04-29")
     let apiQuery = try LocalArxivClient.submittedDateSearchQuery(range: apiRange, categories: ["cs.AI", "cs.CL"])
-    let apiURL = try LocalArxivClient.apiSearchURL(query: apiQuery, start: 2_000, maxResults: 1_000)
+    let apiURL = try LocalArxivClient.apiSearchURL(
+        query: apiQuery,
+        start: 2_000,
+        maxResults: 1_000,
+        sortBy: .submittedDate,
+        sortOrder: .descending
+    )
     let defaultConfiguration = LocalArxivClientConfiguration(categories: ["cs.AI"])
     let defaultAPIURL = try LocalArxivClient.apiSearchURL(
         query: apiQuery,
         start: 0,
-        maxResults: defaultConfiguration.apiPageSize
+        maxResults: defaultConfiguration.apiPageSize,
+        sortBy: .submittedDate,
+        sortOrder: .descending
     )
+    let relevanceURL = try LocalArxivClient.apiSearchURL(query: "all:diffusion", start: 0, maxResults: 25)
     try check(apiQuery == "(cat:cs.AI OR cat:cs.CL) AND submittedDate:[202604270000 TO 202604292359]", "local arXiv client should build submittedDate category range queries")
     try check(apiURL.absoluteString.contains("sortBy=submittedDate"), "local arXiv API URL should sort by submitted date")
     try check(apiURL.absoluteString.contains("sortOrder=descending"), "local arXiv API URL should sort newest papers first")
     try check(apiURL.absoluteString.contains("start=2000"), "local arXiv API URL should support paging start")
     try check(apiURL.absoluteString.contains("max_results=1000"), "local arXiv API URL should support paging size")
+    try check(relevanceURL.absoluteString.contains("sortBy=relevance"), "generic arXiv search URLs should default to arXiv relevance sorting")
     try check(defaultConfiguration.apiPageSize == 500, "local arXiv client should default to moderate API pages to reduce rate-limit pressure without using 1000-result requests")
     try check(defaultAPIURL.absoluteString.contains("max_results=500"), "local arXiv default API URL should avoid 1000-result search requests")
 

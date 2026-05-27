@@ -45,6 +45,17 @@ public struct LocalArxivClientConfiguration: Equatable, Sendable {
     }
 }
 
+public enum ArxivAPISort: String, CaseIterable, Codable, Sendable {
+    case relevance
+    case lastUpdatedDate
+    case submittedDate
+}
+
+public enum ArxivAPISortOrder: String, CaseIterable, Codable, Sendable {
+    case ascending
+    case descending
+}
+
 public enum LocalArxivClientError: Error, CustomStringConvertible, Equatable {
     case emptyCategories
     case invalidURL(String)
@@ -157,7 +168,13 @@ public final class LocalArxivClient: Sendable {
         var seenIDs: Set<String> = []
 
         repeat {
-            let xml = try await fetchText(url: try Self.apiSearchURL(query: query, start: start, maxResults: pageSize))
+            let xml = try await fetchText(url: try Self.apiSearchURL(
+                query: query,
+                start: start,
+                maxResults: pageSize,
+                sortBy: .submittedDate,
+                sortOrder: .descending
+            ))
             if totalResults == nil {
                 totalResults = Self.parseOpenSearchTotalResults(xml)
             }
@@ -189,6 +206,38 @@ public final class LocalArxivClient: Sendable {
         }
 
         return ArxivFeedResponse(date: rangeLabel, count: papers.count, papers: papers)
+    }
+
+    public func search(query: String,
+        start: Int = 0,
+        maxResults: Int = 100,
+        sortBy: ArxivAPISort = .relevance,
+        sortOrder: ArxivAPISortOrder = .descending
+    ) async throws -> ArxivFeedResponse {
+        let normalizedQuery = Self.normalizedUserSearchQuery(query)
+        guard !normalizedQuery.isEmpty else {
+            return ArxivFeedResponse(date: "search", count: 0, papers: [])
+        }
+        let pageSize = min(max(maxResults, 1), configuration.apiPageSize)
+        let xml = try await fetchText(url: try Self.apiSearchURL(
+            query: normalizedQuery,
+            start: start,
+            maxResults: pageSize,
+            sortBy: sortBy,
+            sortOrder: sortOrder
+        ))
+        let totalResults = Self.parseOpenSearchTotalResults(xml)
+        let papers = try Self.parseAtomFeed(
+            xml,
+            listDate: "search",
+            listCategoriesByID: [:]
+        )
+            .map { paper -> ArxivFeedPaper in
+                var datedPaper = paper
+                datedPaper.listDate = Self.isoDateFromAtomTimestamp(paper.published) ?? "search"
+                return datedPaper
+            }
+        return ArxivFeedResponse(date: "search", count: totalResults ?? papers.count, papers: papers)
     }
 
     public func fetchPapers(ids: [String], listDate: String = "library-import") async throws -> [ArxivFeedPaper] {
@@ -268,7 +317,13 @@ public final class LocalArxivClient: Sendable {
         return "\(categoryClause) AND submittedDate:[\(start)0000 TO \(end)2359]"
     }
 
-    public static func apiSearchURL(query: String, start: Int, maxResults: Int) throws -> URL {
+    public static func apiSearchURL(
+        query: String,
+        start: Int,
+        maxResults: Int,
+        sortBy: ArxivAPISort = .relevance,
+        sortOrder: ArxivAPISortOrder = .descending
+    ) throws -> URL {
         guard var components = URLComponents(string: "https://export.arxiv.org/api/query") else {
             throw LocalArxivClientError.invalidURL("https://export.arxiv.org/api/query")
         }
@@ -276,13 +331,24 @@ public final class LocalArxivClient: Sendable {
             URLQueryItem(name: "search_query", value: query),
             URLQueryItem(name: "start", value: "\(max(start, 0))"),
             URLQueryItem(name: "max_results", value: "\(min(max(maxResults, 1), 2_000))"),
-            URLQueryItem(name: "sortBy", value: "submittedDate"),
-            URLQueryItem(name: "sortOrder", value: "descending")
+            URLQueryItem(name: "sortBy", value: sortBy.rawValue),
+            URLQueryItem(name: "sortOrder", value: sortOrder.rawValue)
         ]
         guard let url = components.url else {
             throw LocalArxivClientError.invalidURL(query)
         }
         return url
+    }
+
+    public static func normalizedUserSearchQuery(_ raw: String) -> String {
+        let trimmed = normalizeWhitespace(raw)
+        guard !trimmed.isEmpty else {
+            return ""
+        }
+        if looksLikeArxivQuerySyntax(trimmed) {
+            return trimmed
+        }
+        return "all:\(trimmed)"
     }
 
     public static func parseAtomFeed(
@@ -549,6 +615,16 @@ private func uniqueVersionedIDs(_ ids: [String]) -> [String] {
         result.append(versionedID)
     }
     return result
+}
+
+private func looksLikeArxivQuerySyntax(_ value: String) -> Bool {
+    if value.range(of: #"\b(ti|au|abs|co|jr|cat|rn|id|all|submittedDate|lastUpdatedDate):"#, options: [.regularExpression, .caseInsensitive]) != nil {
+        return true
+    }
+    if value.range(of: #"\b(AND|OR|ANDNOT)\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
+        return true
+    }
+    return value.contains("[") && value.contains(" TO ") && value.contains("]")
 }
 
 private struct RegexMatch {

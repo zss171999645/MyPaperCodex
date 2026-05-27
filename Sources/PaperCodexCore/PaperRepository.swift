@@ -46,7 +46,8 @@ public final class PaperRepository {
           id TEXT PRIMARY KEY,
           parent_id TEXT REFERENCES categories(id) ON DELETE CASCADE,
           name TEXT NOT NULL,
-          sort_order INTEGER NOT NULL
+          sort_order INTEGER NOT NULL,
+          is_pinned INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS tags (
@@ -165,6 +166,10 @@ public final class PaperRepository {
         if !paperColumns.contains("is_starred") {
             try database.execute("ALTER TABLE papers ADD COLUMN is_starred INTEGER NOT NULL DEFAULT 0;")
         }
+        let categoryColumns = try database.tableColumns("categories")
+        if !categoryColumns.contains("is_pinned") {
+            try database.execute("ALTER TABLE categories ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0;")
+        }
         try LocalStoreV2Migrator.migrate(database: database)
     }
 
@@ -276,29 +281,32 @@ public final class PaperRepository {
     public func upsertCategory(_ category: Category) throws {
         try database.transaction {
             try database.run("""
-            INSERT INTO categories (id, parent_id, name, sort_order)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO categories (id, parent_id, name, sort_order, is_pinned)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               parent_id = excluded.parent_id,
               name = excluded.name,
-              sort_order = excluded.sort_order;
+              sort_order = excluded.sort_order,
+              is_pinned = excluded.is_pinned;
             """, bindings: [
                 .text(category.id),
                 category.parentID.map(SQLiteValue.text) ?? .null,
                 .text(category.name),
-                .int(category.sortOrder)
+                .int(category.sortOrder),
+                .int(category.isPinned ? 1 : 0)
             ])
             try syncLocalStoreV2Folder(category)
         }
     }
 
     public func fetchCategories() throws -> [Category] {
-        try database.query("SELECT id, parent_id, name, sort_order FROM categories ORDER BY sort_order, name;") { row in
+        try database.query("SELECT id, parent_id, name, sort_order, is_pinned FROM categories ORDER BY is_pinned DESC, sort_order, name;") { row in
             Category(
                 id: try row.text(0),
                 parentID: row.optionalText(1),
                 name: try row.text(2),
-                sortOrder: row.int(3)
+                sortOrder: row.int(3),
+                isPinned: row.int(4) != 0
             )
         }
     }
@@ -820,18 +828,20 @@ public final class PaperRepository {
 
     private func syncLocalStoreV2Folder(_ category: Category) throws {
         try database.run("""
-        INSERT INTO folders (id, parent_id, name, sort_order, deleted_at, sync_revision)
-        VALUES (?, ?, ?, ?, NULL, 0)
+        INSERT INTO folders (id, parent_id, name, sort_order, is_pinned, deleted_at, sync_revision)
+        VALUES (?, ?, ?, ?, ?, NULL, 0)
         ON CONFLICT(id) DO UPDATE SET
           parent_id = excluded.parent_id,
           name = excluded.name,
           sort_order = excluded.sort_order,
+          is_pinned = excluded.is_pinned,
           deleted_at = NULL;
         """, bindings: [
             .text(category.id),
             category.parentID.map(SQLiteValue.text) ?? .null,
             .text(category.name),
-            .int(category.sortOrder)
+            .int(category.sortOrder),
+            .int(category.isPinned ? 1 : 0)
         ])
     }
 

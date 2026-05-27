@@ -254,6 +254,7 @@ struct SaveToLibrarySheet: View {
                 parentID: category.parentID,
                 name: category.name,
                 sortOrder: category.sortOrder,
+                isPinned: category.isPinned,
                 isNew: false
             )
         }
@@ -263,6 +264,7 @@ struct SaveToLibrarySheet: View {
                 parentID: category.parentID,
                 name: category.name,
                 sortOrder: Int.max / 2 + index,
+                isPinned: false,
                 isNew: true
             )
         }
@@ -339,6 +341,9 @@ struct SaveToLibrarySheet: View {
         allFolderNodes
             .filter { $0.parentID == parentID }
             .sorted { left, right in
+                if left.isPinned != right.isPinned {
+                    return left.isPinned
+                }
                 if left.sortOrder == right.sortOrder {
                     if left.isNew != right.isNew {
                         return !left.isNew
@@ -468,6 +473,7 @@ private struct SaveToLibraryFolderNode: Equatable, Identifiable {
     var parentID: String?
     var name: String
     var sortOrder: Int
+    var isPinned: Bool
     var isNew: Bool
 }
 

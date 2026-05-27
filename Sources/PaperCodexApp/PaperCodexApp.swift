@@ -1,7 +1,7 @@
 import SwiftUI
 
 private let routeMountDelayNanoseconds: UInt64 = 16_000_000
-private let persistentRouteOrder: [AppRoute] = [.library, .discover, .settings, .reader]
+private let persistentRouteOrder: [AppRoute] = [.library, .discover, .search, .settings, .reader]
 
 @main
 struct PaperCodexApp: App {
@@ -128,6 +128,8 @@ struct RootView: View {
             LibraryView()
         case .discover:
             DiscoverView()
+        case .search:
+            ArxivSearchView()
         case .settings:
             SettingsView()
         case .reader:
@@ -237,7 +239,9 @@ private struct RouteTransitionPlaceholder: View {
         case .library:
             "文库"
         case .discover:
-            "发现"
+            "探索"
+        case .search:
+            "搜索"
         case .settings:
             "设置"
         case .reader:
@@ -249,7 +253,7 @@ private struct RouteTransitionPlaceholder: View {
         switch route {
         case .library:
             840
-        case .discover, .settings, .reader:
+        case .discover, .search, .settings, .reader:
             760
         }
     }
@@ -266,17 +270,22 @@ struct PaperCodexCommands: Commands {
             }
             .keyboardShortcut("1", modifiers: [.command])
 
-            Button("Discover") {
+            Button("探索") {
                 model.showDiscover()
             }
             .keyboardShortcut("2", modifiers: [.command])
+
+            Button("搜索") {
+                model.showSearch()
+            }
+            .keyboardShortcut("3", modifiers: [.command])
 
             Button("Reader") {
                 if model.selectedPaper != nil {
                     model.route = .reader
                 }
             }
-            .keyboardShortcut("3", modifiers: [.command])
+            .keyboardShortcut("4", modifiers: [.command])
             .disabled(model.selectedPaper == nil)
 
             Divider()

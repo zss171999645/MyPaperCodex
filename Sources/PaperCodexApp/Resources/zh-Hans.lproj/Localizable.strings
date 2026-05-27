@@ -1,6 +1,6 @@
 "Paper Codex" = "Paper Codex";
 "Library" = "文库";
-"Discover" = "发现";
+"Discover" = "探索";
 "Settings" = "设置";
 "Reader" = "阅读器";
 "New Session" = "新会话";
@@ -34,7 +34,7 @@
 
 "Language" = "语言";
 "App language" = "软件语言";
-"Controls the whole app interface, Discover language, and the default Codex prompt." = "控制整个软件界面、Discover 语言和默认 Codex prompt。";
+"Controls the whole app interface, Explore language, and the default Codex prompt." = "控制整个软件界面、探索语言和默认 Codex prompt。";
 "arXiv Feed" = "arXiv 订阅";
 "Ranking" = "排序";
 "Enrichment" = "增强";
@@ -59,7 +59,7 @@
 "Auto-enrich when opening arXiv papers" = "打开 arXiv 论文时自动增强";
 "Auto-enrich when saving to Library" = "保存到文库时自动增强";
 "Save Enrichment" = "保存增强设置";
-"Discover Processing" = "Discover 处理";
+"Explore Processing" = "探索处理";
 "Model" = "模型";
 "Thinking" = "思考等级";
 "Processing Runtime" = "处理运行参数";
