@@ -158,6 +158,9 @@ struct RootView: View {
         routeCacheWarmupTask = Task { @MainActor in
             await Task.yield()
             for route in persistentRouteOrder {
+                if model.usesObsidianCatalog && (route == .discover || route == .search) {
+                    continue
+                }
                 guard !Task.isCancelled else {
                     return
                 }
@@ -274,11 +277,13 @@ struct PaperCodexCommands: Commands {
                 model.showDiscover()
             }
             .keyboardShortcut("2", modifiers: [.command])
+            .disabled(model.usesObsidianCatalog)
 
             Button("搜索") {
                 model.showSearch()
             }
             .keyboardShortcut("3", modifiers: [.command])
+            .disabled(model.usesObsidianCatalog)
 
             Button("Reader") {
                 if model.selectedPaper != nil {

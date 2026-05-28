@@ -174,6 +174,7 @@ private struct SessionPaperContext {
 
 private let codexModelOverrideDefaultsKey = "PaperCodexCodexModelOverride"
 private let codexReasoningEffortDefaultsKey = "PaperCodexCodexReasoningEffort"
+private let codexAccessModeDefaultsKey = "PaperCodexCodexAccessMode"
 private let codexSystemPromptDefaultsKey = "PaperCodexCodexSystemPrompt"
 private let globalLanguageModeDefaultsKey = "PaperCodexGlobalLanguageMode"
 private let discoverCodexModelOverrideDefaultsKey = "PaperCodexDiscoverCodexModelOverride"
@@ -203,6 +204,11 @@ private func loadDiscoverCodexConcurrencyFromDefaults() -> Int {
 private func loadCodexReasoningEffortFromDefaults(key: String) -> CodexReasoningEffort {
     let stored = UserDefaults.standard.string(forKey: key)
     return stored.flatMap(CodexReasoningEffort.init(rawValue:)) ?? .default
+}
+
+private func loadCodexAccessModeFromDefaults() -> CodexAccessMode {
+    let stored = UserDefaults.standard.string(forKey: codexAccessModeDefaultsKey)
+    return stored.flatMap(CodexAccessMode.init(rawValue:)) ?? .fullAccess
 }
 
 private func loadQuickPromptsFromDefaults() -> [QuickPrompt] {
@@ -439,6 +445,7 @@ final class AppModel: ObservableObject {
     @Published var codexDiagnostic: CodexDiagnostic?
     @Published var codexModelOverride: String = UserDefaults.standard.string(forKey: codexModelOverrideDefaultsKey) ?? ""
     @Published var codexReasoningEffort: CodexReasoningEffort = loadCodexReasoningEffortFromDefaults(key: codexReasoningEffortDefaultsKey)
+    @Published var codexAccessMode: CodexAccessMode = loadCodexAccessModeFromDefaults()
     @Published var codexSystemPrompt: String = PromptBuilder.defaultSystemPrompt
     @Published var globalLanguageMode: PaperCodexLanguageMode = .automatic
     @Published var activeCodexRunsBySessionID: [String: ActiveCodexRun] = [:]
@@ -695,11 +702,14 @@ final class AppModel: ObservableObject {
     private let discoverStore: DiscoverFeatureStore
     private var repository: PaperRepository?
     private let supportRoot: URL
+    private let obsidianVaultRoot: URL?
     private let arxivCache: ArxivFeedCache
     private let localDiscoverCache: LocalDiscoverCache
     private let thumbnailCache: PDFThumbnailCache
     private let workspaceManager = SessionWorkspaceManager()
-    private let agentRuntime: any AgentRuntime = CodexAgentRuntime()
+    private let agentRuntime: any AgentRuntime
+    private var obsidianRecordsByPaperID: [String: ObsidianPaperRecord] = [:]
+    private var obsidianSearchIndex = ObsidianPaperSearchIndex(records: [])
     private var watchedFolderAutoScanTask: Task<Void, Never>?
     private var watchedFolderScanTask: Task<Void, Never>?
     private var activeDiscoverSearchTask: Task<Void, Never>?
@@ -737,7 +747,45 @@ final class AppModel: ObservableObject {
     }
 
     var paperLibraryRootPath: String {
-        supportRoot.appendingPathComponent("papers", isDirectory: true).path
+        if let obsidianVaultRoot {
+            return obsidianVaultRoot.appendingPathComponent("03-literature/papers", isDirectory: true).path
+        }
+        return supportRoot.appendingPathComponent("papers", isDirectory: true).path
+    }
+
+    var usesObsidianCatalog: Bool {
+        obsidianVaultRoot != nil
+    }
+
+    var obsidianPaperRecords: [ObsidianPaperRecord] {
+        papers.compactMap { obsidianRecordsByPaperID[$0.id] }
+    }
+
+    func obsidianRecord(for paperID: String) -> ObsidianPaperRecord? {
+        obsidianRecordsByPaperID[paperID]
+    }
+
+    func updateObsidianDiscussionStatus(for paper: Paper, to status: ObsidianDiscussionStatus) {
+        guard let obsidianVaultRoot,
+              let repository,
+              let record = obsidianRecordsByPaperID[paper.id],
+              record.discussionStatus != status.rawValue else {
+            return
+        }
+        do {
+            try ObsidianPaperCatalog().updateDiscussionStatus(noteURL: record.noteURL, status: status.rawValue)
+            try reloadObsidianLibrary(vaultRoot: obsidianVaultRoot, repository: repository)
+            postNotice(kind: .success, title: "Discussion Status Updated", message: "\(record.shortTitle ?? paper.title) · \(status.rawValue)")
+        } catch {
+            errorMessage = String(describing: error)
+            postNotice(kind: .error, title: "Could Not Update Discussion Status", message: String(describing: error), autoDismissAfter: nil)
+        }
+    }
+
+    func rankedObsidianPapers(query: String, candidates: [Paper]) -> [Paper] {
+        let papersByID = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
+        return obsidianSearchIndex.rank(query: query, candidateIDs: Set(papersByID.keys))
+            .compactMap { papersByID[$0.paperID] }
     }
 
     private var arxivSearchQueryPreview: String {
@@ -855,6 +903,8 @@ final class AppModel: ObservableObject {
 
         let root = PaperCodexPaths.supportRoot()
         supportRoot = root
+        obsidianVaultRoot = PaperCodexPaths.obsidianVaultRoot()
+        agentRuntime = AgentRuntimeFactory.makeDefault()
         arxivCache = ArxivFeedCache(root: root.appendingPathComponent("arxiv-cache", isDirectory: true))
         localDiscoverCache = LocalDiscoverCache(root: root.appendingPathComponent("discover-cache", isDirectory: true))
         thumbnailCache = PDFThumbnailCache(root: root.appendingPathComponent("thumbnails", isDirectory: true))
@@ -874,13 +924,17 @@ final class AppModel: ObservableObject {
             try store.migrate()
             repository = store
             try reloadLibrary()
-            startDiscoverCacheWarmupIfNeeded()
+            if obsidianVaultRoot == nil {
+                startDiscoverCacheWarmupIfNeeded()
+            }
             refreshCacheStorageSummary()
+            seedAvailableCodexModels()
             Task {
                 await refreshCodexDiagnostic()
-                await refreshAvailableCodexModels()
             }
-            startWatchedFolderAutoScan()
+            if obsidianVaultRoot == nil {
+                startWatchedFolderAutoScan()
+            }
         } catch {
             errorMessage = String(describing: error)
         }
@@ -921,6 +975,14 @@ final class AppModel: ObservableObject {
 
     func dismissNotice(id: InteractionNotice.ID) {
         notices.removeAll { $0.id == id }
+    }
+
+    private func postObsidianCatalogNotice() {
+        postNotice(
+            kind: .info,
+            title: "Obsidian owns the library",
+            message: "Edit paper metadata and organization in the Obsidian vault. Paper Codex only caches PDFs for reading."
+        )
     }
 
     private func embeddingProviderAPIKeyValue() -> String {
@@ -978,6 +1040,10 @@ final class AppModel: ObservableObject {
         guard let repository else {
             return
         }
+        if let obsidianVaultRoot {
+            try reloadObsidianLibrary(vaultRoot: obsidianVaultRoot, repository: repository)
+            return
+        }
         let fetchedPapers = try repository.fetchPapers()
         let fetchedCategories = try repository.fetchCategories()
         let fetchedTags = try repository.fetchTags()
@@ -994,6 +1060,36 @@ final class AppModel: ObservableObject {
         )
         try refreshRecentSessions(repository: repository)
         startLibraryThumbnailRefresh(for: fetchedPapers)
+    }
+
+    private func reloadObsidianLibrary(vaultRoot: URL, repository: PaperRepository) throws {
+        let records = try ObsidianPaperCatalog().load(vaultRoot: vaultRoot, supportRoot: supportRoot)
+        obsidianRecordsByPaperID = Dictionary(uniqueKeysWithValues: records.map { ($0.paper.id, $0) })
+        obsidianSearchIndex = ObsidianPaperSearchIndex(records: records)
+        for record in records {
+            try repository.upsertPaper(record.paper)
+        }
+        let papers = records.map(\.paper)
+        libraryStore.applySnapshot(
+            papers: papers,
+            categories: [],
+            tags: [],
+            watchedFolders: [],
+            categoryIDsByPaperID: [:],
+            tagsByPaperID: [:]
+        )
+        try refreshRecentSessions(repository: repository)
+        applyObsidianThumbnails(records: records)
+    }
+
+    private func applyObsidianThumbnails(records: [ObsidianPaperRecord]) {
+        let visibleIDs = Set(records.map(\.paper.id))
+        paperThumbnailURLsByID = records.reduce(into: paperThumbnailURLsByID.filter { visibleIDs.contains($0.key) }) { result, record in
+            if let thumbnailURL = record.thumbnailURL,
+               FileManager.default.fileExists(atPath: thumbnailURL.path) {
+                result[record.paper.id] = [thumbnailURL]
+            }
+        }
     }
 
     private func startLibraryThumbnailRefresh(for papers: [Paper]) {
@@ -1045,6 +1141,10 @@ final class AppModel: ObservableObject {
 
     func importPDF(from sourceURL: URL) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -1071,6 +1171,10 @@ final class AppModel: ObservableObject {
     }
 
     func importPDFs(from sourceURLs: [URL]) {
+        guard !usesObsidianCatalog else {
+            postObsidianCatalogNotice()
+            return
+        }
         let pdfURLs = sourceURLs.filter { $0.pathExtension.compare("pdf", options: [.caseInsensitive]) == .orderedSame }
         guard !pdfURLs.isEmpty else {
             postNotice(kind: .warning, title: "No PDFs Found", message: "Drop or choose PDF files to import.")
@@ -1116,6 +1220,10 @@ final class AppModel: ObservableObject {
 
     func addWatchedFolder(from sourceURL: URL) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -1204,11 +1312,19 @@ final class AppModel: ObservableObject {
     }
 
     func showDiscover() {
+        guard !usesObsidianCatalog else {
+            goToLibrary()
+            return
+        }
         route = .discover
         scheduleDiscoverCacheWarmup()
     }
 
     func showSearch() {
+        guard !usesObsidianCatalog else {
+            goToLibrary()
+            return
+        }
         route = .search
     }
 
@@ -2258,6 +2374,10 @@ final class AppModel: ObservableObject {
     }
 
     func enqueueArxivIDsForLibrary(_ versionedIDs: [String], categoryID: String?) {
+        guard !usesObsidianCatalog else {
+            postObsidianCatalogNotice()
+            return
+        }
         let ids = uniqueVersionedArxivIDs(versionedIDs)
         guard !ids.isEmpty else {
             return
@@ -2573,6 +2693,10 @@ final class AppModel: ObservableObject {
 
     func createCategory(name: String, parentID: String?) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -2598,6 +2722,10 @@ final class AppModel: ObservableObject {
 
     func updateCategory(_ categoryID: String, name: String, parentID: String?) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -2623,6 +2751,10 @@ final class AppModel: ObservableObject {
 
     func moveCategory(_ categoryID: String, toParent parentID: String?) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -2647,6 +2779,10 @@ final class AppModel: ObservableObject {
 
     func reorderCategory(_ categoryID: String, relativeTo targetCategoryID: String, placement: LibraryCategoryDropPlacement) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -2685,6 +2821,10 @@ final class AppModel: ObservableObject {
 
     func setCategoryPinned(_ categoryID: String, pinned: Bool) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -2713,6 +2853,10 @@ final class AppModel: ObservableObject {
 
     func deleteCategory(_ categoryID: String) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -2727,6 +2871,10 @@ final class AppModel: ObservableObject {
 
     func createTag(name: String) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -2748,6 +2896,10 @@ final class AppModel: ObservableObject {
 
     func updateTag(_ tagID: String, name: String) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -2765,6 +2917,10 @@ final class AppModel: ObservableObject {
 
     func deleteTag(_ tagID: String) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -2828,6 +2984,10 @@ final class AppModel: ObservableObject {
 
     func setCategory(_ categoryID: String, assigned: Bool, for paper: Paper) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -2845,6 +3005,10 @@ final class AppModel: ObservableObject {
 
     func assignPapers(_ paperIDs: [String], toCategory categoryID: String) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -2869,6 +3033,10 @@ final class AppModel: ObservableObject {
 
     func copyPapers(_ paperIDs: [String], toCategory categoryID: String) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -2893,6 +3061,10 @@ final class AppModel: ObservableObject {
 
     func movePapers(_ paperIDs: [String], toCategory categoryID: String?) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -2922,6 +3094,10 @@ final class AppModel: ObservableObject {
 
     func assignPapers(_ paperIDs: [String], toTags tagIDs: [String]) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -2950,6 +3126,10 @@ final class AppModel: ObservableObject {
 
     func deletePapers(_ paperIDs: [String]) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -2998,6 +3178,10 @@ final class AppModel: ObservableObject {
 
     func setTag(_ tagID: String, assigned: Bool, for paper: Paper) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -3019,6 +3203,10 @@ final class AppModel: ObservableObject {
 
     func setPaperStarred(_ isStarred: Bool, for paper: Paper) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -3035,6 +3223,11 @@ final class AppModel: ObservableObject {
 
     func loadPaperNotes(for paper: Paper, force: Bool = false) {
         do {
+            guard !usesObsidianCatalog else {
+                paperNotesByID[paper.id] = []
+                loadedPaperNotesPaperIDs.insert(paper.id)
+                return
+            }
             guard force || !loadedPaperNotesPaperIDs.contains(paper.id) else {
                 return
             }
@@ -3050,6 +3243,10 @@ final class AppModel: ObservableObject {
 
     func saveNote(paperID: String, noteID: String?, title: String, bodyMarkdown: String) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -3082,6 +3279,10 @@ final class AppModel: ObservableObject {
 
     func deleteNote(_ note: PaperNote) {
         do {
+            guard !usesObsidianCatalog else {
+                postObsidianCatalogNotice()
+                return
+            }
             guard let repository else {
                 throw AppModelError.repositoryUnavailable
             }
@@ -3267,6 +3468,12 @@ final class AppModel: ObservableObject {
     }
 
     func openPaper(_ paper: Paper) {
+        if usesObsidianCatalog {
+            Task {
+                await openObsidianPaper(paper)
+            }
+            return
+        }
         do {
             if route == .discover {
                 readerReturnRoute = .discover
@@ -3281,7 +3488,59 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func openObsidianPaper(_ paper: Paper) async {
+        do {
+            readerReturnRoute = .library
+            selectedLibrarySurface = .papers
+            postNotice(kind: .info, title: "Preparing PDF", message: paper.title, autoDismissAfter: 3)
+            let readyPaper = try await prepareObsidianPaperForReading(paper)
+            try openPaperSet([readyPaper.id], focusedPaperID: readyPaper.id, opensReaderTabs: true, panelTab: .chat)
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    private func prepareObsidianPaperForReading(_ paper: Paper) async throws -> Paper {
+        guard let repository else {
+            throw AppModelError.repositoryUnavailable
+        }
+        guard let record = obsidianRecordsByPaperID[paper.id] else {
+            return paper
+        }
+        let destinationURL = URL(fileURLWithPath: paper.filePath).standardizedFileURL
+        if !FileManager.default.fileExists(atPath: destinationURL.path) {
+            guard let pdfURL = record.pdfURL else {
+                throw AppModelError.sourceNotFound("No `pdf_url` in \(record.relativeNotePath)")
+            }
+            try FileManager.default.createDirectory(
+                at: destinationURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let (temporaryURL, _) = try await URLSession.shared.download(from: pdfURL)
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                try FileManager.default.removeItem(at: destinationURL)
+            }
+            try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
+        }
+        if try repository.fetchPages(paperID: paper.id).isEmpty {
+            let index = try PDFIndexExtractor().extract(paperID: paper.id, pdfURL: destinationURL)
+            for page in index.pages {
+                try repository.upsertPage(page)
+            }
+            for span in index.spans {
+                try repository.upsertSpan(span)
+            }
+        }
+        try repository.upsertPaper(paper)
+        refreshCacheStorageSummary()
+        return paper
+    }
+
     func openPapersForReading(_ paperIDs: [String]) {
+        if usesObsidianCatalog, let firstPaperID = paperIDs.first, let paper = papers.first(where: { $0.id == firstPaperID }) {
+            openPaper(paper)
+            return
+        }
         do {
             readerReturnRoute = .library
             selectedLibrarySurface = .papers
@@ -3292,6 +3551,10 @@ final class AppModel: ObservableObject {
     }
 
     func openPapersForChat(_ paperIDs: [String]) {
+        if usesObsidianCatalog, let firstPaperID = paperIDs.first, let paper = papers.first(where: { $0.id == firstPaperID }) {
+            openPaper(paper)
+            return
+        }
         do {
             readerReturnRoute = .library
             selectedLibrarySurface = .papers
@@ -3420,6 +3683,7 @@ final class AppModel: ObservableObject {
             spansByPaperID: context.spansByPaperID,
             anchorsByPaperID: context.anchorsByPaperID
         )
+        _ = try writeVaultAgentInstructionsToWorkspace(session: session)
         sessions = try sessionsForPaperSet(paperIDs: sessionPaperIDs, repository: repository)
         selectedSession = session
         messages = []
@@ -3627,12 +3891,40 @@ final class AppModel: ObservableObject {
 
     func refreshCodexDiagnostic() async {
         codexDiagnostic = nil
+        if let apiConfiguration = CodexAPIConfiguration.fromEnvironment() {
+            codexDefaultModelID = apiConfiguration.model
+            codexDiagnostic = CodexDiagnostic.ready(
+                executablePath: apiConfiguration.baseURL.absoluteString,
+                version: "HTTP API",
+                capabilities: CodexCapabilities(
+                    supportsJSONOutput: true,
+                    supportsOutputLastMessage: true,
+                    supportsResume: false
+                ),
+                modelOverride: apiConfiguration.model
+            )
+            return
+        }
         codexDefaultModelID = CodexCLI.configuredDefaultModelID() ?? ""
         let modelOverride = codexModelOverride
         let diagnostic = await Task.detached(priority: .utility) {
             CodexCLI.diagnose(modelOverride: modelOverride)
         }.value
         codexDiagnostic = diagnostic
+    }
+
+    private func seedAvailableCodexModels() {
+        if let apiConfiguration = CodexAPIConfiguration.fromEnvironment() {
+            codexDefaultModelID = apiConfiguration.model
+            availableCodexModelIDs = uniqueCodexModelIDs(
+                [apiConfiguration.model, codexModelOverride, discoverCodexModelOverride]
+            )
+            return
+        }
+        codexDefaultModelID = CodexCLI.configuredDefaultModelID() ?? ""
+        availableCodexModelIDs = uniqueCodexModelIDs(
+            [codexDefaultModelID, codexModelOverride, discoverCodexModelOverride]
+        )
     }
 
     func refreshAvailableCodexModels() async {
@@ -3642,6 +3934,13 @@ final class AppModel: ObservableObject {
         isRefreshingCodexModels = true
         defer {
             isRefreshingCodexModels = false
+        }
+        if let apiConfiguration = CodexAPIConfiguration.fromEnvironment() {
+            codexDefaultModelID = apiConfiguration.model
+            availableCodexModelIDs = uniqueCodexModelIDs(
+                [apiConfiguration.model, codexModelOverride, discoverCodexModelOverride]
+            )
+            return
         }
         do {
             let result = try await Task.detached(priority: .utility) {
@@ -3682,6 +3981,16 @@ final class AppModel: ObservableObject {
         } else {
             UserDefaults.standard.set(effort.rawValue, forKey: codexReasoningEffortDefaultsKey)
         }
+    }
+
+    func setCodexAccessMode(_ mode: CodexAccessMode) {
+        codexAccessMode = mode
+        if mode == .fullAccess {
+            UserDefaults.standard.removeObject(forKey: codexAccessModeDefaultsKey)
+        } else {
+            UserDefaults.standard.set(mode.rawValue, forKey: codexAccessModeDefaultsKey)
+        }
+        postNotice(kind: .success, title: "Codex Access Saved", message: mode.displayName)
     }
 
     func cancelActiveCodexRun() {
@@ -3779,9 +4088,9 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func sendMessage(_ text: String) async {
+    func sendMessage(_ text: String, imageURLs: [URL] = []) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        guard !trimmed.isEmpty || !imageURLs.isEmpty else {
             return
         }
         var runSessionID: String?
@@ -3812,7 +4121,16 @@ final class AppModel: ObservableObject {
 
             let context = try loadSessionPaperContext(session: session, fallbackPaper: paper, repository: repository)
             let focusedSpans = context.spansByPaperID[paper.id] ?? []
-            var content = trimmed
+            let sourceImageURLs = dedupedChatImageURLs(imageURLs + chatImageURLs(in: trimmed))
+            let copiedImageAttachments = try copyChatImageAttachments(sourceImageURLs, session: session)
+            let imageAttachments = copiedImageAttachments.map(\.attachment)
+            var content = trimmed.isEmpty ? defaultImageAttachmentMessage() : trimmed
+            if !imageAttachments.isEmpty {
+                content = rewriteChatImageReferences(in: content, copiedAttachments: copiedImageAttachments)
+                if chatImageURLs(in: content).isEmpty {
+                    content += "\n\n\(chatImageAttachmentMarkdown(for: imageAttachments))"
+                }
+            }
             if let selection = currentSelection {
                 let anchorID = PaperCodexCore.Anchor.makeID(paperID: paper.id, page: selection.page, suffix: UUID().uuidString.lowercased())
                 guard let anchor = AnchorResolver().resolve(
@@ -3860,6 +4178,7 @@ final class AppModel: ObservableObject {
 
             let updatedSession = try await runCodexTurn(
                 content: content,
+                imageAttachments: imageAttachments,
                 session: session,
                 fallbackPaper: paper,
                 repository: repository
@@ -5143,8 +5462,158 @@ final class AppModel: ObservableObject {
         scanWatchedFolders()
     }
 
+    private struct CopiedChatImageAttachment {
+        var sourceURL: URL
+        var attachment: PromptImageAttachment
+    }
+
+    private func defaultImageAttachmentMessage() -> String {
+        switch globalLanguageMode {
+        case .english:
+            return "Please analyze the attached image(s)."
+        case .automatic, .chinese:
+            return "请分析附件图片。"
+        }
+    }
+
+    private func chatImageAttachmentMarkdown(for attachments: [PromptImageAttachment]) -> String {
+        guard !attachments.isEmpty else {
+            return ""
+        }
+        let markdown = attachments
+            .map { "![\($0.displayName)](\($0.path))" }
+            .joined(separator: "\n")
+        return """
+        [attached images]
+        \(markdown)
+        """
+    }
+
+    private func copyChatImageAttachments(_ imageURLs: [URL], session: PaperSession) throws -> [CopiedChatImageAttachment] {
+        guard !imageURLs.isEmpty else {
+            return []
+        }
+        let root = URL(fileURLWithPath: session.workspacePath, isDirectory: true)
+            .appendingPathComponent("chat-attachments", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        return try imageURLs.enumerated().map { index, sourceURL in
+            let sourceExtension = sourceURL.pathExtension.lowercased()
+            let outputExtension = supportedChatImageExtensions.contains(sourceExtension) ? sourceExtension : "png"
+            let destination = root.appendingPathComponent("image-\(index + 1).\(outputExtension)")
+            let didAccess = sourceURL.startAccessingSecurityScopedResource()
+            defer {
+                if didAccess {
+                    sourceURL.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            if supportedChatImageExtensions.contains(sourceExtension) {
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    try FileManager.default.removeItem(at: destination)
+                }
+                try FileManager.default.copyItem(at: sourceURL, to: destination)
+            } else if let data = pngData(forImageAt: sourceURL) {
+                try data.write(to: destination, options: .atomic)
+            } else {
+                throw AppModelError.unsupportedImageAttachment(sourceURL.path)
+            }
+
+            return CopiedChatImageAttachment(
+                sourceURL: sourceURL.standardizedFileURL,
+                attachment: PromptImageAttachment(
+                    path: destination.standardizedFileURL.path,
+                    displayName: sourceURL.lastPathComponent.isEmpty ? "image-\(index + 1).\(outputExtension)" : sourceURL.lastPathComponent,
+                    mimeType: mimeType(forChatImageExtension: outputExtension)
+                )
+            )
+        }
+    }
+
+    private func dedupedChatImageURLs(_ urls: [URL]) -> [URL] {
+        var result: [URL] = []
+        var seen: Set<String> = []
+        for url in urls {
+            let standardizedURL = url.standardizedFileURL
+            guard seen.insert(standardizedURL.path).inserted else {
+                continue
+            }
+            result.append(standardizedURL)
+        }
+        return result
+    }
+
+    private func chatImageURLs(in markdown: String) -> [URL] {
+        let supportedExtensions = supportedChatImageExtensions.union(["tiff", "tif", "heic"])
+        var urls: [URL] = []
+        for line in markdown.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("!"),
+                  let open = trimmed.range(of: "]("),
+                  let close = trimmed[open.upperBound...].firstIndex(of: ")") else {
+                continue
+            }
+            let raw = String(trimmed[open.upperBound..<close])
+            let url: URL
+            if raw.hasPrefix("file://"), let fileURL = URL(string: raw) {
+                url = fileURL
+            } else {
+                url = URL(fileURLWithPath: raw)
+            }
+            guard url.isFileURL,
+                  supportedExtensions.contains(url.pathExtension.lowercased()) else {
+                continue
+            }
+            urls.append(url.standardizedFileURL)
+        }
+        return dedupedChatImageURLs(urls)
+    }
+
+    private func rewriteChatImageReferences(
+        in markdown: String,
+        copiedAttachments: [CopiedChatImageAttachment]
+    ) -> String {
+        var rewritten = markdown
+        for copiedAttachment in copiedAttachments {
+            let sourcePath = copiedAttachment.sourceURL.standardizedFileURL.path
+            let sourceFileURL = copiedAttachment.sourceURL.standardizedFileURL.absoluteString
+            let destinationPath = copiedAttachment.attachment.path
+            rewritten = rewritten.replacingOccurrences(of: sourcePath, with: destinationPath)
+            rewritten = rewritten.replacingOccurrences(of: sourceFileURL, with: URL(fileURLWithPath: destinationPath).absoluteString)
+        }
+        return rewritten
+    }
+
+    private var supportedChatImageExtensions: Set<String> {
+        ["png", "jpg", "jpeg", "gif", "webp"]
+    }
+
+    private func mimeType(forChatImageExtension pathExtension: String) -> String {
+        switch pathExtension.lowercased() {
+        case "jpg", "jpeg":
+            return "image/jpeg"
+        case "gif":
+            return "image/gif"
+        case "webp":
+            return "image/webp"
+        default:
+            return "image/png"
+        }
+    }
+
+    private func pngData(forImageAt url: URL) -> Data? {
+        guard let image = NSImage(contentsOf: url),
+              let tiffData = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData) else {
+            return nil
+        }
+        return bitmap.representation(using: .png, properties: [:])
+    }
+
     private func runCodex(
         prompt: String,
+        imageAttachments: [PromptImageAttachment],
         session: PaperSession,
         runID: String,
         prefersWorkspaceImageOutput: Bool
@@ -5165,10 +5634,14 @@ final class AppModel: ObservableObject {
                 existingSessionID: session.codexSessionID,
                 modelOverride: modelOverride,
                 reasoningEffort: reasoningEffort,
+                accessMode: codexAccessMode,
+                additionalWritableDirectories: codexAdditionalWritableDirectories(),
+                imageAttachments: imageAttachments,
                 prefersWorkspaceImageOutput: prefersWorkspaceImageOutput,
                 runModeDescription: codexRunModeDescription(
                     reasoningEffort: reasoningEffort,
                     modelOverride: modelOverride,
+                    accessMode: codexAccessMode,
                     prefersWorkspaceImageOutput: prefersWorkspaceImageOutput
                 )
             ),
@@ -5209,6 +5682,14 @@ final class AppModel: ObservableObject {
         discoverCodexModelOverride.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private func codexAdditionalWritableDirectories() -> [String] {
+        guard codexAccessMode == .obsidianVaultWrite,
+              let obsidianVaultRoot else {
+            return []
+        }
+        return [obsidianVaultRoot.path]
+    }
+
     private func discoverCodexModelIdentity(
         modelOverride: String,
         reasoningEffort: CodexReasoningEffort
@@ -5224,6 +5705,7 @@ final class AppModel: ObservableObject {
     private func codexRunModeDescription(
         reasoningEffort: CodexReasoningEffort,
         modelOverride: String,
+        accessMode: CodexAccessMode,
         prefersWorkspaceImageOutput: Bool
     ) -> String {
         var parts: [String] = []
@@ -5235,11 +5717,61 @@ final class AppModel: ObservableObject {
             parts.append("Model \(trimmedModel)")
         }
         parts.append(reasoningEffort == .default ? "default thinking" : "\(reasoningEffort.displayName) thinking")
+        parts.append("Access \(accessMode.displayName)")
         return parts.joined(separator: " · ")
+    }
+
+    private func writeObsidianNotesToWorkspace(session: PaperSession, papers: [Paper]) throws -> [String: String] {
+        guard usesObsidianCatalog else {
+            return [:]
+        }
+        let workspaceRoot = URL(fileURLWithPath: session.workspacePath, isDirectory: true)
+        var notePathsByPaperID: [String: String] = [:]
+        for paper in papers {
+            guard let record = obsidianRecordsByPaperID[paper.id] else {
+                continue
+            }
+            let paperRoot = workspaceRoot
+                .appendingPathComponent("papers", isDirectory: true)
+                .appendingPathComponent(paper.id, isDirectory: true)
+            try FileManager.default.createDirectory(at: paperRoot, withIntermediateDirectories: true)
+            let destination = paperRoot.appendingPathComponent("obsidian_note.md")
+            let source = try String(contentsOf: record.noteURL, encoding: .utf8)
+            let body = """
+            ---
+            source_note_path: "\(record.noteURL.path)"
+            relative_note_path: "\(record.relativeNotePath)"
+            source_of_truth: "Obsidian vault"
+            ---
+
+            \(source)
+            """
+            try body.write(to: destination, atomically: true, encoding: .utf8)
+            notePathsByPaperID[paper.id] = destination.path
+        }
+        return notePathsByPaperID
+    }
+
+    private func loadVaultAgentInstructions() throws -> VaultAgentInstructions? {
+        guard let obsidianVaultRoot else {
+            return nil
+        }
+        return try VaultAgentInstructions.load(vaultRoot: obsidianVaultRoot)
+    }
+
+    @discardableResult
+    private func writeVaultAgentInstructionsToWorkspace(session: PaperSession) throws -> VaultAgentInstructions? {
+        guard let instructions = try loadVaultAgentInstructions() else {
+            return nil
+        }
+        let workspaceRoot = URL(fileURLWithPath: session.workspacePath, isDirectory: true)
+        _ = try VaultAgentInstructions.writeWorkspaceCopy(instructions, workspaceRoot: workspaceRoot)
+        return instructions
     }
 
     private func runCodexTurn(
         content: String,
+        imageAttachments: [PromptImageAttachment] = [],
         session: PaperSession,
         fallbackPaper: Paper,
         repository: PaperRepository
@@ -5258,10 +5790,18 @@ final class AppModel: ObservableObject {
             spansByPaperID: context.spansByPaperID,
             anchorsByPaperID: context.anchorsByPaperID
         )
+        let agentInstructions = try writeVaultAgentInstructionsToWorkspace(session: session)
+        let obsidianNotesByPaperID = try writeObsidianNotesToWorkspace(session: session, papers: context.papers)
         appendCodexRunEvent(
             CodexRunEvent(kind: .status, title: "Workspace", detail: "Wrote session workspace at \(session.workspacePath)"),
             runID: runID
         )
+        if let agentInstructions {
+            appendCodexRunEvent(
+                CodexRunEvent(kind: .status, title: "Vault Instructions", detail: "Loaded \(agentInstructions.sourceURL.path)"),
+                runID: runID
+            )
+        }
 
         let prompt = PromptBuilder().buildPrompt(
             request: PromptRequest(
@@ -5270,6 +5810,10 @@ final class AppModel: ObservableObject {
                 papers: context.papers,
                 selectedAnchors: selectedAnchors,
                 relevantSpans: [],
+                imageAttachments: imageAttachments,
+                obsidianNotesByPaperID: obsidianNotesByPaperID,
+                agentInstructionsPath: agentInstructions?.sourceURL.path,
+                agentInstructionsText: agentInstructions?.text,
                 systemPromptTemplate: codexSystemPrompt,
                 languageMode: globalLanguageMode
             )
@@ -5281,6 +5825,7 @@ final class AppModel: ObservableObject {
         let prefersWorkspaceImageOutput = ImageGenerationRequestDetector.isImageRequest(content)
         let codexReply = try await runCodex(
             prompt: prompt,
+            imageAttachments: imageAttachments,
             session: session,
             runID: runID,
             prefersWorkspaceImageOutput: prefersWorkspaceImageOutput
@@ -5404,6 +5949,7 @@ enum AppModelError: Error, CustomStringConvertible {
     case arxivMetadataNotFound(String)
     case categoryNotFound(String)
     case invalidCategoryMove
+    case unsupportedImageAttachment(String)
 
     var description: String {
         switch self {
@@ -5431,6 +5977,8 @@ enum AppModelError: Error, CustomStringConvertible {
             "No folder was found for \(categoryID)."
         case .invalidCategoryMove:
             "A category cannot be moved into itself or one of its subcategories."
+        case let .unsupportedImageAttachment(path):
+            "Could not read image attachment: \(path)"
         }
     }
 }

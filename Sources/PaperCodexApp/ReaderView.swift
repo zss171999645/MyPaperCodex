@@ -6,6 +6,7 @@ struct ReaderView: View {
     @State private var isShowingAddPaperToSessionSheet = false
     @State private var isPDFSplitVisible = false
     @State private var pdfSplitTarget: PDFInternalLinkTarget?
+    @State private var pdfKitCommand: PDFKitCommand?
 
     var body: some View {
         HSplitView {
@@ -18,6 +19,13 @@ struct ReaderView: View {
         .onChange(of: model.selectedPaper?.id) { _, _ in
             isPDFSplitVisible = false
             pdfSplitTarget = nil
+            pdfKitCommand = nil
+        }
+        .onChange(of: model.pdfKitCommand) { _, command in
+            guard command != pdfKitCommand else {
+                return
+            }
+            pdfKitCommand = command
         }
         .sheet(isPresented: $isShowingAddPaperToSessionSheet) {
             AddPaperToSessionSheet(
@@ -56,7 +64,7 @@ struct ReaderView: View {
                                 model.removePaperFromCurrentSession(paperID)
                             }
                         },
-                        onCommand: { model.sendPDFKitCommand($0) },
+                        onCommand: { issuePDFKitCommand($0) },
                         onReturn: { model.returnFromCitationJump() },
                         onToggleSplit: { togglePDFSplit() }
                     )
@@ -90,7 +98,7 @@ struct ReaderView: View {
             jumpTarget: model.pdfJumpTarget,
             readingContextID: model.readerPositionContextID,
             readingPosition: model.readerPosition,
-            command: model.pdfKitCommand,
+            command: pdfKitCommand,
             internalLinkTarget: nil,
             onSelection: { selection in
                 model.updateSelection(selection)
@@ -150,6 +158,12 @@ struct ReaderView: View {
     private func openPDFSplit(_ target: PDFInternalLinkTarget) {
         pdfSplitTarget = target
         isPDFSplitVisible = true
+    }
+
+    private func issuePDFKitCommand(_ kind: PDFKitCommandKind) {
+        let command = PDFKitCommand(kind: kind)
+        pdfKitCommand = command
+        model.pdfKitCommand = command
     }
 
     private func togglePDFSplit() {

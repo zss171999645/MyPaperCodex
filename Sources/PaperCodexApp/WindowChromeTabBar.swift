@@ -82,7 +82,9 @@ struct PaperCodexWindowTabBar: View {
         case .settings:
             return "Home: Settings"
         case .reader:
-            return "Home (Library, 探索, 搜索, Settings, Recent Conversations)"
+            return model.usesObsidianCatalog
+                ? "Home (Obsidian Library, Settings, Recent Conversations)"
+                : "Home (Library, 探索, 搜索, Settings, Recent Conversations)"
         }
     }
 

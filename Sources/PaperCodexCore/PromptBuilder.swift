@@ -201,12 +201,28 @@ public enum PaperCodexLanguageMode: String, Codable, CaseIterable, Identifiable,
     }
 }
 
+public struct PromptImageAttachment: Equatable, Sendable {
+    public var path: String
+    public var displayName: String
+    public var mimeType: String
+
+    public init(path: String, displayName: String, mimeType: String) {
+        self.path = path
+        self.displayName = displayName
+        self.mimeType = mimeType
+    }
+}
+
 public struct PromptRequest: Equatable, Sendable {
     public var userMessage: String
     public var workspacePath: String
     public var papers: [Paper]
     public var selectedAnchors: [Anchor]
     public var relevantSpans: [Span]
+    public var imageAttachments: [PromptImageAttachment]
+    public var obsidianNotesByPaperID: [String: String]
+    public var agentInstructionsPath: String?
+    public var agentInstructionsText: String?
     public var systemPromptTemplate: String
     public var languageMode: PaperCodexLanguageMode
 
@@ -216,6 +232,10 @@ public struct PromptRequest: Equatable, Sendable {
         papers: [Paper],
         selectedAnchors: [Anchor],
         relevantSpans: [Span],
+        imageAttachments: [PromptImageAttachment] = [],
+        obsidianNotesByPaperID: [String: String] = [:],
+        agentInstructionsPath: String? = nil,
+        agentInstructionsText: String? = nil,
         systemPromptTemplate: String = PromptDefaults.codexSystemPrompt,
         languageMode: PaperCodexLanguageMode = .automatic
     ) {
@@ -224,6 +244,10 @@ public struct PromptRequest: Equatable, Sendable {
         self.papers = papers
         self.selectedAnchors = selectedAnchors
         self.relevantSpans = relevantSpans
+        self.imageAttachments = imageAttachments
+        self.obsidianNotesByPaperID = obsidianNotesByPaperID
+        self.agentInstructionsPath = agentInstructionsPath
+        self.agentInstructionsText = agentInstructionsText
         self.systemPromptTemplate = systemPromptTemplate
         self.languageMode = languageMode
     }
@@ -248,10 +272,39 @@ public struct PromptBuilder: Sendable {
         \(request.languageMode.promptInstruction)
         """)
 
+        if let agentInstructionsText = request.agentInstructionsText?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !agentInstructionsText.isEmpty {
+            let sourceLine = request.agentInstructionsPath
+                .map { "source: \($0)\n" } ?? ""
+            sections.append("""
+            [\(labels.agentInstructions)]
+            \(sourceLine)\(labels.agentInstructionsInstruction)
+
+            \(agentInstructionsText)
+            """)
+        }
+
         sections.append("""
         [\(labels.userMessage)]
         \(request.userMessage)
         """)
+
+        if !request.imageAttachments.isEmpty {
+            let imageLines = request.imageAttachments.enumerated().map { index, attachment in
+                """
+                - image_\(index + 1): \(attachment.displayName)
+                  path: \(attachment.path)
+                  mime_type: \(attachment.mimeType)
+                  markdown: ![\(attachment.displayName)](\(attachment.path))
+                """
+            }
+            sections.append("""
+            [\(labels.attachedImages)]
+            The user attached these local image files to this turn. Use visual analysis on the images themselves; do not rely only on the filenames.
+
+            \(imageLines.joined(separator: "\n"))
+            """)
+        }
 
         if !request.papers.isEmpty {
             let paperLines = request.papers.map { paper in
@@ -287,6 +340,24 @@ public struct PromptBuilder: Sendable {
             \(labels.workspaceInstruction)
 
             \(paperWorkspaceLines.joined(separator: "\n\n"))
+            """)
+        }
+
+        let obsidianNoteLines = request.papers.compactMap { paper -> String? in
+            guard let notePath = request.obsidianNotesByPaperID[paper.id] else {
+                return nil
+            }
+            return """
+            paper_id: \(paper.id)
+            obsidian_note: \(notePath)
+            """
+        }
+        if !obsidianNoteLines.isEmpty {
+            sections.append("""
+            [\(labels.obsidianNotes)]
+            Use these notes as durable user-maintained context from the Obsidian vault. Paper Codex session workspaces are temporary; do not claim to have updated the Obsidian note unless the user explicitly asks for a vault write and the write is actually performed.
+
+            \(obsidianNoteLines.joined(separator: "\n\n"))
             """)
         }
 
@@ -356,6 +427,10 @@ private struct PromptSectionLabels {
     var paperWorkspace: String
     var workspaceFiles: String
     var selectedSource: String
+    var obsidianNotes: String
+    var attachedImages: String
+    var agentInstructions: String
+    var agentInstructionsInstruction: String
     var workspaceInstruction: String
     var unknownYear: String
     var noSourceURL: String
@@ -369,6 +444,10 @@ private struct PromptSectionLabels {
             paperWorkspace = "论文工作区"
             workspaceFiles = "工作区文件"
             selectedSource = "选中的原文"
+            obsidianNotes = "Obsidian 笔记"
+            attachedImages = "附件图片"
+            agentInstructions = "vault agent instructions"
+            agentInstructionsInstruction = "这些是 Obsidian vault 根目录的 agent 指南。Codex API 无法自动读取本地 AGENTS.md，所以 Paper Codex 将其显式放入请求上下文；请在不覆盖用户消息和论文证据规则的前提下遵守。"
             workspaceInstruction = "直接检查这些文件。不要把 prompt 当成论文全文。"
             unknownYear = "未知年份"
             noSourceURL = "无来源 URL"
@@ -379,6 +458,10 @@ private struct PromptSectionLabels {
             paperWorkspace = "paper workspace"
             workspaceFiles = "workspace files"
             selectedSource = "selected source"
+            obsidianNotes = "obsidian notes"
+            attachedImages = "attached images"
+            agentInstructions = "vault agent instructions"
+            agentInstructionsInstruction = "These are the agent guidelines from the Obsidian vault root. Codex API runtimes cannot auto-read local AGENTS.md files, so Paper Codex includes them explicitly; follow them without overriding the user's message or the paper-evidence rules."
             workspaceInstruction = "Inspect these files directly. Do not treat the prompt as the full paper text."
             unknownYear = "unknown year"
             noSourceURL = "no source URL"

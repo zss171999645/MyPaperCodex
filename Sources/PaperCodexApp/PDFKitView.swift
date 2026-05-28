@@ -95,7 +95,7 @@ struct PDFKitView: NSViewRepresentable {
             object: view
         )
         loadDocument(in: view)
-        context.coordinator.documentDidLoad()
+        context.coordinator.documentDidLoad(filePath: filePath)
         let readingContextID = readingContextID
         let readingPosition = readingPosition
         DispatchQueue.main.async {
@@ -109,7 +109,7 @@ struct PDFKitView: NSViewRepresentable {
     func updateNSView(_ nsView: PDFView, context: Context) {
         if nsView.document?.documentURL?.path != filePath {
             loadDocument(in: nsView)
-            context.coordinator.documentDidLoad()
+            context.coordinator.documentDidLoad(filePath: filePath)
             let coordinator = context.coordinator
             let readingContextID = readingContextID
             DispatchQueue.main.async {
@@ -147,6 +147,8 @@ struct PDFKitView: NSViewRepresentable {
         private weak var observedClipView: NSClipView?
         private var pendingViewportReport: DispatchWorkItem?
         private var pendingWidthRefit: DispatchWorkItem?
+        private var referenceResolverTask: Task<Void, Never>?
+        private var referenceResolverDocumentPath: String?
         private var isApplyingReadingPosition = false
         private var shouldFitWidthOnResize = true
         private var referenceResolver = PDFReferenceResolver(pageTexts: [:])
@@ -169,11 +171,12 @@ struct PDFKitView: NSViewRepresentable {
         deinit {
             pendingViewportReport?.cancel()
             pendingWidthRefit?.cancel()
+            referenceResolverTask?.cancel()
             NotificationCenter.default.removeObserver(self)
         }
 
         @MainActor
-        func documentDidLoad() {
+        func documentDidLoad(filePath: String) {
             lastJumpTarget = nil
             lastAppliedInternalLinkTarget = nil
             lastAppliedReadingContext = nil
@@ -181,11 +184,29 @@ struct PDFKitView: NSViewRepresentable {
             lastReportedStatus = nil
             lastReportedPosition = nil
             shouldFitWidthOnResize = true
-            referenceResolver = Self.makeReferenceResolver(from: pdfView?.document)
+            referenceResolver = PDFReferenceResolver(pageTexts: [:])
+            startReferenceResolverBuild(filePath: filePath)
             citationPopover?.close()
             citationPopover = nil
             clearHighlights()
             detachScrollObservation()
+        }
+
+        @MainActor
+        private func startReferenceResolverBuild(filePath: String) {
+            referenceResolverTask?.cancel()
+            referenceResolverDocumentPath = filePath
+            referenceResolverTask = Task { [weak self] in
+                let resolver = await Self.makeReferenceResolver(fromFilePath: filePath)
+                await MainActor.run {
+                    guard let self,
+                          !Task.isCancelled,
+                          self.referenceResolverDocumentPath == filePath else {
+                        return
+                    }
+                    self.referenceResolver = resolver
+                }
+            }
         }
 
         @MainActor
@@ -349,6 +370,12 @@ struct PDFKitView: NSViewRepresentable {
             }
             let point = NSPoint(x: position.pagePointX, y: position.pagePointY)
             pdfView.go(to: PDFDestination(page: page, at: point))
+            centerPDFPagePointInViewport(point, page: page)
+            DispatchQueue.main.async { [weak self] in
+                self?.centerPDFPagePointInViewport(point, page: page)
+                self?.scheduleViewportReport()
+                self?.reportDocumentStatus()
+            }
         }
 
         @MainActor
@@ -849,8 +876,17 @@ struct PDFKitView: NSViewRepresentable {
             return "\(trimmed.prefix(147))..."
         }
 
-        private static func makeReferenceResolver(from document: PDFDocument?) -> PDFReferenceResolver {
-            guard let document else {
+        private static func makeReferenceResolver(fromFilePath filePath: String) async -> PDFReferenceResolver {
+            await Task.detached(priority: .utility) {
+                guard let document = PDFDocument(url: URL(fileURLWithPath: filePath)) else {
+                    return PDFReferenceResolver(pageTexts: [:])
+                }
+                return makeReferenceResolver(from: document)
+            }.value
+        }
+
+        private static func makeReferenceResolver(from document: PDFDocument) -> PDFReferenceResolver {
+            guard document.pageCount > 0 else {
                 return PDFReferenceResolver(pageTexts: [:])
             }
             var pageTexts: [Int: String] = [:]

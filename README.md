@@ -266,11 +266,32 @@ The app also respects:
 
 ```bash
 PAPER_CODEX_SUPPORT_ROOT=/custom/support/root
+PAPER_CODEX_OBSIDIAN_VAULT_ROOT="/Users/horizon/Documents/Obsidian-Main/世界模型"
+PAPER_CODEX_CODEX_API_BASE_URL=https://your-codex-api.example/v1
+PAPER_CODEX_CODEX_API_KEY=...
+PAPER_CODEX_CODEX_API_MODEL=gpt-5.5
+PAPER_CODEX_CODEX_API_ENDPOINT=chat_completions
 PAPER_CODEX_APP_PATH=/custom/PaperCodex.app
 PAPER_CODEX_BUILD_CONFIGURATION=release
 PAPER_CODEX_BUNDLE_IDENTIFIER=local.paper-codex.app
 PAPER_CODEX_CODESIGN_IDENTITY=-
 ```
+
+### Obsidian catalog mode
+
+This local fork can use the Obsidian vault as the source of truth for paper organization. When `PAPER_CODEX_OBSIDIAN_VAULT_ROOT` is set, or when the default vault path `~/Documents/Obsidian-Main/世界模型` exists, the Library list is loaded from `03-literature/papers/*.md` notes with `type: literature-note`.
+
+In this mode Paper Codex does not own folders, tags, paper notes, watched folders, or arXiv saving. It reads Obsidian YAML, lazily caches PDFs under the app support directory for PDFKit reading, extracts temporary citation context for chat, and copies the corresponding Obsidian note into each session workspace as read-only context.
+
+For this machine, run the Obsidian-backed reader with:
+
+```bash
+scripts/run-obsidian-reader.sh
+```
+
+### Codex API runtime
+
+By default Paper Codex still uses the local Codex CLI. Set `PAPER_CODEX_CODEX_API_BASE_URL` to switch reader chat to an OpenAI-compatible HTTP API. `PAPER_CODEX_CODEX_API_ENDPOINT` supports `chat_completions` and `responses`; the default is `chat_completions`.
 
 ## Current Limitations
 

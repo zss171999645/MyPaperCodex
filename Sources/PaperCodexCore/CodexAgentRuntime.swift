@@ -39,13 +39,17 @@ public struct CodexAgentRuntime: AgentRuntime {
         let eventLogURL = outputURL.deletingPathExtension().appendingPathExtension("events.jsonl")
 
         let arguments: [String]
+        let imagePaths = request.imageAttachments.map(\.path)
         if let existingSessionID = request.existingSessionID, !request.prefersWorkspaceImageOutput {
             arguments = cli.resumeArguments(
                 sessionID: existingSessionID,
                 prompt: request.prompt,
                 outputLastMessagePath: outputURL.path,
                 modelOverride: request.modelOverride,
-                reasoningEffort: request.reasoningEffort
+                reasoningEffort: request.reasoningEffort,
+                accessMode: request.accessMode,
+                additionalWritableDirectories: request.additionalWritableDirectories,
+                imagePaths: request.imageAttachments.map(\.path)
             )
         } else {
             arguments = cli.startArguments(
@@ -53,7 +57,10 @@ public struct CodexAgentRuntime: AgentRuntime {
                 workspacePath: request.workspacePath,
                 outputLastMessagePath: outputURL.path,
                 modelOverride: request.modelOverride,
-                reasoningEffort: request.reasoningEffort
+                reasoningEffort: request.reasoningEffort,
+                accessMode: request.accessMode,
+                additionalWritableDirectories: request.additionalWritableDirectories,
+                imagePaths: imagePaths
             )
         }
 

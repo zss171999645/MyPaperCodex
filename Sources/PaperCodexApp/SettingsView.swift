@@ -388,8 +388,35 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                codexAccessSettings
             }
         }
+    }
+
+    private var codexAccessSettings: some View {
+        DisclosureGroup("Access") {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Codex Access", selection: Binding(
+                    get: { model.codexAccessMode },
+                    set: { model.setCodexAccessMode($0) }
+                )) {
+                    ForEach(CodexAccessMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Text(model.codexAccessMode.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Applies to local Codex CLI runs. HTTP API endpoints receive prompt context only.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.top, 6)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
 
     private var embeddingProviderSettings: some View {

@@ -4,6 +4,7 @@ import SwiftUI
 import WebKit
 
 private let chatComposerTextHeightDefaultsKey = "PaperCodexChatComposerTextHeight"
+private let chatBottomFollowTolerance: CGFloat = 28
 
 enum SessionPanelTab: Hashable {
     case chat
@@ -19,6 +20,9 @@ struct ChatView: View {
     @State private var sessionPendingRename: PaperSession?
     @State private var renameSessionTitle = ""
     @State private var selectedGeneratedImageURL: URL?
+    @State private var isChatPinnedToBottom = true
+    @State private var chatScrollViewportHeight: CGFloat = 0
+    @State private var chatBottomAnchorY: CGFloat = .infinity
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,9 +33,6 @@ struct ChatView: View {
         .background(Color(nsColor: .controlBackgroundColor))
         .sheet(item: $sessionPendingRename) { session in
             renameSessionSheet(session)
-        }
-        .task {
-            await model.refreshAvailableCodexModels()
         }
         .onChange(of: model.selectedSessionPanelTab) { _, tab in
             guard tab == .notes, let paper = model.selectedPaper else {
@@ -52,11 +53,15 @@ struct ChatView: View {
 
     @ViewBuilder
     private var selectedPanelContent: some View {
+        if model.usesObsidianCatalog {
+            chatPanel
+        } else {
         switch model.selectedSessionPanelTab {
         case .chat:
             chatPanel
         case .notes:
             SessionNotesPanel()
+        }
         }
     }
 
@@ -101,17 +106,45 @@ struct ChatView: View {
                             Color.clear
                                 .frame(height: 1)
                                 .id("chat-bottom")
+                                .background(
+                                    GeometryReader { geometry in
+                                        Color.clear.preference(
+                                            key: ChatBottomAnchorPreferenceKey.self,
+                                            value: geometry.frame(in: .named("chat-scroll")).maxY
+                                        )
+                                    }
+                                )
                         }
                     }
                     .padding(16)
                 }
-                .onChange(of: model.messages.count) { _, _ in
-                    scrollToBottom(proxy)
+                .coordinateSpace(name: "chat-scroll")
+                .background(
+                    GeometryReader { geometry in
+                        Color.clear.preference(
+                            key: ChatViewportHeightPreferenceKey.self,
+                            value: geometry.size.height
+                        )
+                    }
+                )
+                .onPreferenceChange(ChatBottomAnchorPreferenceKey.self) { bottomAnchorY in
+                    updateChatPinnedState(bottomAnchorY: bottomAnchorY)
+                }
+                .onPreferenceChange(ChatViewportHeightPreferenceKey.self) { viewportHeight in
+                    updateChatPinnedState(viewportHeight: viewportHeight)
+                }
+                .onChange(of: model.messages.last?.id ?? "") { _, _ in
+                    scrollToBottomIfPinned(proxy)
                 }
                 .onChange(of: visibleActiveCodexRun?.events.count ?? 0) { _, _ in
+                    scrollToBottomIfPinned(proxy)
+                }
+                .onChange(of: model.selectedSession?.id) { _, _ in
+                    isChatPinnedToBottom = true
                     scrollToBottom(proxy)
                 }
                 .onAppear {
+                    isChatPinnedToBottom = true
                     scrollToBottom(proxy)
                 }
             }
@@ -178,7 +211,9 @@ struct ChatView: View {
         HStack(spacing: 8) {
             Picker("Session Panel", selection: $model.selectedSessionPanelTab) {
                 Label("Chat", systemImage: "text.bubble").tag(SessionPanelTab.chat)
-                Label("Notes", systemImage: "note.text").tag(SessionPanelTab.notes)
+                if !model.usesObsidianCatalog {
+                    Label("Notes", systemImage: "note.text").tag(SessionPanelTab.notes)
+                }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -233,6 +268,29 @@ struct ChatView: View {
                 proxy.scrollTo("chat-bottom", anchor: .bottom)
             }
         }
+    }
+
+    private func scrollToBottomIfPinned(_ proxy: ScrollViewProxy) {
+        guard isChatPinnedToBottom else {
+            return
+        }
+        scrollToBottom(proxy)
+    }
+
+    private func updateChatPinnedState(
+        bottomAnchorY: CGFloat? = nil,
+        viewportHeight: CGFloat? = nil
+    ) {
+        if let bottomAnchorY {
+            chatBottomAnchorY = bottomAnchorY
+        }
+        if let viewportHeight {
+            chatScrollViewportHeight = viewportHeight
+        }
+        guard chatScrollViewportHeight > 0, chatBottomAnchorY.isFinite else {
+            return
+        }
+        isChatPinnedToBottom = chatBottomAnchorY <= chatScrollViewportHeight + chatBottomFollowTolerance
     }
 
     private func renameSessionSheet(_ session: PaperSession) -> some View {
@@ -370,6 +428,22 @@ struct ChatView: View {
         Task {
             await model.sendMessage(message)
         }
+    }
+}
+
+private struct ChatBottomAnchorPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = .infinity
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct ChatViewportHeightPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
@@ -1227,9 +1301,11 @@ private struct MessageBubble: View {
                     MarkdownMessageView(messageID: message.id, markdown: renderedMarkdown, onCitation: onCitation)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                let imageURLs = generatedImageURLs(in: message.content)
-                if !imageURLs.isEmpty {
-                    GeneratedImageGallery(urls: imageURLs, onPreview: onGeneratedImagePreview)
+                if !isUser {
+                    let imageURLs = generatedImageURLs(in: message.content)
+                    if !imageURLs.isEmpty {
+                        GeneratedImageGallery(urls: imageURLs, onPreview: onGeneratedImagePreview)
+                    }
                 }
                 if failureNotice != nil {
                     HStack(spacing: 8) {
@@ -1588,6 +1664,70 @@ private struct ComposerTextView: NSViewRepresentable {
                 return
             }
             super.keyDown(with: event)
+        }
+
+        override func paste(_ sender: Any?) {
+            if let imageMarkdown = ChatImagePasteboardReader.imageMarkdown(from: .general) {
+                insertText(markdownInsertion(imageMarkdown), replacementRange: selectedRange())
+                return
+            }
+            super.paste(sender)
+        }
+
+        private func markdownInsertion(_ markdown: String) -> String {
+            if string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "\(markdown)\n"
+            }
+            return "\n\(markdown)\n"
+        }
+    }
+}
+
+private enum ChatImagePasteboardReader {
+    private static let supportedFileExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "tiff", "tif", "heic"]
+
+    static func imageMarkdown(from pasteboard: NSPasteboard) -> String? {
+        let urls = imageURLs(from: pasteboard)
+        guard !urls.isEmpty else {
+            return nil
+        }
+        return urls
+            .map { "![Pasted image](\($0.standardizedFileURL.path))" }
+            .joined(separator: "\n")
+    }
+
+    private static func imageURLs(from pasteboard: NSPasteboard) -> [URL] {
+        if let urls = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] {
+            let imageURLs = urls.filter { supportedFileExtensions.contains($0.pathExtension.lowercased()) }
+            if !imageURLs.isEmpty {
+                return imageURLs
+            }
+        }
+        guard let image = NSImage(pasteboard: pasteboard),
+              let url = writeTemporaryPNG(image) else {
+            return []
+        }
+        return [url]
+    }
+
+    private static func writeTemporaryPNG(_ image: NSImage) -> URL? {
+        guard let tiffData = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData),
+              let pngData = bitmap.representation(using: .png, properties: [:]) else {
+            return nil
+        }
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("PaperCodexComposerImages", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let url = directory.appendingPathComponent("\(UUID().uuidString.lowercased()).png")
+            try pngData.write(to: url, options: .atomic)
+            return url
+        } catch {
+            return nil
         }
     }
 }

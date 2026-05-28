@@ -7,6 +7,9 @@ public struct AgentRuntimeRequest: Sendable {
     public var outputFilePrefix: String
     public var modelOverride: String
     public var reasoningEffort: CodexReasoningEffort
+    public var accessMode: CodexAccessMode
+    public var additionalWritableDirectories: [String]
+    public var imageAttachments: [PromptImageAttachment]
     public var prefersWorkspaceImageOutput: Bool
     public var runModeDescription: String
 
@@ -17,6 +20,9 @@ public struct AgentRuntimeRequest: Sendable {
         outputFilePrefix: String = UUID().uuidString.lowercased(),
         modelOverride: String,
         reasoningEffort: CodexReasoningEffort,
+        accessMode: CodexAccessMode = .fullAccess,
+        additionalWritableDirectories: [String] = [],
+        imageAttachments: [PromptImageAttachment] = [],
         prefersWorkspaceImageOutput: Bool,
         runModeDescription: String
     ) {
@@ -26,6 +32,9 @@ public struct AgentRuntimeRequest: Sendable {
         self.outputFilePrefix = outputFilePrefix
         self.modelOverride = modelOverride
         self.reasoningEffort = reasoningEffort
+        self.accessMode = accessMode
+        self.additionalWritableDirectories = additionalWritableDirectories
+        self.imageAttachments = imageAttachments
         self.prefersWorkspaceImageOutput = prefersWorkspaceImageOutput
         self.runModeDescription = runModeDescription
     }

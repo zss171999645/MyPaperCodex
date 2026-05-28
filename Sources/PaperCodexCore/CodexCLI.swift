@@ -99,6 +99,56 @@ public enum CodexReasoningEffort: String, Codable, CaseIterable, Sendable {
     }
 }
 
+public enum CodexAccessMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case readOnly = "read-only"
+    case sessionWorkspaceWrite = "session-workspace-write"
+    case obsidianVaultWrite = "obsidian-vault-write"
+    case fullAccess = "full-access"
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .readOnly:
+            "Read Only"
+        case .sessionWorkspaceWrite:
+            "Session Write"
+        case .obsidianVaultWrite:
+            "Obsidian Write"
+        case .fullAccess:
+            "Full Access"
+        }
+    }
+
+    public var detail: String {
+        switch self {
+        case .readOnly:
+            "Read files without write access."
+        case .sessionWorkspaceWrite:
+            "Write only inside the temporary PaperCodex session workspace."
+        case .obsidianVaultWrite:
+            "Write the session workspace and the configured Obsidian vault."
+        case .fullAccess:
+            "Run without filesystem sandboxing."
+        }
+    }
+
+    public var sandboxMode: String {
+        switch self {
+        case .readOnly:
+            "read-only"
+        case .sessionWorkspaceWrite, .obsidianVaultWrite:
+            "workspace-write"
+        case .fullAccess:
+            "danger-full-access"
+        }
+    }
+
+    var usesAdditionalWritableDirectories: Bool {
+        self == .obsidianVaultWrite
+    }
+}
+
 public enum CodexRunEventKind: String, Codable, Equatable, Sendable {
     case status
     case thinking
@@ -634,7 +684,10 @@ public struct CodexCLI: Sendable {
         workspacePath: String,
         outputLastMessagePath: String? = nil,
         modelOverride: String? = nil,
-        reasoningEffort: CodexReasoningEffort = .default
+        reasoningEffort: CodexReasoningEffort = .default,
+        accessMode: CodexAccessMode = .fullAccess,
+        additionalWritableDirectories: [String] = [],
+        imagePaths: [String] = []
     ) -> [String] {
         var arguments = ["exec", "--skip-git-repo-check", "--json", "--enable", "image_generation"]
         if let modelOverride = Self.normalizedModelOverride(modelOverride) {
@@ -643,6 +696,11 @@ public struct CodexCLI: Sendable {
         if let reasoningEffort = reasoningEffort.codexConfigValue {
             arguments += ["-c", "model_reasoning_effort=\"\(reasoningEffort)\""]
         }
+        arguments += accessArguments(
+            accessMode: accessMode,
+            additionalWritableDirectories: additionalWritableDirectories
+        )
+        appendImageArguments(imagePaths: imagePaths, to: &arguments)
         arguments += ["-C", workspacePath]
         if let outputLastMessagePath {
             arguments += ["--output-last-message", outputLastMessagePath]
@@ -656,19 +714,56 @@ public struct CodexCLI: Sendable {
         prompt: String,
         outputLastMessagePath: String? = nil,
         modelOverride: String? = nil,
-        reasoningEffort: CodexReasoningEffort = .default
+        reasoningEffort: CodexReasoningEffort = .default,
+        accessMode: CodexAccessMode = .fullAccess,
+        additionalWritableDirectories: [String] = [],
+        imagePaths: [String] = []
     ) -> [String] {
-        var arguments = ["exec", "resume", "--skip-git-repo-check", "--json", "--enable", "image_generation"]
-        if let modelOverride = Self.normalizedModelOverride(modelOverride) {
-            arguments += ["--model", modelOverride]
-        }
+        var arguments = ["exec", "--skip-git-repo-check", "--json", "--enable", "image_generation"]
         if let reasoningEffort = reasoningEffort.codexConfigValue {
             arguments += ["-c", "model_reasoning_effort=\"\(reasoningEffort)\""]
+        }
+        arguments += accessArguments(
+            accessMode: accessMode,
+            additionalWritableDirectories: additionalWritableDirectories
+        )
+        arguments.append("resume")
+        if let modelOverride = Self.normalizedModelOverride(modelOverride) {
+            arguments += ["--model", modelOverride]
         }
         if let outputLastMessagePath {
             arguments += ["--output-last-message", outputLastMessagePath]
         }
+        appendImageArguments(imagePaths: imagePaths, to: &arguments)
         arguments += [sessionID, prompt]
+        return arguments
+    }
+
+    private func appendImageArguments(imagePaths: [String], to arguments: inout [String]) {
+        for imagePath in imagePaths {
+            let trimmed = imagePath.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                continue
+            }
+            arguments += ["--image", imagePath]
+        }
+    }
+
+    private func accessArguments(
+        accessMode: CodexAccessMode,
+        additionalWritableDirectories: [String]
+    ) -> [String] {
+        var arguments = ["--sandbox", accessMode.sandboxMode]
+        guard accessMode.usesAdditionalWritableDirectories else {
+            return arguments
+        }
+        for directory in additionalWritableDirectories {
+            let trimmed = directory.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                continue
+            }
+            arguments += ["--add-dir", trimmed]
+        }
         return arguments
     }
 
@@ -781,10 +876,9 @@ public struct CodexCLI: Sendable {
     public func availableModelIDs(configText: String? = nil) throws -> [String] {
         let version = try version()
         let data = try Data(contentsOf: URL(fileURLWithPath: executablePath))
-        let embeddedText = String(decoding: data, as: UTF8.self)
         return Self.availableModelIDs(
             cliVersion: version,
-            embeddedText: embeddedText,
+            embeddedData: data,
             configText: configText ?? Self.readDefaultConfig(environment: ProcessInfo.processInfo.environment)
         )
     }
@@ -794,6 +888,30 @@ public struct CodexCLI: Sendable {
         embeddedText: String?,
         configText: String?
     ) -> [String] {
+        availableModelIDs(
+            cliVersion: cliVersion,
+            embeddedModelIDs: embeddedText.map(extractEmbeddedModelIDs(from:)) ?? [],
+            configText: configText
+        )
+    }
+
+    public static func availableModelIDs(
+        cliVersion: String?,
+        embeddedData: Data?,
+        configText: String?
+    ) -> [String] {
+        availableModelIDs(
+            cliVersion: cliVersion,
+            embeddedModelIDs: embeddedData.map(extractEmbeddedModelIDs(from:)) ?? [],
+            configText: configText
+        )
+    }
+
+    private static func availableModelIDs(
+        cliVersion: String?,
+        embeddedModelIDs: [String],
+        configText: String?
+    ) -> [String] {
         var models: Set<String> = []
         for fallback in fallbackModelIDs {
             models.insert(fallback)
@@ -801,10 +919,8 @@ public struct CodexCLI: Sendable {
         if let configured = configText.flatMap(parseConfiguredModel(from:)) {
             models.insert(configured)
         }
-        if let embeddedText {
-            for model in extractEmbeddedModelIDs(from: embeddedText) {
-                models.insert(model)
-            }
+        for model in embeddedModelIDs {
+            models.insert(model)
         }
         return models
             .filter { isSupportedModelID($0, cliVersion: cliVersion) }
@@ -824,6 +940,16 @@ public struct CodexCLI: Sendable {
         "gpt-5.2",
         "gpt-5.1-codex",
         "gpt-5-codex"
+    ]
+
+    private static let embeddedModelPrefix = Array("gpt-".utf8)
+    private static let embeddedOSSPrefix = Array("oss-".utf8)
+    private static let embeddedModelSuffixes = [
+        Array("codex".utf8),
+        Array("max".utf8),
+        Array("mini".utf8),
+        Array("nano".utf8),
+        Array("latest".utf8)
     ]
 
     private static func extractEmbeddedModelIDs(from text: String) -> [String] {
@@ -846,6 +972,122 @@ public struct CodexCLI: Sendable {
             result.append(model)
         }
         return result
+    }
+
+    private static func extractEmbeddedModelIDs(from data: Data) -> [String] {
+        data.withUnsafeBytes { rawBuffer in
+            let bytes = rawBuffer.bindMemory(to: UInt8.self)
+            var seen: Set<String> = []
+            var result: [String] = []
+            var index = 0
+            while index < bytes.count {
+                guard matches(embeddedModelPrefix, in: bytes, at: index),
+                      isEmbeddedModelBoundary(bytes, before: index),
+                      let end = embeddedModelIDEnd(in: bytes, startingAt: index),
+                      isEmbeddedModelBoundary(bytes, after: end) else {
+                    index += 1
+                    continue
+                }
+                let tokenBytes = UnsafeBufferPointer(
+                    start: bytes.baseAddress!.advanced(by: index),
+                    count: end - index
+                )
+                let model = String(decoding: tokenBytes, as: UTF8.self)
+                if !seen.contains(model) {
+                    seen.insert(model)
+                    result.append(model)
+                }
+                index = end
+            }
+            return result
+        }
+    }
+
+    private static func embeddedModelIDEnd(in bytes: UnsafeBufferPointer<UInt8>, startingAt start: Int) -> Int? {
+        guard matches(embeddedModelPrefix, in: bytes, at: start) else {
+            return nil
+        }
+        var index = start + embeddedModelPrefix.count
+        if matches(embeddedOSSPrefix, in: bytes, at: index) {
+            index += embeddedOSSPrefix.count
+            let digitsStart = index
+            while index < bytes.count, isASCIIDigit(bytes[index]) {
+                index += 1
+            }
+            guard index > digitsStart,
+                  index < bytes.count,
+                  bytes[index] == UInt8(ascii: "b") else {
+                return nil
+            }
+            return index + 1
+        }
+
+        let digitsStart = index
+        while index < bytes.count, isASCIIDigit(bytes[index]) {
+            index += 1
+        }
+        guard index > digitsStart else {
+            return nil
+        }
+        if index < bytes.count, isASCIILowercaseLetter(bytes[index]) {
+            index += 1
+        }
+        while index < bytes.count, bytes[index] == UInt8(ascii: ".") {
+            let dotIndex = index
+            index += 1
+            let componentStart = index
+            while index < bytes.count, isASCIIDigit(bytes[index]) {
+                index += 1
+            }
+            guard index > componentStart else {
+                return dotIndex
+            }
+        }
+        while index < bytes.count, bytes[index] == UInt8(ascii: "-") {
+            let suffixStart = index + 1
+            guard let suffixEnd = embeddedModelSuffixes
+                .compactMap({ suffix -> Int? in
+                    matches(suffix, in: bytes, at: suffixStart) ? suffixStart + suffix.count : nil
+                })
+                .first else {
+                return index
+            }
+            index = suffixEnd
+        }
+        return index
+    }
+
+    private static func matches(_ pattern: [UInt8], in bytes: UnsafeBufferPointer<UInt8>, at index: Int) -> Bool {
+        guard index >= 0, index + pattern.count <= bytes.count else {
+            return false
+        }
+        for offset in pattern.indices where bytes[index + offset] != pattern[offset] {
+            return false
+        }
+        return true
+    }
+
+    private static func isEmbeddedModelBoundary(_ bytes: UnsafeBufferPointer<UInt8>, before index: Int) -> Bool {
+        index <= 0 || !isASCIIWord(bytes[index - 1])
+    }
+
+    private static func isEmbeddedModelBoundary(_ bytes: UnsafeBufferPointer<UInt8>, after index: Int) -> Bool {
+        index >= bytes.count || !isASCIIWord(bytes[index])
+    }
+
+    private static func isASCIIWord(_ byte: UInt8) -> Bool {
+        isASCIIDigit(byte)
+            || isASCIILowercaseLetter(byte)
+            || (byte >= UInt8(ascii: "A") && byte <= UInt8(ascii: "Z"))
+            || byte == UInt8(ascii: "_")
+    }
+
+    private static func isASCIIDigit(_ byte: UInt8) -> Bool {
+        byte >= UInt8(ascii: "0") && byte <= UInt8(ascii: "9")
+    }
+
+    private static func isASCIILowercaseLetter(_ byte: UInt8) -> Bool {
+        byte >= UInt8(ascii: "a") && byte <= UInt8(ascii: "z")
     }
 
     private static func isSupportedModelID(_ modelID: String, cliVersion: String?) -> Bool {

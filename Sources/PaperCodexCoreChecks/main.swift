@@ -14,6 +14,13 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
     }
 }
 
+func checkUnwrap<T>(_ value: T?, _ message: String) throws -> T {
+    guard let value else {
+        throw CheckFailure(description: message)
+    }
+    return value
+}
+
 func runModelsChecks() throws {
     let span = Span(
         id: Span.makeID(paperID: "paper-a", page: 5, blockIndex: 17),
@@ -678,6 +685,9 @@ func runUILayoutSourceChecks() throws {
     let libraryCategoryAssignmentSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/LibraryCategoryAssignment.swift"))
     let agentRuntimeSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/AgentRuntime.swift"))
     let codexAgentRuntimeSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/CodexAgentRuntime.swift"))
+    let codexCLISource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/CodexCLI.swift"))
+    let codexAPIRuntimeSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/CodexAPIAgentRuntime.swift"))
+    let promptBuilderSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/PromptBuilder.swift"))
     let arxivIDExtractorSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/ArxivIDExtractor.swift"))
     let interactionFeedbackSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/InteractionFeedback.swift"))
     let localArxivClientSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexCore/LocalArxivClient.swift"))
@@ -1087,6 +1097,57 @@ func runUILayoutSourceChecks() throws {
         "settings should let users restore the default Codex system prompt"
     )
     try check(
+        appModelSource.contains("codexAccessModeDefaultsKey")
+            && appModelSource.contains("@Published var codexAccessMode")
+            && appModelSource.contains("setCodexAccessMode"),
+        "AppModel should persist a Codex access mode for reader chat runs"
+    )
+    try check(
+        settingsViewSource.contains("codexAccessSettings")
+            && settingsViewSource.contains("DisclosureGroup(\"Access\")")
+            && settingsViewSource.contains("Picker(\"Codex Access\"")
+            && settingsViewSource.contains("model.setCodexAccessMode"),
+        "settings should expose Codex Access as a compact disclosure instead of a prominent top-level section"
+    )
+    try check(
+        chatSource.contains("ChatImagePasteboardReader")
+            && chatSource.contains("override func paste(_ sender: Any?)")
+            && chatSource.contains("insertText(markdownInsertion(imageMarkdown), replacementRange: selectedRange())")
+            && chatSource.contains("![Pasted image]")
+            && !chatSource.contains("attachImagesButton")
+            && !chatSource.contains("NSOpenPanel")
+            && !chatSource.contains("pendingImageAttachmentsByComposerKey"),
+        "chat composer should accept images by paste without adding visible attachment controls"
+    )
+    try check(
+        appModelSource.contains("func sendMessage(_ text: String, imageURLs: [URL] = []) async")
+            && appModelSource.contains("copyChatImageAttachments")
+            && appModelSource.contains("chatImageURLs(in:")
+            && appModelSource.contains("chat-attachments")
+            && appModelSource.contains("PromptImageAttachment"),
+        "AppModel should extract pasted image markdown and copy attachments into the session workspace instead of Obsidian"
+    )
+    try check(
+        promptBuilderSource.contains("public struct PromptImageAttachment")
+            && promptBuilderSource.contains("public var imageAttachments: [PromptImageAttachment]")
+            && promptBuilderSource.contains("[\\(labels.attachedImages)]"),
+        "prompt building should describe user-attached images as first-class prompt context"
+    )
+    try check(
+        agentRuntimeSource.contains("public var imageAttachments: [PromptImageAttachment]")
+            && codexAgentRuntimeSource.contains("imagePaths: request.imageAttachments.map(\\.path)")
+            && codexCLISource.contains("imagePaths: [String] = []")
+            && codexCLISource.contains("arguments += [\"--image\", imagePath]"),
+        "Codex CLI runtime should pass user image attachments through --image"
+    )
+    try check(
+        codexAPIRuntimeSource.contains("imageAttachments: [PromptImageAttachment]")
+            && codexAPIRuntimeSource.contains("\"image_url\"")
+            && codexAPIRuntimeSource.contains("\"input_image\"")
+            && codexAPIRuntimeSource.contains("dataURL(for attachment:"),
+        "Codex API runtime should send user image attachments as multimodal image content"
+    )
+    try check(
         appModelSource.contains("globalLanguageModeDefaultsKey"),
         "AppModel should persist the global language mode"
     )
@@ -1488,6 +1549,14 @@ func runUILayoutSourceChecks() throws {
         "reader should provide explicit PDF toolbar controls"
     )
     try check(
+        readerSource.contains("@State private var pdfKitCommand: PDFKitCommand?")
+            && readerSource.contains("command: pdfKitCommand")
+            && readerSource.contains("onCommand: { issuePDFKitCommand($0) }")
+            && readerSource.contains("private func issuePDFKitCommand(_ kind: PDFKitCommandKind)")
+            && readerSource.contains(".onChange(of: model.pdfKitCommand)"),
+        "reader PDF toolbar commands should be a local state signal so zoom clicks reliably reach PDFKitView"
+    )
+    try check(
         readerSource.contains("VSplitView") && readerSource.contains("isPDFSplitVisible") && readerSource.contains("pdfSplitTarget"),
         "reader should support a top-bottom PDF split view for simultaneous source and link-target reading"
     )
@@ -1513,6 +1582,22 @@ func runUILayoutSourceChecks() throws {
             && !pdfKitSource.contains("pdfView.scaleFactor = min(pdfView.scaleFactor * 1.18")
             && !pdfKitSource.contains("pdfView.scaleFactor = max(pdfView.scaleFactor / 1.18"),
         "PDF zoom commands should leave auto-fit through a stable captured scale and preserve the visible center"
+    )
+    let restoreViewportCenterSource: String
+    if let restoreStart = pdfKitSource.range(of: "private func restoreViewportCenter"),
+       let restoreEnd = pdfKitSource.range(
+        of: "\n        @MainActor\n        private func applyViewportPosition",
+        range: restoreStart.upperBound..<pdfKitSource.endIndex
+       ) {
+        restoreViewportCenterSource = String(pdfKitSource[restoreStart.lowerBound..<restoreEnd.lowerBound])
+    } else {
+        throw CheckFailure(description: "PDF viewport-center restoration source should be inspectable")
+    }
+    try check(
+        restoreViewportCenterSource.contains("centerPDFPagePointInViewport(point, page: page)")
+            && restoreViewportCenterSource.contains("DispatchQueue.main.async { [weak self] in")
+            && restoreViewportCenterSource.contains("self?.centerPDFPagePointInViewport(point, page: page)"),
+        "PDF manual zoom should recenter the captured viewport point after PDFKit applies the new scale"
     )
     try check(
         pdfKitSource.contains("ResponsivePDFView") && pdfKitSource.contains("refitForCurrentWidth"),
@@ -1589,8 +1674,21 @@ func runUILayoutSourceChecks() throws {
     )
 
     try check(
-        chatSource.contains("ScrollViewReader"),
-        "chat should auto-scroll to the newest message and active run"
+        chatSource.contains("@State private var isChatPinnedToBottom")
+            && chatSource.contains("ChatBottomAnchorPreferenceKey")
+            && chatSource.contains("ChatViewportHeightPreferenceKey")
+            && chatSource.contains(".coordinateSpace(name: \"chat-scroll\")")
+            && chatSource.contains("updateChatPinnedState(")
+            && !chatSource.contains("onAppear { isChatPinnedToBottom = true }")
+            && !chatSource.contains("onDisappear { isChatPinnedToBottom = false }"),
+        "chat should use geometry to track whether the reader is actually at the bottom before following new output"
+    )
+    try check(
+        chatSource.contains(".onChange(of: model.messages.last?.id ?? \"\") { _, _ in\n                    scrollToBottomIfPinned(proxy)\n                }")
+            && !chatSource.contains("latestMessage.role == .user")
+            && !chatSource.contains("handleChatMessagesChanged")
+            && !chatSource.contains(".onChange(of: visibleActiveCodexRun?.events.count ?? 0) { _, _ in\n                    scrollToBottom(proxy)\n                }"),
+        "chat should not force-scroll sent messages or active Codex output unless the reader is already at the bottom"
     )
     try check(
         chatSource.contains("isCurrentSessionSending"),
@@ -2853,6 +2951,26 @@ func runPromptChecks() throws {
     try check(!prompt.contains("[relevant span]"), "prompt should not inline a limited curated span list")
     try check(!prompt.contains("This curated span should stay in workspace files"), "prompt should make Codex inspect workspace files instead of reading a narrowed prompt excerpt")
 
+    let imagePrompt = PromptBuilder().buildPrompt(
+        request: PromptRequest(
+            userMessage: "这张图和 Fig. 3 有什么关系？",
+            workspacePath: "/tmp/session-images",
+            papers: [paper],
+            selectedAnchors: [],
+            relevantSpans: [],
+            imageAttachments: [
+                PromptImageAttachment(
+                    path: "/tmp/session-images/chat-attachments/turn-a/image-1.png",
+                    displayName: "pasted-figure.png",
+                    mimeType: "image/png"
+                )
+            ]
+        )
+    )
+    try check(imagePrompt.contains("[attached images]"), "prompt should include an attached images section for pasted chat images")
+    try check(imagePrompt.contains("path: /tmp/session-images/chat-attachments/turn-a/image-1.png"), "attached image prompt context should include the workspace image path")
+    try check(imagePrompt.contains("markdown: ![pasted-figure.png](/tmp/session-images/chat-attachments/turn-a/image-1.png)"), "attached image prompt context should include markdown image syntax")
+
     try check(PromptBuilder.defaultSystemPrompt.contains("{{workspace_path}}"), "default Codex system prompt should be editable as a workspace-aware template")
     let customPrompt = PromptBuilder().buildPrompt(
         request: PromptRequest(
@@ -2895,6 +3013,219 @@ func runPromptChecks() throws {
     try check(chinesePrompt.contains("[全局语言]"), "Chinese prompt should switch prompt section labels to Chinese")
     try check(!chinesePrompt.contains("[global language]"), "Chinese prompt should not keep English-only language section labels")
     try check(!chinesePrompt.contains("Response style:"), "Chinese language mode should not keep the English built-in system prompt")
+
+    let obsidianPrompt = PromptBuilder().buildPrompt(
+        request: PromptRequest(
+            userMessage: "Use the durable reading notes too.",
+            workspacePath: "/tmp/custom-session",
+            papers: [paper],
+            selectedAnchors: [],
+            relevantSpans: [],
+            obsidianNotesByPaperID: ["paper-a": "/Users/horizon/Documents/Obsidian-Main/世界模型/03-literature/papers/arxiv-2605.15195-VGGT-Omega.md"]
+        )
+    )
+    try check(obsidianPrompt.contains("[obsidian notes]"), "prompt should include an Obsidian notes section when note paths are supplied")
+    try check(obsidianPrompt.contains("paper_id: paper-a"), "Obsidian note prompt context should identify the owning paper")
+    try check(obsidianPrompt.contains("obsidian_note:"), "Obsidian note prompt context should expose the durable note path")
+    try check(obsidianPrompt.contains("Use these notes as durable user-maintained context"), "Obsidian note prompt context should clarify source-of-truth ownership")
+
+    let agentInstructionsPrompt = PromptBuilder().buildPrompt(
+        request: PromptRequest(
+            userMessage: "Follow the vault rules.",
+            workspacePath: "/tmp/custom-session",
+            papers: [paper],
+            selectedAnchors: [],
+            relevantSpans: [],
+            agentInstructionsPath: "/Users/horizon/Documents/Obsidian-Main/世界模型/agents.md",
+            agentInstructionsText: "Do not store PDFs in the vault.\nWrite durable paper status to frontmatter."
+        )
+    )
+    try check(agentInstructionsPrompt.contains("[vault agent instructions]"), "prompt should include a vault agent instructions section when supplied")
+    try check(agentInstructionsPrompt.contains("source: /Users/horizon/Documents/Obsidian-Main/世界模型/agents.md"), "prompt should expose the source AGENTS/agents file path")
+    try check(agentInstructionsPrompt.contains("Do not store PDFs in the vault."), "prompt should include the vault agent instructions text for API runtimes")
+    try check(agentInstructionsPrompt.contains("Write durable paper status to frontmatter."), "prompt should include multi-line vault instructions")
+
+    let tempAgentRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("paper-codex-agent-instructions-\(UUID().uuidString)", isDirectory: true)
+    let vaultRoot = tempAgentRoot.appendingPathComponent("vault", isDirectory: true)
+    let workspaceRoot = tempAgentRoot.appendingPathComponent("workspace", isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
+    try "Prefer the Obsidian vault rules.".write(
+        to: vaultRoot.appendingPathComponent("agents.md"),
+        atomically: true,
+        encoding: .utf8
+    )
+    let loadedInstructions = try checkUnwrap(
+        VaultAgentInstructions.load(vaultRoot: vaultRoot),
+        "vault agent instructions loader should find lower-case agents.md"
+    )
+    try check(loadedInstructions.sourceURL.lastPathComponent == "agents.md", "vault agent instructions loader should preserve the source filename casing")
+    try check(loadedInstructions.text.contains("Prefer the Obsidian vault rules."), "vault agent instructions loader should read the source file text")
+    let workspaceInstructionsURL = try VaultAgentInstructions.writeWorkspaceCopy(
+        loadedInstructions,
+        workspaceRoot: workspaceRoot
+    )
+    try check(workspaceInstructionsURL.lastPathComponent == "AGENTS.md", "workspace copy should use the Codex-recognized AGENTS.md name")
+    let copiedInstructions = try String(contentsOf: workspaceInstructionsURL, encoding: .utf8)
+    try check(copiedInstructions == loadedInstructions.text, "workspace AGENTS.md copy should preserve the vault instructions exactly")
+}
+
+func runObsidianCatalogChecks() throws {
+    let tempRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("paper-codex-obsidian-\(UUID().uuidString)", isDirectory: true)
+    let vaultRoot = tempRoot.appendingPathComponent("vault", isDirectory: true)
+    let supportRoot = tempRoot.appendingPathComponent("support", isDirectory: true)
+    let papersRoot = vaultRoot.appendingPathComponent("03-literature/papers", isDirectory: true)
+    let thumbnailsRoot = vaultRoot.appendingPathComponent("03-literature/assets/paper-thumbnails", isDirectory: true)
+    try FileManager.default.createDirectory(at: papersRoot, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: thumbnailsRoot, withIntermediateDirectories: true)
+    let thumbnailURL = thumbnailsRoot.appendingPathComponent("arxiv-2605.15195-VGGT-Omega.png")
+    try Data([0x89, 0x50, 0x4e, 0x47]).write(to: thumbnailURL)
+    let noteURL = papersRoot.appendingPathComponent("arxiv-2605.15195-VGGT-Omega.md")
+    try """
+    ---
+    type: literature-note
+    status: reference
+    discussion_status: 讨论中
+    arxiv: "2605.15195"
+    year: 2026
+    paper_title: "VGGT-Ω: Visual Geometry Grounded Transformer"
+    short_title: VGGT-Omega
+    aliases:
+      - VGGT Omega
+      - Visual Geometry Grounded Transformer Omega
+    first_author: "[[世界模型/04-authors/Alice Example|Alice Example]]"
+    authors:
+      - "[[世界模型/04-authors/Alice Example|Alice Example]]"
+      - Bob Example
+    arxiv_url: https://arxiv.org/abs/2605.15195
+    pdf_url: https://arxiv.org/pdf/2605.15195
+    project_url: https://example.test/vggt-omega
+    code_url: https://github.com/example/vggt-omega
+    doi: https://doi.org/10.48550/arXiv.2605.15195
+    venue: arXiv preprint
+    paper_thumbnail: "[[世界模型/03-literature/assets/paper-thumbnails/arxiv-2605.15195-VGGT-Omega.png]]"
+    primary_direction: Streaming visual geometry
+    directions:
+      - long-sequence 3D reconstruction
+    primary_task: online 3D reconstruction
+    tasks:
+      - visual geometry estimation
+    keywords:
+      - "[[世界模型/05-keywords/Streaming visual geometry|Streaming visual geometry]]"
+    methods:
+      - streaming context management
+      - camera token pool
+    datasets:
+      - ScanNet
+    metrics:
+      - ATE
+    related_papers:
+      - "[[世界模型/03-literature/papers/arxiv-2503.11651-VGGT|VGGT]]"
+    relation_types:
+      - scaling baseline
+    world_model_role: geometry memory route
+    summary: 用于测试 Obsidian catalog 的论文。
+    open_questions:
+      - 是否支持长序列增量更新？
+    ---
+
+    # VGGT-Omega
+    """.write(to: noteURL, atomically: true, encoding: .utf8)
+    try """
+    ---
+    type: temporary-note
+    title: Ignore Me
+    ---
+    """.write(to: papersRoot.appendingPathComponent("ignore.md"), atomically: true, encoding: .utf8)
+
+    let records = try ObsidianPaperCatalog().load(vaultRoot: vaultRoot, supportRoot: supportRoot)
+    try check(records.count == 1, "Obsidian catalog should load only literature notes from the papers folder")
+    let record = try checkUnwrap(records.first, "Obsidian catalog should produce a paper record")
+    try check(record.paper.id == "obsidian-arxiv-2605-15195", "Obsidian paper IDs should be stable and arXiv-derived")
+    try check(record.paper.title == "VGGT-Ω: Visual Geometry Grounded Transformer", "Obsidian catalog should prefer paper_title for reader titles")
+    try check(record.paper.authors == ["Alice Example", "Bob Example"], "Obsidian catalog should normalize wiki-linked authors")
+    try check(record.paper.year == 2026, "Obsidian catalog should parse YAML integer years")
+    try check(record.paper.sourceURL == "https://arxiv.org/abs/2605.15195", "Obsidian catalog should preserve source URLs")
+    try check(record.pdfURL == URL(string: "https://arxiv.org/pdf/2605.15195"), "Obsidian catalog should expose PDF URLs for lazy reader cache downloads")
+    try check(record.thumbnailURL == thumbnailURL.standardizedFileURL, "Obsidian catalog should resolve vault-relative thumbnail wiki links")
+    try check(record.noteURL == noteURL.standardizedFileURL, "Obsidian catalog should expose the durable note path")
+    try check(record.paper.filePath.hasSuffix("/obsidian-pdf-cache/obsidian-arxiv-2605-15195/original.pdf"), "Obsidian catalog should map PDFs to an app cache path instead of the vault")
+    try check(record.paper.fileHash == "obsidian-note:03-literature/papers/arxiv-2605.15195-VGGT-Omega.md", "Obsidian catalog should use the note path as the cache identity")
+    try check(record.aliases == ["VGGT Omega", "Visual Geometry Grounded Transformer Omega"], "Obsidian catalog should preserve aliases")
+    try check(record.firstAuthor == "Alice Example", "Obsidian catalog should normalize wiki-linked first authors")
+    try check(record.primaryDirection == "Streaming visual geometry", "Obsidian catalog should preserve primary direction")
+    try check(record.relatedPapers == ["VGGT"], "Obsidian catalog should normalize related paper links")
+    try check(record.keywords == ["Streaming visual geometry"], "Obsidian catalog should normalize wiki-linked keywords")
+    try check(record.summary == "用于测试 Obsidian catalog 的论文。", "Obsidian catalog should preserve summary text")
+
+    try ObsidianPaperCatalog().updateDiscussionStatus(noteURL: noteURL, status: "已收敛")
+    let updatedText = try String(contentsOf: noteURL, encoding: .utf8)
+    try check(updatedText.contains("discussion_status: 已收敛"), "Obsidian catalog should write updated discussion_status into note frontmatter")
+    try check(updatedText.contains("# VGGT-Omega"), "Obsidian catalog should preserve the note body when updating discussion status")
+    let updatedRecord = try checkUnwrap(
+        ObsidianPaperCatalog().load(vaultRoot: vaultRoot, supportRoot: supportRoot).first,
+        "Obsidian catalog should reload a note after updating discussion status"
+    )
+    try check(updatedRecord.discussionStatus == "已收敛", "Obsidian catalog should reload the updated discussion status")
+}
+
+func runObsidianSearchChecks() throws {
+    let paper = Paper(
+        id: "obsidian-arxiv-2605-15195",
+        filePath: "/tmp/original.pdf",
+        fileHash: "obsidian-note:03-literature/papers/arxiv-2605.15195-VGGT-Omega.md",
+        title: "VGGT-Ω: Visual Geometry Grounded Transformer",
+        authors: ["Alice Example", "Bob Example"],
+        year: 2026,
+        sourceURL: "https://arxiv.org/abs/2605.15195",
+        importedAt: Date(timeIntervalSince1970: 1_777_220_000),
+        updatedAt: Date(timeIntervalSince1970: 1_777_220_000)
+    )
+    let record = ObsidianPaperRecord(
+        noteURL: URL(fileURLWithPath: "/vault/03-literature/papers/arxiv-2605.15195-VGGT-Omega.md"),
+        relativeNotePath: "03-literature/papers/arxiv-2605.15195-VGGT-Omega.md",
+        paper: paper,
+        pdfURL: URL(string: "https://arxiv.org/pdf/2605.15195"),
+        thumbnailURL: URL(fileURLWithPath: "/vault/03-literature/assets/paper-thumbnails/arxiv-2605.15195-VGGT-Omega.png"),
+        thumbnailPath: "[[世界模型/03-literature/assets/paper-thumbnails/arxiv-2605.15195-VGGT-Omega.png]]",
+        arxiv: "2605.15195",
+        shortTitle: "VGGT-Omega",
+        aliases: ["VGGT Omega"],
+        firstAuthor: "Alice Example",
+        venue: "arXiv preprint",
+        discussionStatus: "讨论中",
+        primaryDirection: "Streaming visual geometry",
+        directions: ["long-sequence 3D reconstruction"],
+        primaryTask: "online 3D reconstruction",
+        tasks: ["visual geometry estimation"],
+        keywords: ["Streaming visual geometry"],
+        methods: ["camera token pool", "streaming context management"],
+        datasets: ["ScanNet"],
+        metrics: ["ATE"],
+        relatedPapers: ["VGGT"],
+        relationTypes: ["scaling baseline"],
+        worldModelRole: "geometry memory route",
+        summary: "用于测试 Obsidian catalog 的论文。",
+        openQuestions: ["是否支持长序列增量更新？"],
+        projectURL: URL(string: "https://example.test/vggt-omega"),
+        codeURL: URL(string: "https://github.com/example/vggt-omega"),
+        doi: "https://doi.org/10.48550/arXiv.2605.15195"
+    )
+
+    try check(ObsidianPaperSearch.rank(records: [record], query: "VGGT Omega").first?.paperID == paper.id, "Obsidian search should match aliases")
+    try check(ObsidianPaperSearch.rank(records: [record], query: "camera token").first?.paperID == paper.id, "Obsidian search should match methods")
+    try check(ObsidianPaperSearch.rank(records: [record], query: "ScanNet ATE").first?.paperID == paper.id, "Obsidian search should match datasets and metrics together")
+    try check(ObsidianPaperSearch.rank(records: [record], query: "long sequence reconstruction").first?.paperID == paper.id, "Obsidian search should match normalized hyphenated directions")
+    try check(ObsidianPaperSearch.rank(records: [record], query: "2605.15195").first?.paperID == paper.id, "Obsidian search should match arXiv ids")
+
+    let searchIndex = ObsidianPaperSearchIndex(records: [record])
+    for query in ["VGGT Omega", "camera token", "ScanNet ATE", "long sequence reconstruction", "2605.15195"] {
+        try check(
+            searchIndex.rank(query: query).map(\.paperID) == ObsidianPaperSearch.rank(records: [record], query: query).map(\.paperID),
+            "Obsidian indexed search should match direct search for \(query)"
+        )
+    }
 }
 
 func runWorkspaceChecks() throws {
@@ -3087,6 +3418,84 @@ func runPDFChecks() throws {
     try check(templateTitles == Array(repeating: "Attention Is All You Need", count: 5), "PDF resolver should extract titles from common reference templates")
 }
 
+private final class AsyncCheckBox<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedResult: Result<T, Error>?
+
+    func store(_ result: Result<T, Error>) {
+        lock.lock()
+        storedResult = result
+        lock.unlock()
+    }
+
+    func load() -> Result<T, Error>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedResult
+    }
+}
+
+func runAsyncCheck<T>(_ body: @escaping @Sendable () async throws -> T) throws -> T {
+    let semaphore = DispatchSemaphore(value: 0)
+    let box = AsyncCheckBox<T>()
+    Task {
+        do {
+            box.store(.success(try await body()))
+        } catch {
+            box.store(.failure(error))
+        }
+        semaphore.signal()
+    }
+    semaphore.wait()
+    return try checkUnwrap(box.load(), "async check should produce a result").get()
+}
+
+final class CodexAPIMockURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var storedRequests: [URLRequest] = []
+
+    static func reset() {
+        lock.lock()
+        storedRequests = []
+        lock.unlock()
+    }
+
+    static var requests: [URLRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedRequests
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        Self.lock.lock()
+        Self.storedRequests.append(request)
+        Self.lock.unlock()
+
+        let data = Data("""
+        {"id":"mock-chat","choices":[{"message":{"content":"Mock API answer"}}],"usage":{"prompt_tokens":3,"completion_tokens":4}}
+        """.utf8)
+        let response = HTTPURLResponse(
+            url: request.url ?? URL(string: "https://codex.example.test/v1/chat/completions")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
 func runCodexCLIChecks() throws {
     let codexPath = try CodexCLI.findCodexExecutable()
     try check(FileManager.default.isExecutableFile(atPath: codexPath), "codex executable should be runnable")
@@ -3112,22 +3521,38 @@ func runCodexCLIChecks() throws {
         .trimmingCharacters(in: .whitespacesAndNewlines)
     try check(pwdOutput == isolatedWorkingDirectoryPath, "Codex subprocesses should run from the explicit working directory")
     let start = cli.startArguments(prompt: "hello", workspacePath: "/tmp/session-a")
-    try check(start == ["exec", "--skip-git-repo-check", "--json", "--enable", "image_generation", "-C", "/tmp/session-a", "hello"], "start args should allow non-git session workspaces with image generation enabled")
+    try check(start == ["exec", "--skip-git-repo-check", "--json", "--enable", "image_generation", "--sandbox", "danger-full-access", "-C", "/tmp/session-a", "hello"], "start args should default reader chat to full filesystem access")
     let startWithOutput = cli.startArguments(prompt: "hello", workspacePath: "/tmp/session-a", outputLastMessagePath: "/tmp/last.txt")
-    try check(startWithOutput == ["exec", "--skip-git-repo-check", "--json", "--enable", "image_generation", "-C", "/tmp/session-a", "--output-last-message", "/tmp/last.txt", "hello"], "start args should support output-last-message")
+    try check(startWithOutput == ["exec", "--skip-git-repo-check", "--json", "--enable", "image_generation", "--sandbox", "danger-full-access", "-C", "/tmp/session-a", "--output-last-message", "/tmp/last.txt", "hello"], "start args should support output-last-message")
     let startWithModel = cli.startArguments(prompt: "hello", workspacePath: "/tmp/session-a", outputLastMessagePath: "/tmp/last.txt", modelOverride: "gpt-5.4")
-    try check(startWithModel == ["exec", "--skip-git-repo-check", "--json", "--enable", "image_generation", "--model", "gpt-5.4", "-C", "/tmp/session-a", "--output-last-message", "/tmp/last.txt", "hello"], "start args should support an app-local model override")
+    try check(startWithModel == ["exec", "--skip-git-repo-check", "--json", "--enable", "image_generation", "--model", "gpt-5.4", "--sandbox", "danger-full-access", "-C", "/tmp/session-a", "--output-last-message", "/tmp/last.txt", "hello"], "start args should support an app-local model override")
     let startWithReasoning = cli.startArguments(prompt: "hello", workspacePath: "/tmp/session-a", reasoningEffort: .high)
-    try check(startWithReasoning == ["exec", "--skip-git-repo-check", "--json", "--enable", "image_generation", "-c", "model_reasoning_effort=\"high\"", "-C", "/tmp/session-a", "hello"], "start args should support an app-local reasoning effort override")
+    try check(startWithReasoning == ["exec", "--skip-git-repo-check", "--json", "--enable", "image_generation", "-c", "model_reasoning_effort=\"high\"", "--sandbox", "danger-full-access", "-C", "/tmp/session-a", "hello"], "start args should support an app-local reasoning effort override")
     let startWithDefaultReasoning = cli.startArguments(prompt: "hello", workspacePath: "/tmp/session-a", reasoningEffort: .default)
     try check(startWithDefaultReasoning == start, "default reasoning effort should not add a Codex config override")
+    let startWithImage = cli.startArguments(prompt: "describe", workspacePath: "/tmp/session-a", imagePaths: ["/tmp/pasted.png"])
+    try check(startWithImage.contains("--image") && startWithImage.contains("/tmp/pasted.png"), "start args should pass pasted chat images through --image")
+    let startReadOnly = cli.startArguments(prompt: "hello", workspacePath: "/tmp/session-a", accessMode: .readOnly)
+    try check(startReadOnly.contains("--sandbox") && startReadOnly.contains("read-only"), "start args should support read-only access mode")
+    let startObsidianWrite = cli.startArguments(
+        prompt: "hello",
+        workspacePath: "/tmp/session-a",
+        accessMode: .obsidianVaultWrite,
+        additionalWritableDirectories: ["/Users/horizon/Documents/Obsidian-Main/世界模型"]
+    )
+    try check(startObsidianWrite.contains("--sandbox") && startObsidianWrite.contains("workspace-write"), "Obsidian write mode should use workspace-write sandboxing")
+    try check(startObsidianWrite.contains("--add-dir") && startObsidianWrite.contains("/Users/horizon/Documents/Obsidian-Main/世界模型"), "Obsidian write mode should add the vault as a writable directory")
 
     let resume = cli.resumeArguments(sessionID: "session-a", prompt: "continue")
-    try check(resume == ["exec", "resume", "--skip-git-repo-check", "--json", "--enable", "image_generation", "session-a", "continue"], "resume args should use codex exec resume with JSON output and image generation enabled")
+    try check(resume == ["exec", "--skip-git-repo-check", "--json", "--enable", "image_generation", "--sandbox", "danger-full-access", "resume", "session-a", "continue"], "resume args should default reader chat resume to full filesystem access")
     let resumeWithModel = cli.resumeArguments(sessionID: "session-a", prompt: "continue", modelOverride: "gpt-5.4")
-    try check(resumeWithModel == ["exec", "resume", "--skip-git-repo-check", "--json", "--enable", "image_generation", "--model", "gpt-5.4", "session-a", "continue"], "resume args should support an app-local model override")
+    try check(resumeWithModel == ["exec", "--skip-git-repo-check", "--json", "--enable", "image_generation", "--sandbox", "danger-full-access", "resume", "--model", "gpt-5.4", "session-a", "continue"], "resume args should support an app-local model override")
     let resumeWithReasoning = cli.resumeArguments(sessionID: "session-a", prompt: "continue", reasoningEffort: .xhigh)
-    try check(resumeWithReasoning == ["exec", "resume", "--skip-git-repo-check", "--json", "--enable", "image_generation", "-c", "model_reasoning_effort=\"xhigh\"", "session-a", "continue"], "resume args should support an app-local reasoning effort override")
+    try check(resumeWithReasoning == ["exec", "--skip-git-repo-check", "--json", "--enable", "image_generation", "-c", "model_reasoning_effort=\"xhigh\"", "--sandbox", "danger-full-access", "resume", "session-a", "continue"], "resume args should support an app-local reasoning effort override")
+    let resumeReadOnly = cli.resumeArguments(sessionID: "session-a", prompt: "continue", accessMode: .readOnly)
+    try check(resumeReadOnly.contains("--sandbox") && resumeReadOnly.contains("read-only"), "resume args should support read-only access mode")
+    let resumeWithImage = cli.resumeArguments(sessionID: "session-a", prompt: "describe", imagePaths: ["/tmp/pasted.png"])
+    try check(resumeWithImage.contains("--image") && resumeWithImage.contains("/tmp/pasted.png"), "resume args should pass pasted chat images through --image")
     let parsedThreadID = CodexCLI.parseThreadID(from: #"{"type":"thread.started","thread_id":"019dcaf6-01d5-7060-bc43-40401e3693c3"}"#)
     try check(parsedThreadID == "019dcaf6-01d5-7060-bc43-40401e3693c3", "Codex thread ID should be parsed from JSONL output")
 
@@ -3257,12 +3682,111 @@ func runCodexCLIChecks() throws {
     try check(!detectedModels.contains("gpt-account-id"), "Codex model detector should filter telemetry strings")
     try check(!detectedModels.contains("gptAuthTokens"), "Codex model detector should filter auth implementation strings")
     try check(!detectedModels.contains("gpt-5-4"), "Codex model detector should filter hyphenated version noise")
+    var embeddedModelData = Data([0xff, 0xfe, 0x00])
+    embeddedModelData.append(Data("gpt-5.4-mini.json GPT-5.3-CODEX gpt-oss-20b gpt-account-id".utf8))
+    let detectedDataModels = CodexCLI.availableModelIDs(
+        cliVersion: "0.120.0",
+        embeddedData: embeddedModelData,
+        configText: nil
+    )
+    try check(detectedDataModels.contains("gpt-5.4-mini"), "Codex byte-level model detector should find model IDs before non-word suffixes")
+    try check(detectedDataModels.contains("gpt-oss-20b"), "Codex byte-level model detector should include OSS model IDs")
+    try check(!detectedDataModels.contains("GPT-5.3-CODEX"), "Codex byte-level model detector should preserve lower-case model filtering")
+    try check(!detectedDataModels.contains("gpt-account-id"), "Codex byte-level model detector should filter telemetry strings")
     let oldVersionModels = CodexCLI.availableModelIDs(
         cliVersion: "0.114.0",
         embeddedText: "gpt-5.5 gpt-5.4",
         configText: nil
     )
     try check(!oldVersionModels.contains("gpt-5.5"), "Codex model detector should filter models blocked by the current CLI version")
+
+    let apiConfiguration = CodexAPIConfiguration.fromEnvironment([
+        "PAPER_CODEX_CODEX_API_BASE_URL": "https://codex.example.test/v1",
+        "PAPER_CODEX_CODEX_API_KEY": "secret-key",
+        "PAPER_CODEX_CODEX_API_MODEL": "gpt-5.5",
+        "PAPER_CODEX_CODEX_API_ENDPOINT": "chat_completions"
+    ])
+    try check(apiConfiguration?.baseURL.absoluteString == "https://codex.example.test/v1", "Codex API configuration should read the base URL from the environment")
+    try check(apiConfiguration?.apiKey == "secret-key", "Codex API configuration should read the API key from the environment")
+    try check(apiConfiguration?.model == "gpt-5.5", "Codex API configuration should read the model from the environment")
+    try check(apiConfiguration?.endpoint == .chatCompletions, "Codex API configuration should select chat completions by default")
+    try check(CodexAPIConfiguration.fromEnvironment([:]) == nil, "Codex API configuration should be absent without a base URL")
+    let apiFactoryRuntime = AgentRuntimeFactory.makeDefault(environment: [
+        "PAPER_CODEX_CODEX_API_BASE_URL": "https://codex.example.test/v1",
+        "PAPER_CODEX_CODEX_API_MODEL": "gpt-5.5"
+    ])
+    try check(String(describing: type(of: apiFactoryRuntime)).contains("CodexAPIAgentRuntime"), "runtime factory should select the HTTP API runtime when API env is configured")
+    let unwrappedAPIConfiguration = try checkUnwrap(apiConfiguration, "Codex API runtime should initialize from configuration")
+    let apiRuntime = CodexAPIAgentRuntime(configuration: unwrappedAPIConfiguration)
+    let chatBody = try apiRuntime.makeChatCompletionsRequestBody(prompt: "Explain the paper", modelOverride: "gpt-5.4")
+    let chatJSON = try checkUnwrap(JSONSerialization.jsonObject(with: chatBody) as? [String: Any], "Codex API chat request should be JSON")
+    try check(chatJSON["model"] as? String == "gpt-5.4", "Codex API request should let the app model override the configured model")
+    let tempAPIRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("paper-codex-api-image-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: tempAPIRoot, withIntermediateDirectories: true)
+    let apiImageURL = tempAPIRoot.appendingPathComponent("pasted.png")
+    try Data([0x89, 0x50, 0x4e, 0x47]).write(to: apiImageURL)
+    let apiImageAttachment = PromptImageAttachment(
+        path: apiImageURL.path,
+        displayName: "pasted.png",
+        mimeType: "image/png"
+    )
+    let chatImageBody = try apiRuntime.makeChatCompletionsRequestBody(
+        prompt: "Describe this image",
+        imageAttachments: [apiImageAttachment]
+    )
+    let chatImageJSON = try checkUnwrap(JSONSerialization.jsonObject(with: chatImageBody) as? [String: Any], "Codex API multimodal chat request should be JSON")
+    let chatImageMessages = try checkUnwrap(chatImageJSON["messages"] as? [[String: Any]], "Codex API multimodal chat request should contain messages")
+    let chatImageContent = try checkUnwrap(chatImageMessages.first?["content"] as? [[String: Any]], "Codex API multimodal chat content should be an array")
+    try check(chatImageContent.contains { $0["type"] as? String == "image_url" }, "Codex API chat completions should include image_url content for pasted images")
+    try check(String(describing: chatImageContent).contains("data:image/png;base64,"), "Codex API chat image content should embed image data URLs")
+    let responsesImageBody = try apiRuntime.makeResponsesRequestBody(
+        prompt: "Describe this image",
+        imageAttachments: [apiImageAttachment]
+    )
+    let responsesImageJSON = try checkUnwrap(JSONSerialization.jsonObject(with: responsesImageBody) as? [String: Any], "Codex API multimodal responses request should be JSON")
+    try check(String(describing: responsesImageJSON).contains("input_image"), "Codex API responses should include input_image content for pasted images")
+    try check(String(describing: responsesImageJSON).contains("data:image/png;base64,"), "Codex API responses image content should embed image data URLs")
+    let parsedChat = try apiRuntime.parseResponse(data: Data("""
+    {"id":"chatcmpl-test","choices":[{"message":{"content":"Grounded answer"}}],"usage":{"prompt_tokens":11,"completion_tokens":7}}
+    """.utf8))
+    try check(parsedChat.lastMessage == "Grounded answer", "Codex API runtime should parse chat completion content")
+    try check(parsedChat.threadID == "chatcmpl-test", "Codex API runtime should surface the response id as a session thread id")
+    try check(parsedChat.tokenUsage?.inputTokens == 11, "Codex API runtime should map prompt tokens to input tokens")
+    try check(parsedChat.tokenUsage?.outputTokens == 7, "Codex API runtime should map completion tokens to output tokens")
+    let parsedResponse = try apiRuntime.parseResponse(data: Data("""
+    {"id":"resp-test","output":[{"content":[{"text":"Responses answer"}]}],"usage":{"input_tokens":"13","output_tokens":"5"}}
+    """.utf8))
+    try check(parsedResponse.lastMessage == "Responses answer", "Codex API runtime should parse responses API content")
+    try check(parsedResponse.threadID == "resp-test", "Codex API runtime should preserve responses API ids")
+    try check(parsedResponse.tokenUsage?.inputTokens == 13, "Codex API runtime should parse string input token counts")
+    try check(parsedResponse.tokenUsage?.outputTokens == 5, "Codex API runtime should parse string output token counts")
+
+    CodexAPIMockURLProtocol.reset()
+    let sessionConfiguration = URLSessionConfiguration.ephemeral
+    sessionConfiguration.protocolClasses = [CodexAPIMockURLProtocol.self]
+    let apiResult = try runAsyncCheck {
+        try await CodexAPIAgentRuntime(
+            configuration: unwrappedAPIConfiguration,
+            urlSession: URLSession(configuration: sessionConfiguration)
+        ).runCodexTurn(
+            AgentRuntimeRequest(
+                prompt: "Use the Obsidian note context.",
+                workspacePath: "/tmp/paper-codex-api-check",
+                existingSessionID: nil,
+                modelOverride: "",
+                reasoningEffort: .default,
+                prefersWorkspaceImageOutput: false,
+                runModeDescription: "API check"
+            ),
+            runHandle: CodexRunHandle(),
+            onEvent: { _ in }
+        )
+    }
+    try check(apiResult.lastMessage == "Mock API answer", "Codex API runtime should execute the HTTP chat-completions path")
+    let apiRequest = try checkUnwrap(CodexAPIMockURLProtocol.requests.first, "Codex API runtime should issue one HTTP request")
+    try check(apiRequest.url?.absoluteString == "https://codex.example.test/v1/chat/completions", "Codex API runtime should target the chat completions endpoint under the configured base URL")
+    try check(apiRequest.value(forHTTPHeaderField: "Authorization") == "Bearer secret-key", "Codex API runtime should send bearer authentication when configured")
 }
 
 func runGeneratedImageChecks() throws {
@@ -3339,6 +3863,15 @@ func runPathChecks() throws {
         "PAPER_CODEX_SUPPORT_ROOT": "/tmp/paper-codex-isolated-root"
     ])
     try check(overrideRoot.path == "/tmp/paper-codex-isolated-root", "support root should honor explicit environment override")
+
+    let obsidianOverrideRoot = PaperCodexPaths.obsidianVaultRoot(environment: [
+        "PAPER_CODEX_OBSIDIAN_VAULT_ROOT": "/tmp/world-model-vault"
+    ])
+    try check(obsidianOverrideRoot?.path == "/tmp/world-model-vault", "Obsidian vault root should honor explicit environment override")
+    let disabledObsidianRoot = PaperCodexPaths.obsidianVaultRoot(environment: [
+        "PAPER_CODEX_OBSIDIAN_VAULT_ROOT": ""
+    ])
+    try check(disabledObsidianRoot == nil, "empty Obsidian vault override should disable Obsidian catalog mode")
 
     let defaultRoot = PaperCodexPaths.supportRoot(environment: [:])
     try check(defaultRoot.lastPathComponent == "PaperCodex", "default support root should end in PaperCodex")
@@ -4385,6 +4918,14 @@ do {
     if selectedChecks.isEmpty || selectedChecks.contains("prompt") {
         try runPromptChecks()
         print("prompt: pass")
+    }
+    if selectedChecks.isEmpty || selectedChecks.contains("obsidian-catalog") {
+        try runObsidianCatalogChecks()
+        print("obsidian-catalog: pass")
+    }
+    if selectedChecks.isEmpty || selectedChecks.contains("obsidian-search") {
+        try runObsidianSearchChecks()
+        print("obsidian-search: pass")
     }
     if selectedChecks.isEmpty || selectedChecks.contains("workspace") {
         try runWorkspaceChecks()

@@ -111,7 +111,15 @@ struct LibraryView: View {
         if let paperIDFilter {
             papers = papers.filter { paperIDFilter.contains($0.id) }
         }
-        if !query.isEmpty {
+        if model.usesObsidianCatalog, !query.isEmpty {
+            papers = model.rankedObsidianPapers(query: query, candidates: papers)
+            return LibraryPaperListState(
+                papers: papers,
+                paperIDs: papers.map(\.id),
+                readablePaperIDs: papers.filter { !$0.isArxivImportPlaceholder }.map(\.id),
+                hasActiveFilters: selectedCategoryID != nil || selectedTagID != nil || !query.isEmpty
+            )
+        } else if !query.isEmpty {
             papers = papers.filter { paper in
                 derivedState.matchesSearch(paperID: paper.id, query: query)
             }
@@ -307,12 +315,41 @@ struct LibraryView: View {
 
     private var sidebarLists: some View {
         VStack(alignment: .leading, spacing: 18) {
-            categorySidebarSection
-            Divider()
-            tagSidebarSection
+            if model.usesObsidianCatalog {
+                obsidianSidebarSection
+            } else {
+                categorySidebarSection
+                Divider()
+                tagSidebarSection
+            }
         }
         .padding(.trailing, 2)
         .padding(.bottom, 8)
+    }
+
+    private var obsidianSidebarSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Obsidian Vault", systemImage: "books.vertical")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+            Text("Paper metadata, discussion status, keywords, and notes come from the vault. This app only caches PDFs for reading.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Divider()
+                .padding(.vertical, 4)
+
+            ObsidianFacetGroup(title: "Discussion", records: model.obsidianPaperRecords, keyPath: \.discussionStatus) { value in
+                searchText = value
+            }
+            ObsidianFacetGroup(title: "Directions", records: model.obsidianPaperRecords, keyPath: \.primaryDirection) { value in
+                searchText = value
+            }
+            ObsidianFacetArrayGroup(title: "Keywords", records: model.obsidianPaperRecords, keyPath: \.keywords) { value in
+                searchText = value
+            }
+        }
     }
 
     private var categorySidebarSection: some View {
@@ -474,6 +511,7 @@ struct LibraryView: View {
                 showsReadActions: selectedCategoryID != nil,
                 canRead: !listState.readablePaperIDs.isEmpty,
                 hasActiveFilters: listState.hasActiveFilters,
+                isObsidianCatalog: model.usesObsidianCatalog,
                 onRead: {
                     model.openPapersForReading(listState.readablePaperIDs)
                 },
@@ -495,22 +533,37 @@ struct LibraryView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 LibraryPaperList(papers: listState.papers) { paper in
-                    PaperRow(
-                        paper: paper,
-                        categories: categories(for: paper),
-                        tags: model.paperTagsByID[paper.id, default: []],
-                        thumbnailURLs: model.paperThumbnailURLsByID[paper.id, default: []],
-                        isImportPlaceholder: paper.isArxivImportPlaceholder,
-                        placeholderDetail: model.arxivImportPlaceholderDetail(for: paper),
-                        isSelected: model.selectedLibraryPaper?.id == paper.id,
-                        isMultiSelected: selectedPaperIDs.contains(paper.id),
-                        onToggleStar: {
-                            model.togglePaperStar(paper)
-                        },
-                        onRead: {
-                            model.openPaper(paper)
+                    Group {
+                        if model.usesObsidianCatalog {
+                            ObsidianPaperRow(
+                                paper: paper,
+                                record: model.obsidianRecord(for: paper.id),
+                                thumbnailURLs: model.paperThumbnailURLsByID[paper.id, default: []],
+                                isSelected: model.selectedLibraryPaper?.id == paper.id,
+                                isMultiSelected: selectedPaperIDs.contains(paper.id),
+                                onRead: {
+                                    model.openPaper(paper)
+                                }
+                            )
+                        } else {
+                            PaperRow(
+                                paper: paper,
+                                categories: categories(for: paper),
+                                tags: model.paperTagsByID[paper.id, default: []],
+                                thumbnailURLs: model.paperThumbnailURLsByID[paper.id, default: []],
+                                isImportPlaceholder: paper.isArxivImportPlaceholder,
+                                placeholderDetail: model.arxivImportPlaceholderDetail(for: paper),
+                                isSelected: model.selectedLibraryPaper?.id == paper.id,
+                                isMultiSelected: selectedPaperIDs.contains(paper.id),
+                                onToggleStar: {
+                                    model.togglePaperStar(paper)
+                                },
+                                onRead: {
+                                    model.openPaper(paper)
+                                }
+                            )
                         }
-                    )
+                    }
                     .contentShape(Rectangle())
                     .onDrag {
                         NSItemProvider(object: paperDragPayload(for: paper) as NSString)
@@ -589,7 +642,7 @@ struct LibraryView: View {
                                         .foregroundStyle(paper.isStarred ? Color.yellow : Color.secondary)
                                 }
                                 .buttonStyle(.borderless)
-                                .disabled(paper.isArxivImportPlaceholder)
+                                .disabled(paper.isArxivImportPlaceholder || model.usesObsidianCatalog)
                                 .help(paper.isStarred ? "Remove Star" : "Star Paper")
                                 .accessibilityLabel(paper.isStarred ? "Remove Star" : "Star Paper")
                             }
@@ -617,11 +670,15 @@ struct LibraryView: View {
                         .disabled(paper.isArxivImportPlaceholder)
 
                         Divider()
-                        categoryAssignments(for: paper)
-                        Divider()
-                        tagAssignments(for: paper)
-                        Divider()
-                        paperNotesSection(for: paper)
+                        if model.usesObsidianCatalog {
+                            obsidianPaperSection(for: paper)
+                        } else {
+                            categoryAssignments(for: paper)
+                            Divider()
+                            tagAssignments(for: paper)
+                            Divider()
+                            paperNotesSection(for: paper)
+                        }
                     }
                     .padding(.trailing, 4)
                     .onAppear {
@@ -669,6 +726,64 @@ struct LibraryView: View {
                 }
             }
         }
+    }
+
+    private func obsidianPaperSection(for paper: Paper) -> some View {
+        let record = model.obsidianRecord(for: paper.id)
+        return VStack(alignment: .leading, spacing: 10) {
+            Label("Obsidian", systemImage: "note.text")
+                .font(.headline)
+            Text("This paper is managed by the Obsidian vault. Edit keywords and durable reading notes there; discussion status can be changed here.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let thumbnailURL = record?.thumbnailURL {
+                LocalThumbnailImage(url: thumbnailURL, maxPixelSize: 640) {
+                    Color(nsColor: .textBackgroundColor)
+                }
+                .frame(maxWidth: .infinity, minHeight: 150, maxHeight: 220)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                )
+            }
+            if let record {
+                Picker("讨论状态", selection: obsidianDiscussionStatusBinding(for: paper, record: record)) {
+                    ForEach(ObsidianDiscussionStatus.allCases, id: \.self) { status in
+                        Text(status.rawValue).tag(status)
+                    }
+                }
+                .pickerStyle(.menu)
+                if let direction = record.primaryDirection {
+                    LibraryMetadataBlock(title: "主方向", text: direction)
+                }
+                if let task = record.primaryTask {
+                    LibraryMetadataBlock(title: "主任务", text: task)
+                }
+                if let role = record.worldModelRole {
+                    LibraryMetadataBlock(title: "与世界模型的关系", text: role)
+                }
+                if !record.relatedPapers.isEmpty {
+                    LibraryMetadataBlock(title: "相关论文", text: record.relatedPapers.prefix(8).joined(separator: ", "))
+                }
+            }
+            Text(paper.fileHash.replacingOccurrences(of: "obsidian-note:", with: ""))
+                .font(.caption.monospaced())
+                .foregroundStyle(.tertiary)
+                .textSelection(.enabled)
+        }
+    }
+
+    private func obsidianDiscussionStatusBinding(for paper: Paper, record: ObsidianPaperRecord) -> Binding<ObsidianDiscussionStatus> {
+        Binding(
+            get: {
+                ObsidianDiscussionStatus(rawValue: record.discussionStatus ?? "") ?? .reference
+            },
+            set: { status in
+                model.updateObsidianDiscussionStatus(for: paper, to: status)
+            }
+        )
     }
 
     private func categoryAssignments(for paper: Paper) -> some View {
@@ -1395,6 +1510,7 @@ private struct LibraryInlineControlRow: View {
     var showsReadActions: Bool
     var canRead: Bool
     var hasActiveFilters: Bool
+    var isObsidianCatalog: Bool
     var onRead: () -> Void
     var onChat: () -> Void
     var onClearFilters: () -> Void
@@ -1402,9 +1518,12 @@ private struct LibraryInlineControlRow: View {
     var onShowArxivImport: () -> Void
     var onImportPDF: () -> Void
 
+    @State private var searchDraft = ""
+    @State private var searchCommitTask: Task<Void, Never>?
+
     var body: some View {
         HStack(spacing: 8) {
-            Text("Library")
+            Text(isObsidianCatalog ? "Obsidian Papers" : "Library")
                 .font(.paperCodexSystem(size: 22, weight: .semibold))
                 .fixedSize()
 
@@ -1433,16 +1552,20 @@ private struct LibraryInlineControlRow: View {
                 chatButton
             }
 
-            PaperCodexIconButton(title: "Folders", systemImage: "folder.badge.plus", tint: .secondary) {
-                onShowWatchedFolders()
-            }
-            PaperCodexIconButton(title: "arXiv", systemImage: "number", tint: .secondary) {
-                onShowArxivImport()
+            if !isObsidianCatalog {
+                PaperCodexIconButton(title: "Folders", systemImage: "folder.badge.plus", tint: .secondary) {
+                    onShowWatchedFolders()
+                }
+                PaperCodexIconButton(title: "arXiv", systemImage: "number", tint: .secondary) {
+                    onShowArxivImport()
+                }
             }
             sortPicker
             sortDirectionButton
-            PaperCodexToolbarButton(title: "Import PDF", systemImage: "plus", tint: .blue) {
-                onImportPDF()
+            if !isObsidianCatalog {
+                PaperCodexToolbarButton(title: "Import PDF", systemImage: "plus", tint: .blue) {
+                    onImportPDF()
+                }
             }
         }
         .frame(maxWidth: .infinity, minHeight: 34)
@@ -1451,14 +1574,32 @@ private struct LibraryInlineControlRow: View {
     }
 
     private var searchField: some View {
-        TextField("Search title, author, tag, category, year, or source", text: $searchText)
+        TextField(isObsidianCatalog ? "Search title, alias, author, keyword, method, dataset, metric, related paper, link..." : "Search title, author, tag, category, year, or source", text: $searchDraft)
             .textFieldStyle(.roundedBorder)
             .font(.paperCodexSystem(size: 14))
             .frame(minWidth: 180, maxWidth: .infinity)
             .layoutPriority(1)
+            .onAppear {
+                searchDraft = searchText
+            }
+            .onChange(of: searchText) { _, value in
+                guard searchDraft != value else {
+                    return
+                }
+                searchCommitTask?.cancel()
+                searchDraft = value
+            }
+            .onChange(of: searchDraft) { _, value in
+                scheduleSearchCommit(value)
+            }
+            .onDisappear {
+                searchCommitTask?.cancel()
+            }
             .overlay(alignment: .trailing) {
-                if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if !searchDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button {
+                        searchCommitTask?.cancel()
+                        searchDraft = ""
                         searchText = ""
                     } label: {
                         Image(systemName: "xmark.circle.fill")
@@ -1469,6 +1610,22 @@ private struct LibraryInlineControlRow: View {
                     .help("Clear Search")
                 }
             }
+    }
+
+    private func scheduleSearchCommit(_ value: String) {
+        searchCommitTask?.cancel()
+        searchCommitTask = Task {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled else {
+                return
+            }
+            await MainActor.run {
+                guard searchText != value else {
+                    return
+                }
+                searchText = value
+            }
+        }
     }
 
     private var scopeToggle: some View {
@@ -1819,11 +1976,217 @@ private struct PaperDragPreview: View {
     }
 }
 
-private struct ThumbnailStrip: View {
-    var urls: [URL]
+private struct ObsidianPaperRow: View {
+    var paper: Paper
+    var record: ObsidianPaperRecord?
+    var thumbnailURLs: [URL]
+    var isSelected: Bool
+    var isMultiSelected: Bool
+    var onRead: () -> Void
+
+    @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: -18) {
+        HStack(alignment: .top, spacing: 14) {
+            ThumbnailStrip(urls: thumbnailURLs, thumbnailSize: CGSize(width: 68, height: 92), overlap: -8)
+                .frame(width: 78, height: 100)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(record?.shortTitle ?? paper.title)
+                        .font(.paperCodexSystem(size: 15.5, weight: .semibold))
+                        .lineLimit(1)
+                    if let year = paper.year {
+                        Text(String(year))
+                            .font(.paperCodexSystem(size: 12, weight: .medium))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    if let status = record?.discussionStatus {
+                        SmallChip(title: status, systemImage: "circle.dashed")
+                    }
+                    Spacer(minLength: 8)
+                    Button(action: onRead) {
+                        Image(systemName: "book")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Read")
+                }
+
+                Text(paper.title)
+                    .font(.paperCodexSystem(size: 13.2, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+
+                Text(byline)
+                    .font(.paperCodexSystem(size: 12.3))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                if let summary = record?.summary, !summary.isEmpty {
+                    Text(summary)
+                        .font(.paperCodexSystem(size: 12.4))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                FlowLayout(spacing: 6) {
+                    if let arxiv = record?.arxiv {
+                        SmallChip(title: arxiv, systemImage: "number")
+                    }
+                    if let direction = record?.primaryDirection {
+                        SmallChip(title: direction, systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                    }
+                    ForEach((record?.keywords ?? []).prefix(4), id: \.self) { keyword in
+                        SmallChip(title: keyword, systemImage: "tag")
+                    }
+                    ForEach((record?.methods ?? []).prefix(2), id: \.self) { method in
+                        SmallChip(title: method, systemImage: "wrench.and.screwdriver")
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 12)
+        .background(rowBackground)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(rowBorderColor, lineWidth: isMultiSelected ? 1.5 : 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .shadow(color: isHovering ? Color.black.opacity(0.07) : .clear, radius: 5, y: 1)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+    }
+
+    private var byline: String {
+        let authorText = record?.firstAuthor ?? (paper.authors.isEmpty ? "Authors not set" : paper.authors.prefix(4).joined(separator: ", "))
+        if let venue = record?.venue, !venue.isEmpty {
+            return "\(authorText) · \(venue)"
+        }
+        return authorText
+    }
+
+    private var rowBackground: Color {
+        if isMultiSelected {
+            return Color.accentColor.opacity(0.16)
+        }
+        if isSelected {
+            return Color.accentColor.opacity(0.10)
+        }
+        if isHovering {
+            return Color(nsColor: .textBackgroundColor)
+        }
+        return Color(nsColor: .controlBackgroundColor)
+    }
+
+    private var rowBorderColor: Color {
+        if isMultiSelected {
+            return Color.accentColor.opacity(0.42)
+        }
+        if isSelected {
+            return Color.accentColor.opacity(0.30)
+        }
+        return Color.black.opacity(isHovering ? 0.10 : 0.055)
+    }
+}
+
+private struct ObsidianFacetGroup: View {
+    var title: String
+    var records: [ObsidianPaperRecord]
+    var keyPath: KeyPath<ObsidianPaperRecord, String?>
+    var onSelect: (String) -> Void
+
+    var body: some View {
+        ObsidianFacetList(title: title, counts: counts, onSelect: onSelect)
+    }
+
+    private var counts: [ObsidianFacetCount] {
+        ObsidianFacetCount.counts(records.compactMap { $0[keyPath: keyPath] })
+    }
+}
+
+private struct ObsidianFacetArrayGroup: View {
+    var title: String
+    var records: [ObsidianPaperRecord]
+    var keyPath: KeyPath<ObsidianPaperRecord, [String]>
+    var onSelect: (String) -> Void
+
+    var body: some View {
+        ObsidianFacetList(title: title, counts: counts, onSelect: onSelect)
+    }
+
+    private var counts: [ObsidianFacetCount] {
+        ObsidianFacetCount.counts(records.flatMap { $0[keyPath: keyPath] })
+    }
+}
+
+private struct ObsidianFacetList: View {
+    var title: String
+    var counts: [ObsidianFacetCount]
+    var onSelect: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(counts.prefix(6)) { item in
+                Button {
+                    onSelect(item.value)
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(item.value)
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text("\(item.count)")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.paperCodexSystem(size: 12.5))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+private struct ObsidianFacetCount: Identifiable, Equatable {
+    var value: String
+    var count: Int
+
+    var id: String { value }
+
+    static func counts(_ values: [String]) -> [ObsidianFacetCount] {
+        let counts = values.reduce(into: [String: Int]()) { result, value in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                return
+            }
+            result[trimmed, default: 0] += 1
+        }
+        return counts.map { ObsidianFacetCount(value: $0.key, count: $0.value) }
+            .sorted {
+                if $0.count != $1.count {
+                    return $0.count > $1.count
+                }
+                return $0.value.localizedStandardCompare($1.value) == .orderedAscending
+            }
+    }
+}
+
+private struct ThumbnailStrip: View {
+    var urls: [URL]
+    var thumbnailSize = CGSize(width: 42, height: 54)
+    var overlap: CGFloat = -18
+
+    var body: some View {
+        HStack(spacing: overlap) {
             if urls.isEmpty {
                 ZStack {
                     RoundedRectangle(cornerRadius: 5)
@@ -1831,7 +2194,7 @@ private struct ThumbnailStrip: View {
                     Image(systemName: "doc.richtext")
                         .foregroundStyle(.blue)
                 }
-                .frame(width: 42, height: 54)
+                .frame(width: thumbnailSize.width, height: thumbnailSize.height)
             } else {
                 let visibleURLs = Array(urls.prefix(LibraryLayout.paperRowThumbnailLimit))
                 ForEach(Array(visibleURLs.enumerated()), id: \.offset) { index, url in
@@ -1839,7 +2202,7 @@ private struct ThumbnailStrip: View {
                         Color(nsColor: .textBackgroundColor)
                     }
                     .padding(2)
-                    .frame(width: 42, height: 54)
+                    .frame(width: thumbnailSize.width, height: thumbnailSize.height)
                     .background(Color(nsColor: .textBackgroundColor))
                     .overlay(
                         RoundedRectangle(cornerRadius: 5)
