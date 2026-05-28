@@ -6,7 +6,11 @@ struct ReaderView: View {
     @State private var isShowingAddPaperToSessionSheet = false
     @State private var isPDFSplitVisible = false
     @State private var pdfSplitTarget: PDFInternalLinkTarget?
-    @State private var pdfKitCommand: PDFKitCommand?
+    @State private var activePDFPanel: ReaderPDFPanel = .primary
+    @State private var primaryPDFKitCommand: PDFKitCommand?
+    @State private var secondaryPDFKitCommand: PDFKitCommand?
+    @State private var primaryPDFDocumentStatus: PDFDocumentStatus?
+    @State private var secondaryPDFDocumentStatus: PDFDocumentStatus?
 
     var body: some View {
         HSplitView {
@@ -19,13 +23,18 @@ struct ReaderView: View {
         .onChange(of: model.selectedPaper?.id) { _, _ in
             isPDFSplitVisible = false
             pdfSplitTarget = nil
-            pdfKitCommand = nil
+            activePDFPanel = .primary
+            primaryPDFKitCommand = nil
+            secondaryPDFKitCommand = nil
+            primaryPDFDocumentStatus = nil
+            secondaryPDFDocumentStatus = nil
         }
         .onChange(of: model.pdfKitCommand) { _, command in
-            guard command != pdfKitCommand else {
+            guard command != primaryPDFKitCommand else {
                 return
             }
-            pdfKitCommand = command
+            activePDFPanel = .primary
+            primaryPDFKitCommand = command
         }
         .sheet(isPresented: $isShowingAddPaperToSessionSheet) {
             AddPaperToSessionSheet(
@@ -48,7 +57,7 @@ struct ReaderView: View {
             if let paper = model.selectedPaper {
                 VStack(spacing: 0) {
                     ReaderPDFToolbar(
-                        status: model.pdfDocumentStatus,
+                        status: activePDFDocumentStatus,
                         papers: model.currentSessionPapers,
                         activePaperID: model.selectedPaper?.id,
                         returnPoint: model.citationReturnPoint,
@@ -98,8 +107,9 @@ struct ReaderView: View {
             jumpTarget: model.pdfJumpTarget,
             readingContextID: model.readerPositionContextID,
             readingPosition: model.readerPosition,
-            command: pdfKitCommand,
+            command: primaryPDFKitCommand,
             internalLinkTarget: nil,
+            onActivate: { activatePDFPanel(.primary) },
             onSelection: { selection in
                 model.updateSelection(selection)
             },
@@ -107,6 +117,7 @@ struct ReaderView: View {
                 model.updateReaderPosition(position)
             },
             onDocumentStatusChange: { status in
+                primaryPDFDocumentStatus = status
                 model.updatePDFDocumentStatus(status)
             },
             onInternalLinkSplit: { target in
@@ -123,8 +134,7 @@ struct ReaderView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button {
-                    isPDFSplitVisible = false
-                    pdfSplitTarget = nil
+                    closePDFSplit()
                 } label: {
                     Image(systemName: "xmark")
                         .frame(width: 22, height: 22)
@@ -141,13 +151,16 @@ struct ReaderView: View {
                 jumpTarget: nil,
                 readingContextID: "split-\(paper.id)",
                 readingPosition: nil,
-                command: nil,
+                command: secondaryPDFKitCommand,
                 internalLinkTarget: pdfSplitTarget,
+                onActivate: { activatePDFPanel(.secondary) },
                 onSelection: { selection in
                     model.updateSelection(selection)
                 },
                 onReadingPositionChange: { _ in },
-                onDocumentStatusChange: { _ in },
+                onDocumentStatusChange: { status in
+                    secondaryPDFDocumentStatus = status
+                },
                 onInternalLinkSplit: { target in
                     openPDFSplit(target)
                 }
@@ -158,20 +171,66 @@ struct ReaderView: View {
     private func openPDFSplit(_ target: PDFInternalLinkTarget) {
         pdfSplitTarget = target
         isPDFSplitVisible = true
+        activePDFPanel = .secondary
     }
 
     private func issuePDFKitCommand(_ kind: PDFKitCommandKind) {
         let command = PDFKitCommand(kind: kind)
-        pdfKitCommand = command
-        model.pdfKitCommand = command
+        switch activePDFPanel {
+        case .secondary where isPDFSplitVisible:
+            secondaryPDFKitCommand = command
+        case .primary, .secondary:
+            activePDFPanel = .primary
+            primaryPDFKitCommand = command
+        }
     }
 
     private func togglePDFSplit() {
         isPDFSplitVisible.toggle()
-        if !isPDFSplitVisible {
-            pdfSplitTarget = nil
+        if isPDFSplitVisible {
+            activePDFPanel = .secondary
+        } else {
+            closePDFSplit()
         }
     }
+
+    private func closePDFSplit() {
+        isPDFSplitVisible = false
+        pdfSplitTarget = nil
+        activePDFPanel = .primary
+        secondaryPDFKitCommand = nil
+        secondaryPDFDocumentStatus = nil
+    }
+
+    private var activePDFDocumentStatus: PDFDocumentStatus? {
+        if isPDFSplitVisible, activePDFPanel == .secondary {
+            return secondaryPDFDocumentStatus ?? primaryPDFDocumentStatus ?? model.pdfDocumentStatus
+        }
+        return primaryPDFDocumentStatus ?? model.pdfDocumentStatus
+    }
+
+    private func activatePDFPanel(_ panel: ReaderPDFPanel) {
+        guard panel == .primary || isPDFSplitVisible else {
+            activePDFPanel = .primary
+            return
+        }
+        activePDFPanel = panel
+        switch panel {
+        case .primary:
+            if let primaryPDFDocumentStatus {
+                model.updatePDFDocumentStatus(primaryPDFDocumentStatus)
+            }
+        case .secondary:
+            if let secondaryPDFDocumentStatus {
+                model.updatePDFDocumentStatus(secondaryPDFDocumentStatus)
+            }
+        }
+    }
+}
+
+private enum ReaderPDFPanel {
+    case primary
+    case secondary
 }
 
 private enum ReaderPDFLayout {

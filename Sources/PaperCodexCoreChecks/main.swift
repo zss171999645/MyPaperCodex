@@ -1560,12 +1560,23 @@ func runUILayoutSourceChecks() throws {
         "reader should provide explicit PDF toolbar controls"
     )
     try check(
-        readerSource.contains("@State private var pdfKitCommand: PDFKitCommand?")
-            && readerSource.contains("command: pdfKitCommand")
+        readerSource.contains("@State private var primaryPDFKitCommand: PDFKitCommand?")
+            && readerSource.contains("@State private var secondaryPDFKitCommand: PDFKitCommand?")
+            && readerSource.contains("@State private var activePDFPanel: ReaderPDFPanel = .primary")
+            && readerSource.contains("command: primaryPDFKitCommand")
+            && readerSource.contains("command: secondaryPDFKitCommand")
             && readerSource.contains("onCommand: { issuePDFKitCommand($0) }")
             && readerSource.contains("private func issuePDFKitCommand(_ kind: PDFKitCommandKind)")
             && readerSource.contains(".onChange(of: model.pdfKitCommand)"),
-        "reader PDF toolbar commands should be a local state signal so zoom clicks reliably reach PDFKitView"
+        "reader PDF toolbar commands should route through per-panel local state so split PDF panels can be zoomed independently"
+    )
+    try check(
+        readerSource.contains("onActivate: { activatePDFPanel(.primary) }")
+            && readerSource.contains("onActivate: { activatePDFPanel(.secondary) }")
+            && readerSource.contains("case .secondary where isPDFSplitVisible")
+            && readerSource.contains("secondaryPDFKitCommand = command")
+            && readerSource.contains("primaryPDFKitCommand = command"),
+        "reader PDF toolbar commands should target the currently active PDF panel when a secondary split is open"
     )
     try check(
         readerSource.contains("VSplitView") && readerSource.contains("isPDFSplitVisible") && readerSource.contains("pdfSplitTarget"),
@@ -1582,6 +1593,12 @@ func runUILayoutSourceChecks() throws {
     try check(
         pdfKitSource.contains("PDFKitCommand"),
         "PDFKit view should accept explicit toolbar commands"
+    )
+    try check(
+        pdfKitSource.contains("var onActivate: () -> Void")
+            && pdfKitSource.contains("var onUserInteraction: (() -> Void)?")
+            && pdfKitSource.contains("coordinator?.activatePanel()"),
+        "PDFKit view should report direct PDF panel interaction so reader toolbar commands can target the active split panel"
     )
     try check(
         pdfKitSource.contains("applyManualZoom(multiplier:")

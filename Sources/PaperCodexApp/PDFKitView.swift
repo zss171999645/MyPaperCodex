@@ -4,6 +4,7 @@ import SwiftUI
 
 fileprivate final class ResponsivePDFView: PDFView {
     var onMouseDown: ((ResponsivePDFView, NSEvent) -> Bool)?
+    var onUserInteraction: (() -> Void)?
     var onBoundsChanged: (() -> Void)?
 
     override var mouseDownCanMoveWindow: Bool {
@@ -15,10 +16,16 @@ fileprivate final class ResponsivePDFView: PDFView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        onUserInteraction?()
         if onMouseDown?(self, event) == true {
             return
         }
         super.mouseDown(with: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        onUserInteraction?()
+        super.scrollWheel(with: event)
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -54,6 +61,7 @@ struct PDFKitView: NSViewRepresentable {
     var readingPosition: PaperReaderPosition?
     var command: PDFKitCommand?
     var internalLinkTarget: PDFInternalLinkTarget?
+    var onActivate: () -> Void
     var onSelection: (PDFSelectionInfo?) -> Void
     var onReadingPositionChange: (PDFViewportPosition) -> Void
     var onDocumentStatusChange: (PDFDocumentStatus) -> Void
@@ -61,6 +69,7 @@ struct PDFKitView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
+            onActivate: onActivate,
             onSelection: onSelection,
             onReadingPositionChange: onReadingPositionChange,
             onDocumentStatusChange: onDocumentStatusChange,
@@ -75,6 +84,9 @@ struct PDFKitView: NSViewRepresentable {
         view.displayDirection = .vertical
         view.backgroundColor = .textBackgroundColor
         let coordinator = context.coordinator
+        view.onUserInteraction = { [weak coordinator] in
+            coordinator?.activatePanel()
+        }
         view.onMouseDown = { [weak coordinator] pdfView, event in
             coordinator?.handlePDFMouseDown(in: pdfView, event: event) ?? false
         }
@@ -117,6 +129,7 @@ struct PDFKitView: NSViewRepresentable {
                 coordinator.applyReadingPosition(readingPosition, contextID: readingContextID)
             }
         }
+        context.coordinator.onActivate = onActivate
         context.coordinator.onSelection = onSelection
         context.coordinator.onReadingPositionChange = onReadingPositionChange
         context.coordinator.onDocumentStatusChange = onDocumentStatusChange
@@ -133,6 +146,7 @@ struct PDFKitView: NSViewRepresentable {
 
     final class Coordinator: NSObject {
         weak var pdfView: PDFView?
+        var onActivate: () -> Void
         var onSelection: (PDFSelectionInfo?) -> Void
         var onReadingPositionChange: (PDFViewportPosition) -> Void
         var onDocumentStatusChange: (PDFDocumentStatus) -> Void
@@ -157,11 +171,13 @@ struct PDFKitView: NSViewRepresentable {
         private static let manualZoomMaximumScale: CGFloat = 5.0
 
         init(
+            onActivate: @escaping () -> Void,
             onSelection: @escaping (PDFSelectionInfo?) -> Void,
             onReadingPositionChange: @escaping (PDFViewportPosition) -> Void,
             onDocumentStatusChange: @escaping (PDFDocumentStatus) -> Void,
             onInternalLinkSplit: @escaping (PDFInternalLinkTarget) -> Void
         ) {
+            self.onActivate = onActivate
             self.onSelection = onSelection
             self.onReadingPositionChange = onReadingPositionChange
             self.onDocumentStatusChange = onDocumentStatusChange
@@ -562,6 +578,12 @@ struct PDFKitView: NSViewRepresentable {
                 page.removeAnnotation(annotation)
             }
             highlightedAnnotations.removeAll()
+        }
+
+        @MainActor
+        func activatePanel() {
+            onActivate()
+            reportDocumentStatus()
         }
 
         @MainActor
