@@ -491,6 +491,14 @@ func runUILayoutSourceChecks() throws {
         "library split panes should use compact shared minimum widths so the middle pane is not clipped by side columns in narrow windows"
     )
     try check(
+        librarySource.contains("static let librarySearchFieldHeight: CGFloat")
+            && librarySource.contains("static let librarySearchFieldBorderWidth: CGFloat")
+            && librarySource.contains(".textFieldStyle(.plain)")
+            && librarySource.contains(".frame(height: LibraryLayout.librarySearchFieldHeight)")
+            && librarySource.contains("lineWidth: LibraryLayout.librarySearchFieldBorderWidth"),
+        "library search field should use an explicit height and border width so its thickness stays consistent across machines"
+    )
+    try check(
         librarySource.contains("LibraryRootFolderRow")
             && librarySource.contains("LibraryInlineControlRow")
             && librarySource.contains("LibraryPaperListState")

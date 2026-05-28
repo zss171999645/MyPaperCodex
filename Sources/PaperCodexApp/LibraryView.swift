@@ -1526,6 +1526,7 @@ private struct LibraryInlineControlRow: View {
 
     @State private var searchDraft = ""
     @State private var searchCommitTask: Task<Void, Never>?
+    @FocusState private var isSearchFocused: Bool
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1592,10 +1593,25 @@ private struct LibraryInlineControlRow: View {
 
     private var searchField: some View {
         TextField(isObsidianCatalog ? "Search title, alias, author, keyword, method, dataset, metric, related paper, link..." : "Search title, author, tag, category, year, or source", text: $searchDraft)
-            .textFieldStyle(.roundedBorder)
+            .textFieldStyle(.plain)
             .font(.paperCodexSystem(size: 14))
+            .padding(.leading, 9)
+            .padding(.trailing, 26)
             .frame(minWidth: 180, maxWidth: .infinity)
+            .frame(height: LibraryLayout.librarySearchFieldHeight)
+            .background(
+                RoundedRectangle(cornerRadius: LibraryLayout.librarySearchFieldCornerRadius)
+                    .fill(Color(nsColor: .textBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: LibraryLayout.librarySearchFieldCornerRadius)
+                    .stroke(
+                        isSearchFocused ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.13),
+                        lineWidth: LibraryLayout.librarySearchFieldBorderWidth
+                    )
+            )
             .layoutPriority(1)
+            .focused($isSearchFocused)
             .onAppear {
                 searchDraft = searchText
             }
@@ -1818,6 +1834,9 @@ private enum LibraryLayout {
     static let libraryInspectorMinimumWidth: CGFloat = 220
     static let libraryInspectorIdealWidth: CGFloat = 300
     static let libraryInspectorMaximumWidth: CGFloat = 380
+    static let librarySearchFieldHeight: CGFloat = 28
+    static let librarySearchFieldCornerRadius: CGFloat = 6
+    static let librarySearchFieldBorderWidth: CGFloat = 1
     static let splitPaneTopInset: CGFloat = 0
     static let bulkActionBarOverlayYOffset: CGFloat = 148
     static let bulkActionBarOverlayOpacity = 0.66
