@@ -512,11 +512,15 @@ struct LibraryView: View {
                 canRead: !listState.readablePaperIDs.isEmpty,
                 hasActiveFilters: listState.hasActiveFilters,
                 isObsidianCatalog: model.usesObsidianCatalog,
+                isRefreshingObsidianCatalog: model.isRefreshingObsidianCatalog,
                 onRead: {
                     model.openPapersForReading(listState.readablePaperIDs)
                 },
                 onChat: {
                     model.openPapersForChat(listState.readablePaperIDs)
+                },
+                onRefreshObsidianCatalog: {
+                    model.refreshObsidianCatalog()
                 },
                 onClearFilters: clearLibraryFilters,
                 onShowWatchedFolders: {
@@ -1511,8 +1515,10 @@ private struct LibraryInlineControlRow: View {
     var canRead: Bool
     var hasActiveFilters: Bool
     var isObsidianCatalog: Bool
+    var isRefreshingObsidianCatalog: Bool
     var onRead: () -> Void
     var onChat: () -> Void
+    var onRefreshObsidianCatalog: () -> Void
     var onClearFilters: () -> Void
     var onShowWatchedFolders: () -> Void
     var onShowArxivImport: () -> Void
@@ -1550,6 +1556,17 @@ private struct LibraryInlineControlRow: View {
             if showsReadActions {
                 readButton
                 chatButton
+            }
+
+            if isObsidianCatalog {
+                PaperCodexIconButton(
+                    title: isRefreshingObsidianCatalog ? "Refreshing Obsidian Papers" : "Refresh Obsidian Papers",
+                    systemImage: "arrow.clockwise",
+                    tint: .secondary,
+                    disabled: isRefreshingObsidianCatalog
+                ) {
+                    onRefreshObsidianCatalog()
+                }
             }
 
             if !isObsidianCatalog {

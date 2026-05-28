@@ -1390,6 +1390,17 @@ func runUILayoutSourceChecks() throws {
         "library reload should refresh PDF thumbnail URLs in a background task instead of rendering thumbnails on the main actor"
     )
     try check(
+        appModelSource.contains("@Published var isRefreshingObsidianCatalog")
+            && appModelSource.contains("obsidianCatalogRefreshTask")
+            && appModelSource.contains("func refreshObsidianCatalog()")
+            && appModelSource.contains("Task.detached(priority: .userInitiated)")
+            && appModelSource.contains("applyObsidianRecords(")
+            && librarySource.contains("onRefreshObsidianCatalog")
+            && librarySource.contains("arrow.clockwise")
+            && librarySource.contains("isRefreshingObsidianCatalog"),
+        "Obsidian catalog mode should expose a non-blocking refresh control that reloads papers and rebuilds search without restarting the app"
+    )
+    try check(
         appModelSource.contains("startDiscoverCacheWarmupIfNeeded")
             && appModelSource.contains("DiscoverCacheLoader.loadInitialState")
             && appModelSource.contains("Task.detached")

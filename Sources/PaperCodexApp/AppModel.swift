@@ -458,6 +458,7 @@ final class AppModel: ObservableObject {
     @Published var codexDefaultModelID: String = CodexCLI.configuredDefaultModelID() ?? ""
     @Published var isRefreshingCodexModels = false
     @Published var isScanningWatchedFolders = false
+    @Published var isRefreshingObsidianCatalog = false
     @Published var localDiscoverPreferences: LocalDiscoverPreferences = loadLocalDiscoverPreferencesFromDefaults()
     @Published var arxivSaveOrganization: ArxivSaveOrganization = {
         let stored = UserDefaults.standard.string(forKey: arxivSaveOrganizationDefaultsKey)
@@ -718,6 +719,7 @@ final class AppModel: ObservableObject {
     private var discoverCacheWarmupTask: Task<Void, Never>?
     private var cacheStorageSummaryTask: Task<Void, Never>?
     private var libraryThumbnailRefreshTask: Task<Void, Never>?
+    private var obsidianCatalogRefreshTask: Task<Void, Never>?
     private var routeDeferredWorkTask: Task<Void, Never>?
     private var libraryStoreObservation: AnyCancellable?
     private var readerStoreObservation: AnyCancellable?
@@ -948,6 +950,7 @@ final class AppModel: ObservableObject {
         discoverCacheWarmupTask?.cancel()
         cacheStorageSummaryTask?.cancel()
         libraryThumbnailRefreshTask?.cancel()
+        obsidianCatalogRefreshTask?.cancel()
         routeDeferredWorkTask?.cancel()
     }
 
@@ -1062,8 +1065,64 @@ final class AppModel: ObservableObject {
         startLibraryThumbnailRefresh(for: fetchedPapers)
     }
 
+    func refreshObsidianCatalog() {
+        guard let obsidianVaultRoot, let repository else {
+            postObsidianCatalogNotice()
+            return
+        }
+        guard !isRefreshingObsidianCatalog else {
+            return
+        }
+
+        isRefreshingObsidianCatalog = true
+        obsidianCatalogRefreshTask?.cancel()
+        let supportRoot = supportRoot
+        obsidianCatalogRefreshTask = Task { [weak self] in
+            do {
+                let records = try await Task.detached(priority: .userInitiated) {
+                    try ObsidianPaperCatalog().load(vaultRoot: obsidianVaultRoot, supportRoot: supportRoot)
+                }.value
+                guard let self else {
+                    return
+                }
+                guard !Task.isCancelled else {
+                    self.finishObsidianCatalogRefresh()
+                    return
+                }
+                try self.applyObsidianRecords(records, repository: repository)
+                self.postNotice(kind: .success, title: "Obsidian Papers Refreshed", message: "\(records.count) papers")
+                self.finishObsidianCatalogRefresh()
+            } catch {
+                guard let self else {
+                    return
+                }
+                guard !Task.isCancelled else {
+                    self.finishObsidianCatalogRefresh()
+                    return
+                }
+                self.errorMessage = String(describing: error)
+                self.postNotice(
+                    kind: .error,
+                    title: "Could Not Refresh Obsidian Papers",
+                    message: String(describing: error),
+                    autoDismissAfter: nil
+                )
+                self.finishObsidianCatalogRefresh()
+            }
+        }
+    }
+
+    private func finishObsidianCatalogRefresh() {
+        isRefreshingObsidianCatalog = false
+        obsidianCatalogRefreshTask = nil
+    }
+
     private func reloadObsidianLibrary(vaultRoot: URL, repository: PaperRepository) throws {
         let records = try ObsidianPaperCatalog().load(vaultRoot: vaultRoot, supportRoot: supportRoot)
+        try applyObsidianRecords(records, repository: repository)
+    }
+
+    private func applyObsidianRecords(_ records: [ObsidianPaperRecord], repository: PaperRepository) throws {
         obsidianRecordsByPaperID = Dictionary(uniqueKeysWithValues: records.map { ($0.paper.id, $0) })
         obsidianSearchIndex = ObsidianPaperSearchIndex(records: records)
         for record in records {
