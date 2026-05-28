@@ -1610,6 +1610,22 @@ func runUILayoutSourceChecks() throws {
             && restoreViewportCenterSource.contains("self?.centerPDFPagePointInViewport(point, page: page)"),
         "PDF manual zoom should recenter the captured viewport point after PDFKit applies the new scale"
     )
+    let currentViewportPositionSource: String
+    if let positionStart = pdfKitSource.range(of: "private func currentViewportPosition"),
+       let positionEnd = pdfKitSource.range(
+        of: "\n\n        @MainActor\n        private func findScrollView",
+        range: positionStart.upperBound..<pdfKitSource.endIndex
+       ) {
+        currentViewportPositionSource = String(pdfKitSource[positionStart.lowerBound..<positionEnd.lowerBound])
+    } else {
+        throw CheckFailure(description: "PDF current viewport position source should be inspectable")
+    }
+    try check(
+        currentViewportPositionSource.contains("pdfView.page(for: visibleCenter, nearest: true)")
+            && currentViewportPositionSource.contains("let page = pageAtVisibleCenter ?? pdfView.currentPage")
+            && !currentViewportPositionSource.contains("let page = pdfView.currentPage else"),
+        "PDF manual zoom should anchor on the page under the visible center, not PDFKit's currentPage, in continuous mode"
+    )
     try check(
         pdfKitSource.contains("ResponsivePDFView") && pdfKitSource.contains("refitForCurrentWidth"),
         "PDFKit view should refit the document when its split-pane width changes"

@@ -766,12 +766,7 @@ struct PDFKitView: NSViewRepresentable {
         @MainActor
         private func currentViewportPosition() -> PDFViewportPosition? {
             guard let pdfView,
-                  let document = pdfView.document,
-                  let page = pdfView.currentPage else {
-                return nil
-            }
-            let pageIndex = document.index(for: page)
-            guard pageIndex >= 0, pageIndex < document.pageCount else {
+                  let document = pdfView.document else {
                 return nil
             }
             let visibleCenter: NSPoint
@@ -780,7 +775,15 @@ struct PDFKitView: NSViewRepresentable {
                 let pointInDocumentView = NSPoint(x: visibleRect.midX, y: visibleRect.midY)
                 visibleCenter = pdfView.convert(pointInDocumentView, from: documentView)
             } else {
-                visibleCenter = NSPoint(x: 0, y: 0)
+                visibleCenter = NSPoint(x: pdfView.bounds.midX, y: pdfView.bounds.midY)
+            }
+            let pageAtVisibleCenter = pdfView.page(for: visibleCenter, nearest: true)
+            guard let page = pageAtVisibleCenter ?? pdfView.currentPage else {
+                return nil
+            }
+            let pageIndex = document.index(for: page)
+            guard pageIndex >= 0, pageIndex < document.pageCount else {
+                return nil
             }
             let pagePoint = pdfView.convert(visibleCenter, to: page)
             return PDFViewportPosition(
