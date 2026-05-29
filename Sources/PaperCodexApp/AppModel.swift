@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Darwin
 import Foundation
 import PaperCodexCore
 import SwiftUI
@@ -190,6 +191,7 @@ private let arxivSearchRequiredCategoriesDefaultsKey = "PaperCodexArxivSearchReq
 private let arxivSearchFromYearDefaultsKey = "PaperCodexArxivSearchFromYear"
 private let arxivSearchThroughYearDefaultsKey = "PaperCodexArxivSearchThroughYear"
 private let defaultDiscoverCodexConcurrency = 10
+private let obsidianCatalogAutoRefreshDelayNanoseconds: UInt64 = 800_000_000
 private let arxivLibraryImportRetryDelaysNanoseconds: [UInt64] = [
     30_000_000_000,
     120_000_000_000,
@@ -720,6 +722,8 @@ final class AppModel: ObservableObject {
     private var cacheStorageSummaryTask: Task<Void, Never>?
     private var libraryThumbnailRefreshTask: Task<Void, Never>?
     private var obsidianCatalogRefreshTask: Task<Void, Never>?
+    private var obsidianCatalogAutoRefreshTask: Task<Void, Never>?
+    private var obsidianCatalogWatcher: ObsidianCatalogDirectoryWatcher?
     private var routeDeferredWorkTask: Task<Void, Never>?
     private var libraryStoreObservation: AnyCancellable?
     private var readerStoreObservation: AnyCancellable?
@@ -936,6 +940,8 @@ final class AppModel: ObservableObject {
             }
             if obsidianVaultRoot == nil {
                 startWatchedFolderAutoScan()
+            } else {
+                startObsidianCatalogWatcher()
             }
         } catch {
             errorMessage = String(describing: error)
@@ -951,6 +957,8 @@ final class AppModel: ObservableObject {
         cacheStorageSummaryTask?.cancel()
         libraryThumbnailRefreshTask?.cancel()
         obsidianCatalogRefreshTask?.cancel()
+        obsidianCatalogAutoRefreshTask?.cancel()
+        obsidianCatalogWatcher?.cancel()
         routeDeferredWorkTask?.cancel()
     }
 
@@ -1065,9 +1073,11 @@ final class AppModel: ObservableObject {
         startLibraryThumbnailRefresh(for: fetchedPapers)
     }
 
-    func refreshObsidianCatalog() {
+    func refreshObsidianCatalog(postsSuccessNotice: Bool = true) {
         guard let obsidianVaultRoot, let repository else {
-            postObsidianCatalogNotice()
+            if postsSuccessNotice {
+                postObsidianCatalogNotice()
+            }
             return
         }
         guard !isRefreshingObsidianCatalog else {
@@ -1090,7 +1100,9 @@ final class AppModel: ObservableObject {
                     return
                 }
                 try self.applyObsidianRecords(records, repository: repository)
-                self.postNotice(kind: .success, title: "Obsidian Papers Refreshed", message: "\(records.count) papers")
+                if postsSuccessNotice {
+                    self.postNotice(kind: .success, title: "Obsidian Papers Refreshed", message: "\(records.count) papers")
+                }
                 self.finishObsidianCatalogRefresh()
             } catch {
                 guard let self else {
@@ -1108,6 +1120,37 @@ final class AppModel: ObservableObject {
                     autoDismissAfter: nil
                 )
                 self.finishObsidianCatalogRefresh()
+            }
+        }
+    }
+
+    private func startObsidianCatalogWatcher() {
+        guard let obsidianVaultRoot else {
+            return
+        }
+        let papersRoot = obsidianVaultRoot
+            .appendingPathComponent("03-literature", isDirectory: true)
+            .appendingPathComponent("papers", isDirectory: true)
+        obsidianCatalogWatcher = ObsidianCatalogDirectoryWatcher(directory: papersRoot) { [weak self] in
+            Task { @MainActor in
+                self?.scheduleObsidianCatalogAutoRefresh()
+            }
+        }
+    }
+
+    private func scheduleObsidianCatalogAutoRefresh() {
+        guard usesObsidianCatalog else {
+            return
+        }
+        obsidianCatalogAutoRefreshTask?.cancel()
+        obsidianCatalogAutoRefreshTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: obsidianCatalogAutoRefreshDelayNanoseconds)
+            guard !Task.isCancelled else {
+                return
+            }
+            await MainActor.run {
+                self?.obsidianCatalogAutoRefreshTask = nil
+                self?.refreshObsidianCatalog(postsSuccessNotice: false)
             }
         }
     }
@@ -5992,6 +6035,41 @@ final class AppModel: ObservableObject {
         } catch {
             errorMessage = "Codex stopped, but the cancellation note could not be saved: \(error)"
         }
+    }
+}
+
+private final class ObsidianCatalogDirectoryWatcher: @unchecked Sendable {
+    private let source: DispatchSourceFileSystemObject
+    private var isCancelled = false
+
+    init?(directory: URL, onChange: @escaping () -> Void) {
+        let fileDescriptor = Darwin.open(directory.path, O_EVTONLY)
+        guard fileDescriptor >= 0 else {
+            return nil
+        }
+
+        source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fileDescriptor,
+            eventMask: [.write, .delete, .rename, .revoke],
+            queue: .main
+        )
+        source.setEventHandler(handler: onChange)
+        source.setCancelHandler {
+            Darwin.close(fileDescriptor)
+        }
+        source.resume()
+    }
+
+    deinit {
+        cancel()
+    }
+
+    func cancel() {
+        guard !isCancelled else {
+            return
+        }
+        isCancelled = true
+        source.cancel()
     }
 }
 

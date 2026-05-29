@@ -1400,7 +1400,7 @@ func runUILayoutSourceChecks() throws {
     try check(
         appModelSource.contains("@Published var isRefreshingObsidianCatalog")
             && appModelSource.contains("obsidianCatalogRefreshTask")
-            && appModelSource.contains("func refreshObsidianCatalog()")
+            && appModelSource.contains("func refreshObsidianCatalog(postsSuccessNotice: Bool = true)")
             && appModelSource.contains("Task.detached(priority: .userInitiated)")
             && appModelSource.contains("applyObsidianRecords(")
             && librarySource.contains("onRefreshObsidianCatalog")
@@ -3966,6 +3966,17 @@ func runFixtureLibraryChecks() throws {
 }
 
 func runWatchedFolderChecks() throws {
+    let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    let appModelSource = try String(contentsOf: root.appendingPathComponent("Sources/PaperCodexApp/AppModel.swift"))
+    try check(
+        appModelSource.contains("private final class ObsidianCatalogDirectoryWatcher")
+            && appModelSource.contains("startObsidianCatalogWatcher()")
+            && appModelSource.contains("scheduleObsidianCatalogAutoRefresh()")
+            && appModelSource.contains("refreshObsidianCatalog(postsSuccessNotice: false)")
+            && appModelSource.contains("func refreshObsidianCatalog(postsSuccessNotice: Bool = true)"),
+        "Obsidian catalog mode should watch the papers directory and silently refresh when note files change"
+    )
+
     let tempRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("paper-codex-watch-\(UUID().uuidString)", isDirectory: true)
     let supportRoot = tempRoot.appendingPathComponent("support", isDirectory: true)
